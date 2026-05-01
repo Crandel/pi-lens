@@ -9,7 +9,8 @@
 	},
 	"main": "index.ts",
 	"scripts": {
-		"build": "tsc",
+		"build": "tsc --project tsconfig.build.json",
+		"lint": "tsc --project tsconfig.json",
 		"watch": "tsc --watch",
 		"test": "vitest run",
 		"test:watch": "vitest",

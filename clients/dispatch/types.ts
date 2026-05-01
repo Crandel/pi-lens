@@ -21,7 +21,9 @@ export type DefectClass =
 	| "correctness"
 	| "safety"
 	| "style"
-	| "unknown";
+	| "unknown"
+	| "unused-value"
+	;
 
 export interface ModifiedRange {
 	start: number;
@@ -68,6 +70,8 @@ export interface Diagnostic {
 	semantic: OutputSemantic;
 	/** Which tool produced this */
 	tool: string;
+	/** A tool-specific code for this diagnostic */
+	code?: string;
 	/** Rule/category */
 	rule?: string;
 	/** Normalized defect class for overlap arbitration */

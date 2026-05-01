@@ -47,7 +47,7 @@ describe("shellcheck runner", () => {
 		const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
 
 		vi.mocked(safeSpawnMod.safeSpawn).mockReturnValue({
-			error: null,
+			error: undefined,
 			status: 0,
 			stdout: "",
 			stderr: "",
@@ -75,7 +75,7 @@ describe("shellcheck runner", () => {
 		const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
 
 		vi.mocked(safeSpawnMod.safeSpawn).mockReturnValue({
-			error: null,
+			error: undefined,
 			status: 0,
 			stdout: "",
 			stderr: "",
@@ -105,7 +105,7 @@ describe("shellcheck runner", () => {
 		const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
 
 		vi.mocked(safeSpawnMod.safeSpawn).mockReturnValue({
-			error: null,
+			error: undefined,
 			status: 1,
 			stdout: JSON.stringify([
 				{

@@ -40,7 +40,7 @@ describe("LSP Launch", () => {
 		const scriptPath = path.join(os.tmpdir(), `pi-lens-test-${Date.now()}.js`);
 		fs.writeFileSync(scriptPath, "process.exit(1);");
 
-		await expect(launchLSP(process.execPath, [scriptPath])).rejects.toThrow(
+		await expect(launchLSP(process.execPath, [scriptPath], { startupFailureWindowMs: 500 })).rejects.toThrow(
 			/exited immediately/,
 		);
 

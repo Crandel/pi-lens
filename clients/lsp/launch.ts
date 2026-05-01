@@ -450,7 +450,9 @@ function _attachErrorHandler(
 export async function launchLSP(
 	command: string,
 	args: string[] = [],
-	options: SpawnOptions = {},
+	options: SpawnOptions & {
+		startupFailureWindowMs?: number,
+	} = {},
 ): Promise<LSPProcess> {
 	const cwd = String(options.cwd ?? process.cwd());
 	const mergedEnv = { ...process.env, ...options.env };
@@ -585,10 +587,6 @@ export async function launchLSP(
 	logSessionStart(
 		`lsp launch: command=${command} resolved=${spawnCommand} args=${JSON.stringify(args)} cwd=${cwd} shell=${needsShell ? "true" : "false"} pid=${proc.pid ?? 0}`,
 	);
-	const startupFailureWindowMs =
-		isWindows && needsShell
-			? WINDOWS_NAV_STARTUP_FAILURE_WINDOW_MS
-			: DEFAULT_STARTUP_FAILURE_WINDOW_MS;
 
 	const formatStartupStderr = (stderr: string): string => {
 		const normalized = compactLogValue(stderr);
@@ -641,6 +639,16 @@ export async function launchLSP(
 				}
 			});
 
+			const startupFailureWindowMs = ((): number => {
+				if (options?.startupFailureWindowMs) {
+					return options.startupFailureWindowMs;
+				} else if (isWindows && needsShell) {
+					return WINDOWS_NAV_STARTUP_FAILURE_WINDOW_MS;
+				} else {
+					return DEFAULT_STARTUP_FAILURE_WINDOW_MS;
+				}
+			})();
+				
 			// Give shell-backed Windows launches a slightly longer window because
 			// npm/cmd shims can fail asynchronously after the initial spawn succeeds.
 			setTimeout(() => {
