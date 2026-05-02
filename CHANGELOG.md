@@ -9,6 +9,14 @@ All notable changes to pi-lens will be documented in this file.
 - **Deferred formatting by default** — files touched by `write` and `edit` are now queued and formatted once at `agent_end` instead of immediately after each edit. This prevents mid-task formatting mutations from invalidating read-guard context and interrupting multi-edit flows. Formatting still runs in real time when `--immediate-format` is passed.
 - **`agent_end` lifecycle handler** — new `clients/runtime-agent-end.ts` drains the deferred format queue at the end of each agent turn, runs the formatter once per file, syncs formatted content to LSP, and emits a concise notification.
 - **`--immediate-format` flag** — opt-in flag to restore the legacy per-edit formatting behavior.
+- **`/lens-health` session timestamp** — output now opens with `Session started: HH:MM (Xh Ym ago)` so all session-scoped counters have clear time context.
+- **`/lens-health` LSP status section** — shows each currently running language server with a `✓`/`✗` connected indicator and workspace root. Makes dead servers immediately visible to the agent without needing to check logs. Also fixes `LSPService.getStatus()` which previously hardcoded `connected: true` instead of calling `isAlive()`.
+- **`/lens-health` cascade summary** — shows session-total cascade runs, diagnostics surfaced, and cold-snapshot touches (the new active-touch fallback for TypeScript neighbors with no snapshot).
+- **`/lens-health` i18n** — localizes status labels with English fallback; es, fr, and pt-BR strings included (PR #45 by @jerryfan).
+- **`/lens-booboo` language gates** — Knip (dead code), Madge (circular deps), and type coverage now skip on non-JS/TS projects. Compiler checks extended with Java (mvn/gradle), C# (dotnet build), Dart, Gleam, Zig, and Elixir alongside the existing TypeScript, Go, Rust, Ruby, and Python checks.
+- **`project-metadata` detects 8 new languages** — Java, Kotlin, C#, Dart, Gleam, Zig, Elixir, and C++ are now detected from their project markers (pom.xml, build.gradle.kts, \*.sln, pubspec.yaml, gleam.toml, build.zig, mix.exs, CMakeLists.txt). All runners and booboo language gates now work correctly for these languages.
+- **4 new formatters** — `google-java-format` (config-gated via `.editorconfig` or `.google-java-format`), `cljfmt` (config-gated via `.cljfmt.edn`), `cmake-format` (config-gated via `.cmake-format`), and `PSScriptAnalyzer` formatter for PowerShell (smart-default when PSScriptAnalyzer module is available).
+- **Startup pre-install defaults for shell, Ruby, Kotlin, TOML** — `shellcheck`, `rubocop`, `ktlint`, and `taplo` are now pre-installed fire-and-forget at session start for matching projects, consistent with the existing pattern for `typescript-language-server`, `biome`, `pyright`, `ruff`, `yamllint`, and `sqlfluff`. No latency impact — all installs are fire-and-forget and no-ops when already cached.
 
 ### Fixed
 
@@ -17,18 +25,6 @@ All notable changes to pi-lens will be documented in this file.
 - **Startup probe deduplication** — removed broad eager probes for biome, ast-grep, ruff, knip, jscpd, and madge at session start. Replaced with `scheduleDeferredToolProbes()` which only probes tools not already covered by preinstall or startup scans, scoped to the project's actual language profile.
 - **ReDoS-safe compiler output parsers in `/lens-booboo`** — five regex patterns in the new Java/C#/Zig/Elixir compiler checks used lazy `.+?`/`.*?` quantifiers that Sonar flagged as vulnerable to super-linear backtracking (S5852). Replaced with negated character classes (`[^\s[]+`, `[^:]+`, `[^\n]+` etc.) that match the same output with no backtracking.
 - **Cascade diagnostics now surface for TypeScript neighbors on cold sessions** — previously cascade silently returned zero diagnostics for TypeScript/Deno neighbors when no passive snapshot existed (i.e. the agent had not yet opened the file). Cold-snapshot neighbors now fall through into the parallel `touchFile` pool with a 1000ms budget (tighter than the 2000ms used for non-jsts neighbors, since the TypeScript server is expected to be warm). Valid snapshots still use the fast read path with no touch. New `coldSnapshot: true` field on `neighbor_touch` log entries tracks these in `cascade.log`.
-
-### Added
-
-- **`/lens-health` session timestamp** — output now opens with `Session started: HH:MM (Xh Ym ago)` so all session-scoped counters have clear time context.
-- **`/lens-health` LSP status section** — shows each currently running language server with a `✓`/`✗` connected indicator and workspace root. Makes dead servers immediately visible to the agent without needing to check logs. Also fixes `LSPService.getStatus()` which previously hardcoded `connected: true` instead of calling `isAlive()`.
-- **`/lens-health` cascade summary** — shows session-total cascade runs, diagnostics surfaced, and cold-snapshot touches (the new active-touch fallback for TypeScript neighbors with no snapshot).
-- **`/lens-health` i18n** — localizes status labels with English fallback; es, fr, and pt-BR strings included (PR #45 by @jerryfan).
-
-- **`/lens-booboo` language gates** — Knip (dead code), Madge (circular deps), and type coverage now skip on non-JS/TS projects. Compiler checks extended with Java (mvn/gradle), C# (dotnet build), Dart, Gleam, Zig, and Elixir alongside the existing TypeScript, Go, Rust, Ruby, and Python checks.
-- **`project-metadata` detects 8 new languages** — Java, Kotlin, C#, Dart, Gleam, Zig, Elixir, and C++ are now detected from their project markers (pom.xml, build.gradle.kts, \*.sln, pubspec.yaml, gleam.toml, build.zig, mix.exs, CMakeLists.txt). All runners and booboo language gates now work correctly for these languages.
-- **4 new formatters** — `google-java-format` (config-gated via `.editorconfig` or `.google-java-format`), `cljfmt` (config-gated via `.cljfmt.edn`), `cmake-format` (config-gated via `.cmake-format`), and `PSScriptAnalyzer` formatter for PowerShell (smart-default when PSScriptAnalyzer module is available).
-- **Startup pre-install defaults for shell, Ruby, Kotlin, TOML** — `shellcheck`, `rubocop`, `ktlint`, and `taplo` are now pre-installed fire-and-forget at session start for matching projects, consistent with the existing pattern for `typescript-language-server`, `biome`, `pyright`, `ruff`, `yamllint`, and `sqlfluff`. No latency impact — all installs are fire-and-forget and no-ops when already cached.
 
 ### Improved
 
