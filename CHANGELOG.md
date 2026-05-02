@@ -4,6 +4,12 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+## [3.8.37] - 2026-05-02
+
+### Fixed
+
+- **ReDoS: 3 compiler output parsers in `/lens-booboo`** — `csRe` trailing optional group `(?:\s+\[[^\]]+\])?` dropped (message capture already stops at `[`); `gleamRe` narrowed `[^:]+` → `[^:\n]+` to prevent cross-line backtracking; `zigRe` replaced `(.+)$` with `([^\n]+)` and dropped the redundant end anchor. All three flagged by SonarCloud S5852.
+
 ## [3.8.36] - 2026-05-02
 
 ### Changed
