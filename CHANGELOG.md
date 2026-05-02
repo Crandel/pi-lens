@@ -4,15 +4,15 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
-
-- **jscpd no longer runs on YAML/JSON/Markdown files** — `getFilesForJscpd` now filters to source code extensions only (`.ts`, `.js`, `.py`, `.go`, `.rs`, `.rb`, `.java`, `.cs`, `.php`, `.cpp`, `.c`, `.kt`, `.swift`). Previously any file edited in a turn — including tree-sitter rule YAMLs — was passed to jscpd, causing multi-second delays at `turn_end` when writing non-code files.
+## [3.8.39] - 2026-05-02
 
 ### Fixed
 
-- **ReDoS S5852 final (gleam/zig parsers)** — rewrote `gleamRe` and `zigRe` as line-by-line parsers (`split("\n")` + single-line `exec`), eliminating the multiline flag entirely. Previous `[ \t]*` substitution was insufficient; SonarCloud continued flagging the alternation + `[^\n]*` combination.
-- **SonarCloud MAJOR code smells (batch 1)** — unnecessary `\[` escape in `csRe`; `_pendingDeferredFormatFiles` marked `readonly`; nested ternaries flattened in `formatters.ts`, `lsp-diagnostics.ts`, `lsp.ts`, `read-guard.ts`, `integration.ts`; optional chain applied in `pipeline.ts` and `integration.ts`; nested template literals extracted in `pipeline.ts`, `read-guard.ts`, and `lsp-navigation.ts`.
-- **SonarCloud MAJOR code smells (batch 2)** — `_reportedThisTurn` and 6 LSP service members marked `readonly`; `void` operator removed from `lsp/server.ts` and replaced with `_`-prefixed params in `lsp/index.ts`; redundant `FactValue` type alias replaced with `unknown`; optional chain in `lsp/index.ts`; `sort` separated from assignment in `fact-scheduler.ts`; duplicate chars removed from secrets-scanner regex; identical `getArrowSignature` body unified via `getSignature`; duplicate if-branches merged in `tree-sitter-query-loader.ts` and `quality-rules.ts`; nested ternaries flattened in `runtime-tool-result.ts`, `lsp/launch.ts`, `booboo.ts`, `lsp-navigation.ts`, `psscriptanalyzer.ts`; nested template literals extracted in `pipeline.ts`, `session-summary.ts`, `biome-check.ts`, `eslint.ts`, `index.ts`, `lsp/launch.ts`.
+- **Context injection now prepends guidance before the user prompt** — pi-lens previously appended session guidance after the user's message; provider bridges that treat the last message as the active user action would demote the real request. Guidance is now prepended so the user's prompt stays last. (PR #48 by @tifandotme)
+- **jscpd no longer runs on YAML/JSON/Markdown files** — `getFilesForJscpd` now filters to source code extensions only, preventing multi-second delays at `turn_end` when editing rule YAMLs or config files.
+- **ReDoS S5852 final (gleam/zig parsers)** — rewrote `gleamRe` and `zigRe` as line-by-line parsers, eliminating the multiline flag that SonarCloud continued to flag despite `[ \t]*` substitution.
+- **SonarCloud MAJOR code smells (batch 1 & 2)** — `readonly` members, `void` operator removals, nested ternaries, nested template literals, optional chains, duplicate branches, and redundant type alias across 15+ files.
+- **9 tree-sitter query bugs in new rule files** — predicate outside outermost parens (`cpp/no-auto-ptr`); false-positive `post_filter` gate added (`cpp/no-confused-move-forward`); leaf-node child match removed (`php/this-in-static-context`); invalid node name `class_hereditary` replaced (`java/no-field-shadowing`); field order corrected (`java/no-wait-notify-on-thread`); duplicate `modifiers` blocks merged (`java/spring-session-attributes-setcomplete`); invalid anonymous-node field label removed (`csharp/is-with-this`); inline alternation replaced with two patterns (`python/in-operator-unsupported`); adjacent sibling requirement removed, delegated to `post_filter` (`python/return-in-generator`).
 
 ## [3.8.38] - 2026-05-02
 
