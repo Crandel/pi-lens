@@ -56,7 +56,7 @@ export class RuntimeCoordinator {
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
 	private _readGuard: ReadGuard | null = null;
-	private _pendingDeferredFormatFiles = new Map<string, DeferredFormatRecord>();
+	private readonly _pendingDeferredFormatFiles = new Map<string, DeferredFormatRecord>();
 	private readonly _lspReadWarmState = new Map<
 		string,
 		{ status: "warming" | "ready"; ts: number }

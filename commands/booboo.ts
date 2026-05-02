@@ -1331,7 +1331,7 @@ export async function handleBooboo(
 				);
 				const output = (result.stdout || "") + (result.stderr || "");
 				const csRe =
-					/^([^\s(]+\.cs)\((\d+),(\d+)\):\s+(error|warning)\s+([A-Z]+\d+):\s+([^\[]+)/gm;
+					/^([^\s(]+\.cs)\((\d+),(\d+)\):\s+(error|warning)\s+([A-Z]+\d+):\s+([^[]+)/gm;
 				for (const m of output.matchAll(csRe)) {
 					const [, file, line, col, sev, code, msg] = m;
 					const absFile = path.isAbsolute(file)

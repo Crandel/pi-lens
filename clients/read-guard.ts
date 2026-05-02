@@ -210,9 +210,12 @@ export class ReadGuard {
 		const lastRead = fileReads[fileReads.length - 1];
 		const [editStart, editEnd] = touchedLines;
 		const lastReadEnd = lastRead.effectiveOffset + lastRead.effectiveLimit - 1;
+		const symbolCtx = lastRead.enclosingSymbol
+			? ` (${lastRead.enclosingSymbol.kind} \`${lastRead.enclosingSymbol.name}\`)`
+			: "";
 		const verdict = this.blockOrWarn(
 			"out-of-range",
-			`🔴 BLOCKED — Edit outside read range\n\nYou read \`${filePath}\` lines ${lastRead.effectiveOffset}-${lastReadEnd}${lastRead.enclosingSymbol ? ` (${lastRead.enclosingSymbol.kind} \`${lastRead.enclosingSymbol.name}\`)` : ""}, but your edit touches lines ${editStart}-${editEnd}.\n\nThe edit target is outside the context you previously read.\nTo proceed:\n  1. Read the relevant section: \`read path="${filePath}" offset=${Math.max(1, editStart - 5)} limit=${Math.min(30, editEnd - editStart + 10)}\`\n  2. Or read the full file: \`read path="${filePath}"\``,
+			`🔴 BLOCKED — Edit outside read range\n\nYou read \`${filePath}\` lines ${lastRead.effectiveOffset}-${lastReadEnd}${symbolCtx}, but your edit touches lines ${editStart}-${editEnd}.\n\nThe edit target is outside the context you previously read.\nTo proceed:\n  1. Read the relevant section: \`read path="${filePath}" offset=${Math.max(1, editStart - 5)} limit=${Math.min(30, editEnd - editStart + 10)}\`\n  2. Or read the full file: \`read path="${filePath}"\``,
 			{
 				editRange: touchedLines,
 				readRanges: fileReads.map((r) => ({
@@ -470,11 +473,7 @@ export class ReadGuard {
 		const reads = this.reads.get(filePath) ?? [];
 		logReadGuardEvent({
 			event:
-				verdict.action === "allow"
-					? "edit_allowed"
-					: verdict.action === "warn"
-						? "edit_warned"
-						: "edit_blocked",
+				verdict.action === "allow" ? "edit_allowed" : (verdict.action === "warn" ? "edit_warned" : "edit_blocked"),
 			sessionId: this.sessionId,
 			filePath,
 			metadata: {

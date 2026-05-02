@@ -846,8 +846,10 @@ export function createLspNavigationTool(
 			}
 
 			const isEmpty = !result || (Array.isArray(result) && result.length === 0);
+			const fileCtx = filePath ? " at " + path.basename(filePath) : "";
+			const lineCtx = line ? ":" + line + ":" + character : "";
 			let output = isEmpty
-				? `No results for ${operation}${filePath ? ` at ${path.basename(filePath)}` : ""}${line ? `:${line}:${character}` : ""}`
+				? "No results for " + operation + fileCtx + lineCtx
 				: JSON.stringify(result, null, 2);
 			if (isEmpty && operation === "workspaceSymbol" && !rawPath) {
 				output +=

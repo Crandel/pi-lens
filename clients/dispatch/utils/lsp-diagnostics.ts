@@ -16,16 +16,10 @@ export function convertLspDiagnostics(
 	return diags
 		.filter((d) => d.range?.start?.line !== undefined)
 		.map((d, idx) => {
-			const severity =
-				d.severity === 1
-					? "error"
-					: d.severity === 2
-						? "warning"
-						: d.severity === 4
-							? "hint"
-							: "info";
+			const severityMap: Record<number, string> = { 1: "error", 2: "warning", 4: "hint" };
+			const severity = severityMap[d.severity] ?? "info";
 			const semantic =
-				d.severity === 1 ? "blocking" : d.severity === 2 ? "warning" : "none";
+				d.severity === 1 ? "blocking" : (d.severity === 2 ? "warning" : "none");
 			const code = String(d.code ?? "unknown");
 			const source = options.source ?? d.source ?? tool;
 			const hasSuggestion = options.fixSuggestionByIndex?.has(idx) ?? false;

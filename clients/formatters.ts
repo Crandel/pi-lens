@@ -54,7 +54,7 @@ async function tryLazyInstallFormatterTool(
 		const ok = !res.error && res.status === 0;
 		if (!ok) {
 			console.error(
-				`[format] lazy-install rubocop failed: ${res.error?.message ?? res.stderr ?? `exit ${res.status}`}`,
+				`[format] lazy-install rubocop failed: ${res.error?.message ?? res.stderr ?? "exit " + res.status}`,
 			);
 		}
 		return ok;
@@ -67,7 +67,7 @@ async function tryLazyInstallFormatterTool(
 	const ok = !res.error && res.status === 0;
 	if (!ok) {
 		console.error(
-			`[format] lazy-install rustfmt failed: ${res.error?.message ?? res.stderr ?? `exit ${res.status}`}`,
+			`[format] lazy-install rustfmt failed: ${res.error?.message ?? res.stderr ?? "exit " + res.status}`,
 		);
 	}
 	return ok;
@@ -919,11 +919,16 @@ export async function getFormattersForFile(
 
 	const enabled = selected ? [selected] : [];
 
-	const selectionReason = selected
-		? (formatterPolicy
-			? (candidateFormatters.some((f) => hasExplicitFormatterConfig(f.name, cwd)) ? "explicit-config" : "smart-default")
-			: "detect")
-		: "none";
+	let selectionReason: string;
+	if (!selected) {
+		selectionReason = "none";
+	} else if (!formatterPolicy) {
+		selectionReason = "detect";
+	} else {
+		selectionReason = candidateFormatters.some((f) => hasExplicitFormatterConfig(f.name, cwd))
+			? "explicit-config"
+			: "smart-default";
+	}
 	logLatency({
 		type: "phase",
 		phase: "formatter_selected",

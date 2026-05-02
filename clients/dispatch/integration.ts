@@ -479,7 +479,7 @@ export async function computeCascadeForFile(
 		.filter((n) => !primaryFilesThisTurn.has(normalizeMapKey(n)))
 		.sort((a, b) => {
 			const rank = (p: string) =>
-				importerSet.has(p) ? 0 : callerSet.has(p) ? 1 : 2;
+				importerSet.has(p) ? 0 : (callerSet.has(p) ? 1 : 2);
 			return rank(a) - rank(b);
 		})
 		.slice(0, MAX_FILES);
@@ -584,10 +584,7 @@ export async function computeCascadeForFile(
 				// write sequence. A new write (higher writeSeq) invalidates the cache entry.
 				const cached =
 					writeSeq != null ? neighborTouchCache.get(cacheKey) : undefined;
-				if (
-					cached != null &&
-					cached.turnSeq === turnSeq
-				) {
+				if (cached?.turnSeq === turnSeq) {
 					producedLspData = true;
 					const durationMs = Date.now() - neighborStart;
 					logCascade({

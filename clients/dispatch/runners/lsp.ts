@@ -212,11 +212,7 @@ const lspRunner: RunnerDefinition = {
 		);
 
 		const hasErrors = diagnostics.some((d) => d.semantic === "blocking");
-		const resultSemantic = hasErrors
-			? "blocking"
-			: diagnostics.length > 0
-				? "warning"
-				: "none";
+		const resultSemantic = hasErrors ? "blocking" : (diagnostics.length > 0 ? "warning" : "none");
 
 		return {
 			status: hasErrors ? "failed" : "succeeded",
