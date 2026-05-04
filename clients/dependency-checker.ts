@@ -408,7 +408,7 @@ export class DependencyChecker {
 		let output = `[Circular Deps] ${circular.length} cycle(s) found:\n`;
 
 		for (const dep of circular) {
-			const cycleKey = dep.path.sort().join("→");
+			const cycleKey = dep.path.sort((a, b) => a.localeCompare(b)).join("→");
 			if (seen.has(cycleKey)) continue;
 			seen.add(cycleKey);
 

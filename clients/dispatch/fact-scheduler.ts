@@ -69,7 +69,7 @@ export function scheduleProviders(providers: FactProvider[]): FactProvider[] {
     const cycleParticipants = providers
       .filter((p) => !result.includes(p))
       .map((p) => p.id)
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
     throw new Error(
       `Cycle detected among FactProviders: ${cycleParticipants.join(", ")}`,
     );

@@ -1783,7 +1783,7 @@ function findTopSimilarPairs(
 
 			if (similarity >= SEMANTIC_SIMILARITY_THRESHOLD) {
 				// Canonical pair key (sorted to avoid duplicates)
-				const pairKey = [entry1.id, entry2.id].sort().join("::");
+				const pairKey = [entry1.id, entry2.id].sort((a, b) => a.localeCompare(b)).join("::");
 				if (seenPairs.has(pairKey)) continue;
 				seenPairs.add(pairKey);
 

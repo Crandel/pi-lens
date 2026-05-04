@@ -386,7 +386,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			`turn_end: ${blockerParts.length} blocker section(s) found, persisting for next context`,
 		);
 		const content = capTurnEndMessage(blockerParts.join("\n\n"));
-		const signature = `${files.slice().sort().join("|")}::${content}`;
+		const signature = `${files.slice().sort((a, b) => a.localeCompare(b)).join("|")}::${content}`;
 		const last = cacheManager.readCache<{ signature: string }>(
 			"turn-end-findings-last",
 			cwd,

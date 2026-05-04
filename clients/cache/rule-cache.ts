@@ -50,7 +50,7 @@ export class RuleCache {
 
 	private computeRuleHash(ruleFiles: string[]): string {
 		const hash = crypto.createHash("sha256");
-		for (const file of ruleFiles.sort()) {
+		for (const file of ruleFiles.sort((a, b) => a.localeCompare(b))) {
 			if (fs.existsSync(file)) {
 				const stat = fs.statSync(file);
 				hash.update(`${file}:${stat.mtimeMs}:${stat.size}`);

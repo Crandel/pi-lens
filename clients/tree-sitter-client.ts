@@ -669,7 +669,7 @@ export class TreeSitterClient {
 		let hash = 0;
 		for (let i = 0; i < pattern.length; i++) {
 			const char = pattern.charCodeAt(i);
-			hash = ((hash << 5) - hash + char) | 0;
+			hash = ((hash << 5) - hash + char) | 0; // NOSONAR: intentional 32-bit truncation for hash stability, not float→int conversion
 		}
 		return `${languageId}:${hash.toString(36)}`;
 	}
