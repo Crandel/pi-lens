@@ -332,6 +332,58 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	it("re-touches neighbor when writeSeq advances within the same turn", async () => {
+		// Uses .ts files (cold snapshot path) so getServersForFileWithConfig reliably
+		// returns a server. Two primaries cascade to the same neighbor in the same turn
+		// with different writeSeq values — the second must re-touch, not use the cache.
+		const env = setupTestEnvironment("cascade-writeseq-");
+		try {
+			const primaryA = path.join(env.tmpDir, "src", "a.ts");
+			const primaryB = path.join(env.tmpDir, "src", "b.ts");
+			const neighbor = path.join(env.tmpDir, "src", "shared.ts");
+			fs.mkdirSync(path.dirname(primaryA), { recursive: true });
+			fs.writeFileSync(primaryA, "export const a = 1;\n");
+			fs.writeFileSync(primaryB, "export const b = 2;\n");
+			fs.writeFileSync(neighbor, "import { a } from './a';\n");
+
+			// Neighbor goes through cold-snapshot path (allDiags empty → no snapshot →
+			// falls into touch pool). First cascade sets cache at writeSeq=1.
+			const touchFile = vi
+				.fn()
+				.mockResolvedValueOnce([lspError("error1")])
+				.mockResolvedValueOnce([lspError("error2")]);
+			mocks.getLSPService.mockReturnValue({
+				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
+				touchFile,
+				getDiagnostics: vi.fn(),
+			});
+
+			const { computeCascadeForFile, resetDispatchBaselines } = await import(
+				"../../clients/dispatch/integration.js"
+			);
+			resetDispatchBaselines();
+
+			mocks.computeImpactCascade.mockReturnValueOnce(impact(primaryA, [neighbor]));
+			await computeCascadeForFile(primaryA, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+			expect(touchFile).toHaveBeenCalledTimes(1);
+
+			// Same turn, higher writeSeq — cache entry (writeSeq=1) must be invalidated
+			mocks.computeImpactCascade.mockReturnValueOnce(impact(primaryB, [neighbor]));
+			const second = await computeCascadeForFile(primaryB, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 2,
+			});
+
+			expect(touchFile).toHaveBeenCalledTimes(2);
+			expect(second?.neighbors[0]?.diagnostics[0]?.message).toBe("error2");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("returns undefined for empty/clean cascade output", async () => {
 		const env = setupTestEnvironment("cascade-empty-");
 		try {

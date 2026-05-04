@@ -633,7 +633,7 @@ export async function computeCascadeForFile(
 				// write sequence. A new write (higher writeSeq) invalidates the cache entry.
 				const cached =
 					writeSeq != null ? neighborTouchCache.get(cacheKey) : undefined;
-				if (cached?.turnSeq === turnSeq) {
+				if (cached?.turnSeq === turnSeq && cached?.writeSeq === writeSeq) {
 					producedLspData = true;
 					const durationMs = Date.now() - neighborStart;
 					logCascade({
@@ -868,6 +868,7 @@ function appendFallbackNeighbors(
 	for (const [diagPath, { diags, ts }] of allDiags) {
 		const diagKey = normalizeMapKey(diagPath);
 		if (diagKey === normalizedFileKey || seen.has(diagKey)) continue;
+		if (primaryFilesThisTurn.has(diagKey)) continue;
 		if (!nodeFs.existsSync(diagPath)) continue;
 		if (now - ts > CASCADE_TTL_MS) continue;
 		const errors = convertLspDiagnostics(
