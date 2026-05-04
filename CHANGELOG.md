@@ -6,7 +6,13 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
-- **Experimental terminal dashboard** — `--lens-dashboard` / `PI_LENS_DASHBOARD=1` now streams redacted session telemetry to `~/.pi-lens/dashboard-events.jsonl` and opens a separate terminal dashboard. The dashboard shows active tools, formatter config selections, formatters/linters run during the session, LSP servers spawned, and diagnostics grouped by touched file with OSC-8 clickable file links. Use `PI_LENS_DASHBOARD_LOG_ONLY=1` to emit JSONL without opening a terminal.
+- **Experimental terminal dashboard** — `--lens-dashboard` / `PI_LENS_DASHBOARD=1` streams redacted session telemetry to a per-session JSONL file (`~/.pi-lens/dashboard-events/{sessionId}.jsonl`) and opens a live terminal dashboard. The dashboard shows the working folder, detected languages, formatter/linter activity, LSP servers spawned, diagnostics grouped by file with OSC-8 clickable links, and a session-start summary of languages, tools, configs, and autoinstalls. Each session gets its own event file; old files are pruned after 7 days (configurable via `PI_LENS_DASHBOARD_RETENTION_DAYS`). Use `PI_LENS_DASHBOARD_LOG_ONLY=1` to emit JSONL without opening a terminal. The viewer auto-scrolls to the latest content on each render.
+
+### Fixed
+
+- **Pipelines skipped for external and vendor files** — agents reading dependency source (global npm packages, project-local `node_modules`) previously triggered LSP server spawns, tree-sitter read-range expansion, read-guard recording, and complexity baseline capture on those files — all noise with no diagnostic value. Added `isExternalOrVendorFile()` (built on the existing `isUnderDir` helper for correct Windows case handling) and gated all five pipeline paths: LSP auto-touch, tree-sitter expansion, read-guard recording, complexity baseline, and the full dispatch pipeline on write/edit.
+- **Security: absolute paths for `cmd.exe` and `osascript` spawn calls** — dashboard terminal launch now resolves both executables via `process.env.SystemRoot` / absolute macOS path instead of relying on `PATH`, eliminating the SonarCloud S4036 PATH-injection finding.
+- **Dashboard sort stability** — language list in session summary now sorts with an explicit `localeCompare` comparator (SonarCloud S2871).
 
 ## [3.8.40] - 2026-05-04
 

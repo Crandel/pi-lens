@@ -229,7 +229,7 @@ function render() {
 			const lang = extLang[ext];
 			if (lang) seen.add(lang);
 		}
-		const langs = [...seen].sort();
+		const langs = [...seen].sort((a, b) => a.localeCompare(b));
 
 		const hasExplicit = configs.some(
 			(c) => c.reason === "explicit-config" || c.reason === "detect",
