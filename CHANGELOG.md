@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **Vendor/third-party files excluded from cascade neighbor analysis** — `isExternalOrVendorFile()` previously only checked `node_modules`; it now checks every path segment against `vendor`, `vendors`, `third_party`, and `third-party` as well. Cascade neighbor discovery and fallback neighbor injection both skip files inside these directories, preventing vendored dependency diagnostics from surfacing in cascade output.
+
 - **`lens-booboo` hangs on repos with large vendored trees (fixes #57)** — `collectSourceFiles` and the `sg scan` runner in `lens-booboo` now exclude `vendor/`, `third_party/`, `third-party/`, and `vendors/` by default (added to `EXCLUDED_DIRS`). Additionally, `readGitignoreDirs()` reads the root `.gitignore` and extracts simple directory-name entries (bare names and `name/` patterns — no wildcards, negations, or internal slashes), merging them into the exclusion list for `collectSourceFiles` and the `sg scan` glob arguments. This covers project-specific large dirs (e.g. `my-upstream/`) without requiring full gitignore-spec compliance.
 
 ## [3.8.41] - 2026-05-05

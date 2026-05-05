@@ -48,7 +48,7 @@ import type { CascadeResult } from "../cascade-types.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getServersForFileWithConfig } from "../lsp/config.js";
 import { getLSPService } from "../lsp/index.js";
-import { normalizeMapKey } from "../path-utils.js";
+import { isExternalOrVendorFile, normalizeMapKey } from "../path-utils.js";
 import {
 	clearReviewGraphWorkspaceCache,
 	getLastGraphBuildInfo,
@@ -528,6 +528,7 @@ export async function computeCascadeForFile(
 	).length;
 	const sortedNeighbors = [...impact.neighborFiles]
 		.filter((n) => nodeFs.existsSync(n))
+		.filter((n) => !isExternalOrVendorFile(n, cwd))
 		// B10: exclude files already edited as primary this turn — their own pipeline
 		// run is the authoritative diagnostic source; showing them as neighbors is noise.
 		.filter((n) => !primaryFilesThisTurn.has(normalizeMapKey(n)))
@@ -769,7 +770,7 @@ export async function computeCascadeForFile(
 	// CR-3/A2: degraded fallback when no neighbor produced trustworthy LSP data —
 	// not merely when the graph returned zero neighbors.
 	if (!producedLspData) {
-		appendFallbackNeighbors(neighbors, allDiags, normalizedFileKey);
+		appendFallbackNeighbors(neighbors, allDiags, normalizedFileKey, cwd);
 		if (neighbors.some((n) => n.reason === "fallback")) {
 			logCascade({
 				phase: "neighbor_fallback",
@@ -867,6 +868,7 @@ function appendFallbackNeighbors(
 		{ diags: import("../lsp/client.js").LSPDiagnostic[]; ts: number }
 	>,
 	normalizedFileKey: string,
+	cwd: string,
 ): void {
 	const now = Date.now();
 	const seen = new Set(neighbors.map((n) => normalizeMapKey(n.filePath)));
@@ -874,6 +876,7 @@ function appendFallbackNeighbors(
 		const diagKey = normalizeMapKey(diagPath);
 		if (diagKey === normalizedFileKey || seen.has(diagKey)) continue;
 		if (primaryFilesThisTurn.has(diagKey)) continue;
+		if (isExternalOrVendorFile(diagPath, cwd)) continue;
 		if (!nodeFs.existsSync(diagPath)) continue;
 		if (now - ts > CASCADE_TTL_MS) continue;
 		const errors = convertLspDiagnostics(

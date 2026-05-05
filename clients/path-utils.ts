@@ -152,13 +152,21 @@ export function isUnderDir(child: string, parent: string): boolean {
 	return normChild === normParent || normChild.startsWith(parentPrefix);
 }
 
+const VENDOR_DIR_NAMES = new Set([
+	"node_modules",
+	"vendor",
+	"vendors",
+	"third_party",
+	"third-party",
+]);
+
 /**
  * Returns true when a file should be treated as external/vendor and excluded
  * from pipelines (LSP, diagnostics, complexity, read-guard, etc.).
  *
- * Two cases:
+ * Cases:
  *   1. Outside the project root entirely (e.g. global npm packages, system files)
- *   2. Inside the project but under node_modules (local deps, never user-editable)
+ *   2. Inside the project but under a vendor directory (node_modules, vendor, third_party, etc.)
  */
 export function isExternalOrVendorFile(
 	filePath: string,
@@ -166,5 +174,9 @@ export function isExternalOrVendorFile(
 ): boolean {
 	if (!isUnderDir(filePath, projectRoot)) return true;
 	const normalized = normalizeFilePath(filePath);
-	return normalized.includes("/node_modules/");
+	const rootNorm = normalizeFilePath(projectRoot);
+	const rel = normalized.startsWith(rootNorm + "/")
+		? normalized.slice(rootNorm.length + 1)
+		: normalized;
+	return rel.split("/").some((seg) => VENDOR_DIR_NAMES.has(seg));
 }
