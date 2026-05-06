@@ -56,6 +56,7 @@ import {
 
 const LSP_MAX_FILE_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 const LSP_MAX_FILE_LINES = RUNTIME_CONFIG.pipeline.lspMaxFileLines;
+const LSP_SPAWN_BUDGET_MS = RUNTIME_CONFIG.pipeline.lspSpawnBudgetMs;
 const AUTOFIX_CHANGED_FILE_SCAN_LIMIT = 5000;
 
 type FileSnapshot = Map<string, { mtimeMs: number; size: number }>;
@@ -673,9 +674,12 @@ export async function resyncLspFile(
 			if (formatChanged) {
 				await lspService.openFile(filePath, fileContent, {
 					preserveDiagnostics: true,
+					spawnBudgetMs: LSP_SPAWN_BUDGET_MS,
 				});
 			} else {
-				await lspService.openFile(filePath, fileContent);
+				await lspService.openFile(filePath, fileContent, {
+					spawnBudgetMs: LSP_SPAWN_BUDGET_MS,
+				});
 			}
 		}
 	} catch (err) {

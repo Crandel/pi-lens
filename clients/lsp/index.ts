@@ -218,6 +218,7 @@ export class LSPService {
 	async getClientForFile(
 		filePath: string,
 		maxWaitMs?: number,
+		hardCapMs?: number,
 	): Promise<SpawnedServer | undefined> {
 		if (this.checkDestroyed()) return undefined;
 		const servers = getServersForFileWithConfig(filePath);
@@ -225,7 +226,13 @@ export class LSPService {
 			(max, server) => Math.max(max, server.clientWaitTimeoutMs ?? 0),
 			0,
 		);
-		const effectiveMaxWaitMs = Math.max(maxWaitMs ?? 0, serverWaitOverrideMs);
+		// hardCapMs is a caller-imposed ceiling (e.g. pipeline budget) that
+		// overrides the server config — prevents tool_result from blocking the
+		// TUI for the full LSP cold-start window.
+		const effectiveMaxWaitMs =
+			hardCapMs !== undefined
+				? Math.min(Math.max(maxWaitMs ?? 0, serverWaitOverrideMs), hardCapMs)
+				: Math.max(maxWaitMs ?? 0, serverWaitOverrideMs);
 
 		const withBudget = async (): Promise<SpawnedServer | undefined> => {
 			if (servers.length === 0) return undefined;
@@ -522,10 +529,10 @@ export class LSPService {
 	async openFile(
 		filePath: string,
 		content: string,
-		options?: { preserveDiagnostics?: boolean },
+		options?: { preserveDiagnostics?: boolean; spawnBudgetMs?: number },
 	): Promise<void> {
 		if (this.checkDestroyed()) return;
-		const spawned = await this.getClientForFile(filePath);
+		const spawned = await this.getClientForFile(filePath, undefined, options?.spawnBudgetMs);
 		if (!spawned) return;
 
 		const languageId = getLanguageId(filePath) ?? "plaintext";

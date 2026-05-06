@@ -362,6 +362,7 @@ describe("Pipeline", () => {
 			expect(mockLSPService.openFile).toHaveBeenCalledWith(
 				filePath,
 				"const x = 1;",
+				{ spawnBudgetMs: 5000 },
 			);
 		});
 

@@ -9,6 +9,11 @@ export const RUNTIME_CONFIG = {
 		lspMaxFileLines: 5000,
 		cascadeMaxFiles: 5,
 		cascadeMaxDiagnosticsPerFile: 20,
+		// Hard cap on how long the pipeline will wait for an LSP client to spawn.
+		// Keeps tool_result from blocking the TUI during cold LSP start (e.g.
+		// pyright workspace indexing). The LSP server continues spawning in the
+		// background; subsequent edits get full diagnostics once it is ready.
+		lspSpawnBudgetMs: 5_000,
 	},
 	dispatch: {
 		runnerTimeoutMs: 30_000,
