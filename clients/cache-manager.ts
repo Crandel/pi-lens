@@ -43,6 +43,7 @@ export interface TurnState {
 	turnCycles: number;
 	maxCycles: number;
 	lastUpdated: string;
+	sessionId?: string;
 }
 
 // --- Defaults ---
@@ -250,8 +251,10 @@ export class CacheManager {
 		range: ModifiedRange,
 		importsChanged: boolean,
 		cwd: string,
+		sessionId?: string,
 	): TurnState {
 		const state = this.readTurnState(cwd);
+		if (sessionId) state.sessionId = sessionId;
 		const normalizedPath = this.toTurnStateKey(filePath, cwd);
 
 		const existing = state.files[normalizedPath];

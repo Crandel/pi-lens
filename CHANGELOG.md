@@ -6,6 +6,17 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **Test runner: import-based fallback discovery** — when basename pattern lookup finds no test file for a modified source file (e.g. `cline.test.ts` for `cline-auth.ts`), the runner now scans `tests/`, `__tests__/`, and the source file's own directory for any `*.test.*` file whose content references the source basename in an import path. Fixes the silent `no test file found` for files whose test is named after a module rather than the source file.
+- **Test runner: prefer local `node_modules/.bin` binary over `npx`** — `vitest` and `jest` now resolve the project-local binary (`node_modules/.bin/vitest.cmd` on Windows, `node_modules/.bin/vitest` on Unix) before falling back to `npx`, saving ~150ms of startup overhead per test run.
+- **Turn-end test runner logging** — `turn_end` now logs the outcome of every test run: `turn_end: test vitest util.test.ts → PASS 8p/0f (412ms)` or `FAIL 2p/8f (930ms)`. Stale results (turn advanced while tests ran) are logged with a `[stale]` prefix instead of being silently discarded. All-pass turns are no longer silent.
+- **Per-file test target logging** — `turn_end` now logs which test file was resolved for each modified source file, or `no test file found` when none matched. Previously silent; impossible to distinguish "runner disabled" from "no test found".
+- **Session-scoped turn-end dedup** — `turn-end-findings-last` now stores the current session ID alongside the content signature. Identical findings from a previous session are no longer suppressed — each new session sees its blockers fresh. Same-session dedup continues to work as before.
+- **Cross-session turn state eviction** — turn state (modified file ranges) now carries the session ID set at first edit. If `turn_end` reads a turn state written by a different session, it evicts it immediately and logs `turn_end: evicting stale turn state (session X ≠ current Y)`, preventing stale cross-session file lists from triggering jscpd, madge, or test runs.
+
+### Changed
+
+- **Context injections framed as automated checks** — all three `consume*` injections (`turn-end findings`, `test findings`, `session guidance`) now prefix their content with `[pi-lens automated check — not a user request]` so the agent cannot mistake a hook-injected message for a direct user command. Advisory sections additionally carry `ℹ️ Advisory — no action required this turn:` before their content; blockers (🔴) continue to require action.
+
 - **`/lens-widget-toggle` command** — toggles the pi-lens diagnostics widget below the editor on/off for the current session, so users can reclaim footer/editor space without disabling pi-lens analysis.
 
 ### Changed

@@ -242,7 +242,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				dbg(
 					`tool_result: adding range ${range.start}-${range.end} for ${filePath}`,
 				);
-				cacheManager.addModifiedRange(filePath, range, importsChanged, cwd);
+				cacheManager.addModifiedRange(filePath, range, importsChanged, cwd, runtime.telemetrySessionId);
 			}
 			dbg(
 				`tool_result: turn state after add: ${JSON.stringify(cacheManager.readTurnState(cwd))}`,
@@ -257,6 +257,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				{ start: 1, end: lineCount },
 				hasImports,
 				cwd,
+				runtime.telemetrySessionId,
 			);
 		}
 	} catch (err) {

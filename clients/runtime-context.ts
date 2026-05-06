@@ -20,7 +20,7 @@ export function consumeTurnEndFindings(
 		messages: [
 			{
 				role: "user",
-				content: `[pi-lens] End-of-turn findings:\n\n${findings.data.content}`,
+				content: `[pi-lens automated check — not a user request] Address 🔴 blockers before continuing; ℹ️ advisories are informational only.\n\n${findings.data.content}`,
 			},
 		],
 	};
@@ -46,7 +46,7 @@ export function consumeTestFindings(
 		messages: [
 			{
 				role: "user",
-				content: `[pi-lens] Test failures from last turn:\n\n${findings.data.content}`,
+				content: `[pi-lens automated check — not a user request] Test failures detected last turn — fix before continuing:\n\n${findings.data.content}`,
 			},
 		],
 	};
@@ -72,7 +72,7 @@ export function consumeSessionStartGuidance(
 		messages: [
 			{
 				role: "user",
-				content: `[pi-lens] Session guidance:\n\n${guidance.data.content}`,
+				content: `[pi-lens automated context — not a user request]\n\n${guidance.data.content}`,
 			},
 		],
 	};

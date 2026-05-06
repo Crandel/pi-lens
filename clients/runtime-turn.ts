@@ -83,7 +83,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	} = deps;
 
 	const cwd = ctxCwd ?? process.cwd();
-	const turnState = cacheManager.readTurnState(cwd);
+	let turnState = cacheManager.readTurnState(cwd);
+
+	// Evict turn state written by a previous session — it carries stale file
+	// ranges that no longer reflect the current editing context.
+	if (turnState.sessionId && turnState.sessionId !== runtime.telemetrySessionId) {
+		dbg(
+			`turn_end: evicting stale turn state (session ${turnState.sessionId} ≠ current ${runtime.telemetrySessionId})`,
+		);
+		cacheManager.clearTurnState(cwd);
+		turnState = cacheManager.readTurnState(cwd);
+	}
+
 	const files = Object.keys(turnState.files);
 
 	if (files.length === 0) {
@@ -307,6 +318,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			if (target && !seen.has(target.testFile)) {
 				seen.add(target.testFile);
 				targets.push(target);
+				dbg(
+					`turn_end: ${file} → test ${target.runner} ${path.relative(cwd, target.testFile)} (${target.strategy})`,
+				);
+			} else if (!target) {
+				dbg(`turn_end: ${file} → no test file found`);
 			}
 		}
 		if (targets.length > 0) {
@@ -325,24 +341,37 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				),
 			)
 				.then((results) => {
-					// Drop stale results if the agent has already started a new turn.
-					if (runtime.turnIndex !== firedAtTurn) {
-						dbg(
-							`turn_end: discarding test results — turn advanced while tests ran`,
-						);
-						return;
-					}
+					const stale = runtime.turnIndex !== firedAtTurn;
 					const failures: string[] = [];
 					for (const r of results) {
-						if (r.status === "fulfilled" && r.value.failed > 0) {
+						if (r.status === "rejected") {
+							dbg(`turn_end: test run rejected — ${r.reason}`);
+							continue;
+						}
+						const { file, runner, passed, failed, duration, error } = r.value;
+						const shortFile = path.basename(file);
+						const summary =
+							error && passed === 0 && failed === 0
+								? `error: ${error}`
+								: `${failed > 0 ? "FAIL" : "PASS"} ${passed}p/${failed}f (${duration}ms)`;
+						dbg(
+							`turn_end: ${stale ? "[stale] " : ""}test ${runner} ${shortFile} → ${summary}`,
+						);
+						if (!stale && failed > 0) {
 							const formatted = testRunnerClient.formatResult(r.value);
 							if (formatted) failures.push(formatted);
 						}
 					}
+					if (stale) {
+						dbg(`turn_end: discarding test results — turn advanced while tests ran`);
+						return;
+					}
 					if (failures.length > 0) {
 						const content = failures.join("\n\n");
 						cacheManager.writeCache("test-runner-findings", { content }, cwd);
-						dbg(`turn_end: test failures cached for next context injection`);
+						dbg(`turn_end: ${failures.length} test failure(s) cached for next context injection`);
+					} else if (results.length > 0) {
+						dbg(`turn_end: all tests passed`);
 					}
 				})
 				.catch(() => {});
@@ -366,7 +395,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	cacheManager.incrementTurnCycle(cwd);
 
-	const findingParts = [...blockerParts, ...advisoryParts];
+	const labeledAdvisoryParts = advisoryParts.map(
+		(p) => `ℹ️ Advisory — no action required this turn:\n${p}`,
+	);
+	const findingParts = [...blockerParts, ...labeledAdvisoryParts];
 	if (findingParts.length > 0) {
 		dbg(
 			`turn_end: ${blockerParts.length} blocker section(s), ${advisoryParts.length} advisory section(s) found, persisting for next context`,
@@ -376,19 +408,22 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			.slice()
 			.sort((a, b) => a.localeCompare(b))
 			.join("|")}::${content}`;
-		const last = cacheManager.readCache<{ signature: string }>(
+		const last = cacheManager.readCache<{ signature: string; sessionId: string }>(
 			"turn-end-findings-last",
 			cwd,
 		);
-		if (last?.data?.signature === signature) {
-			dbg("turn_end: duplicate findings detected, suppressing re-prompt");
+		if (
+			last?.data?.signature === signature &&
+			last?.data?.sessionId === runtime.telemetrySessionId
+		) {
+			dbg("turn_end: duplicate findings detected (same session), suppressing re-prompt");
 			cacheManager.clearTurnState(cwd);
 			runtime.fixedThisTurn.clear();
 			resetFormatService();
 			return;
 		}
 		cacheManager.writeCache("turn-end-findings", { content }, cwd);
-		cacheManager.writeCache("turn-end-findings-last", { signature }, cwd);
+		cacheManager.writeCache("turn-end-findings-last", { signature, sessionId: runtime.telemetrySessionId }, cwd);
 	}
 	if (blockerParts.length === 0) {
 		cacheManager.clearTurnState(cwd);

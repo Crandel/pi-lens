@@ -39,6 +39,9 @@ export interface TestFailure {
 interface RunnerConfig {
 	configFiles: string[];
 	command: string;
+	// Name of the binary in node_modules/.bin — defaults to the runner key.
+	// When a local binary is found, args()[0] (the runner name passed to npx) is dropped.
+	binName?: string;
 	args: (testFile: string, cwd: string) => string[];
 	parseJson: boolean;
 }
@@ -84,6 +87,7 @@ const RUNNERS: Record<string, RunnerConfig> = {
 	vitest: {
 		configFiles: ["vitest.config.ts", "vitest.config.js", "vitest.config.mjs"],
 		command: "npx",
+		binName: "vitest",
 		args: (testFile, _cwd) => [
 			"vitest",
 			"run",
@@ -101,6 +105,7 @@ const RUNNERS: Record<string, RunnerConfig> = {
 			".jestrc.js",
 		],
 		command: "npx",
+		binName: "jest",
 		args: (testFile, _cwd) => [
 			"jest",
 			testFile,
@@ -374,6 +379,12 @@ export class TestRunnerClient {
 			}
 		}
 
+		// Basename lookup found nothing — try import scanning as a fallback.
+		const importMatch = this.findTestFileByImport(sourceFilePath, cwd);
+		if (importMatch) {
+			return { testFile: importMatch, runner: detected.runner };
+		}
+
 		return null;
 	}
 
@@ -451,10 +462,10 @@ export class TestRunnerClient {
 		}
 
 		try {
-			const args = config.args(absoluteTestFile, cwd);
-			this.log(`Running: ${config.command} ${args.join(" ")}`);
+			const { command, args } = this.resolveExec(runner, config, absoluteTestFile, cwd);
+			this.log(`Running: ${command} ${args.join(" ")}`);
 
-			const result = safeSpawn(config.command, args, {
+			const result = safeSpawn(command, args, {
 				cwd,
 				timeout: 60000, // 60s timeout
 			});
@@ -547,10 +558,10 @@ export class TestRunnerClient {
 		}
 
 		try {
-			const args = config.args(absoluteTestFile, cwd);
-			this.log(`Running (async): ${config.command} ${args.join(" ")}`);
+			const { command, args } = this.resolveExec(runner, config, absoluteTestFile, cwd);
+			this.log(`Running (async): ${command} ${args.join(" ")}`);
 
-			const result = await safeSpawnAsync(config.command, args, {
+			const result = await safeSpawnAsync(command, args, {
 				cwd,
 				timeout: 60000,
 			});
@@ -950,6 +961,88 @@ export class TestRunnerClient {
 	}
 
 	// --- Helpers ---
+
+	/**
+	 * Fallback discovery: scan known test directories for a file that imports
+	 * the source module. Catches cases where the test file name doesn't match
+	 * the source basename (e.g. cline.test.ts testing cline-auth.ts).
+	 *
+	 * Checks for the basename appearing in a quoted import/require path:
+	 *   from "../providers/cline/cline-auth"   → /cline-auth"  ✓
+	 *   from "./cline-auth.js"                 → /cline-auth.  ✓
+	 *   import("cline-auth")                   → "cline-auth"  ✓
+	 */
+	private findTestFileByImport(
+		sourceFilePath: string,
+		cwd: string,
+	): string | null {
+		const ext = path.extname(sourceFilePath);
+		const basename = path.basename(sourceFilePath, ext);
+		const testPattern = /\.(test|spec)\.(ts|tsx|js|jsx|mjs)$/;
+
+		const searchDirs = [
+			path.join(cwd, "tests"),
+			path.join(cwd, "__tests__"),
+			path.dirname(sourceFilePath),
+		];
+
+		for (const dir of searchDirs) {
+			let entries: string[];
+			try {
+				entries = fs.readdirSync(dir);
+			} catch {
+				continue;
+			}
+			for (const entry of entries) {
+				if (!testPattern.test(entry)) continue;
+				const testPath = path.join(dir, entry);
+				let content: string;
+				try {
+					content = fs.readFileSync(testPath, "utf-8");
+				} catch {
+					continue;
+				}
+				if (
+					content.includes(`/${basename}"`) ||
+					content.includes(`/${basename}'`) ||
+					content.includes(`/${basename}.`) ||
+					content.includes(`"${basename}"`) ||
+					content.includes(`'${basename}'`)
+				) {
+					this.log(`Found test file via import scan: ${testPath}`);
+					return testPath;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Resolve the executable and args for a runner, preferring a local
+	 * node_modules/.bin binary over npx to avoid the ~150ms npx startup cost.
+	 *
+	 * When a local binary is used, args()[0] (the runner name that npx needs)
+	 * is dropped since it becomes the command itself.
+	 */
+	private resolveExec(
+		runner: string,
+		config: RunnerConfig,
+		testFile: string,
+		cwd: string,
+	): { command: string; args: string[] } {
+		const binName = config.binName ?? runner;
+		const suffix = process.platform === "win32" ? ".cmd" : "";
+		const localBin = path.join(cwd, "node_modules", ".bin", binName + suffix);
+
+		if (fs.existsSync(localBin)) {
+			// Local binary found — drop the leading runner-name arg (e.g. "vitest")
+			// that is only needed when going through npx.
+			const allArgs = config.args(testFile, cwd);
+			return { command: localBin, args: allArgs.slice(1) };
+		}
+
+		return { command: config.command, args: config.args(testFile, cwd) };
+	}
 
 	private emptyResult(
 		testFile: string,
