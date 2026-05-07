@@ -191,4 +191,39 @@ describe("slop detection rules", () => {
 			expect(matches.length).toBe(0);
 		});
 	});
+
+	describe("long-parameter-list", () => {
+		it("flags a function with 6 required parameters", async () => {
+			const client = new TreeSitterClient();
+			const query = await getQuery("long-parameter-list");
+			const filePath = writeTempFile(
+				"ts",
+				`function makeD(id: string, rule: string, filePath: string, line: number, col: number, message: string) {}`,
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "typescript");
+			expect(matches.length).toBeGreaterThan(0);
+		});
+
+		it("does not flag a function with 4 required + 2 optional parameters", async () => {
+			const client = new TreeSitterClient();
+			const query = await getQuery("long-parameter-list");
+			const filePath = writeTempFile(
+				"ts",
+				`function open(state: S, file: string, content: string, lang: string, preserveDiags?: boolean, silent?: boolean): void {}`,
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "typescript");
+			expect(matches.length).toBe(0);
+		});
+
+		it("does not flag a function with 4 required + 2 defaulted parameters", async () => {
+			const client = new TreeSitterClient();
+			const query = await getQuery("long-parameter-list");
+			const filePath = writeTempFile(
+				"ts",
+				`function create(path: string, cwd: string, api: API, facts: F, blocking = false, ranges = []) {}`,
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "typescript");
+			expect(matches.length).toBe(0);
+		});
+	});
 });

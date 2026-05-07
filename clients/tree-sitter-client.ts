@@ -777,11 +777,20 @@ export class TreeSitterClient {
 			case "count_params": {
 				const paramsNode = captures.PARAMS;
 				if (!paramsNode) return true;
+				// Count only truly required params — exclude:
+				//   • optional_parameter nodes (foo?: T) if the grammar uses that type
+				//   • required_parameter nodes that have a "?" child (same semantic,
+				//     different grammar version — web-tree-sitter-typescript collapses
+				//     both into required_parameter with a "?" token child)
+				//   • params with a default value (text contains "=")
 				// biome-ignore lint/suspicious/noExplicitAny: Count parameter nodes
-				const paramCount = paramsNode.children.filter(
-					(c: any) =>
-						c.type === "required_parameter" || c.type === "optional_parameter",
-				).length;
+				const paramCount = paramsNode.children.filter((c: any) => {
+					if (c.type !== "required_parameter") return false;
+					if (c.text.includes("=")) return false;
+					// biome-ignore lint/suspicious/noExplicitAny: child node check
+					if (c.children?.some((ch: any) => ch.text === "?")) return false;
+					return true;
+				}).length;
 				return paramCount >= (postFilterParams?.min_params ?? 6);
 			}
 			case "empty_body": {
