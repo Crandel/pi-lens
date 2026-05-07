@@ -626,16 +626,23 @@ export async function handleSessionStart(
 		);
 	}
 
-	// LSP warm files — config load and touchFile loop are both fire-and-forget
-	// so neither blocks the interactive path.
+	// LSP warm files — deferred to the next event-loop turn so the config walk
+	// (several ENOENT readFile calls up the directory tree) never runs on the
+	// interactive path. setImmediate guarantees handleSessionStart has already
+	// resolved before loadLSPConfig is even called.
 	if (!getFlag("no-lsp") && allowBootstrapTasks) {
-		void loadLSPConfig(cwd).then((lspConfig) => {
-			const warmFiles = lspConfig.warmFiles ?? [];
-			if (warmFiles.length > 0) {
-				igniteWarmFiles(cwd, warmFiles, runtime, sessionGeneration, dbg).catch(
-					(err) => dbg(`session_start lsp-warm: unhandled error: ${err}`),
+		setImmediate(() => {
+			void loadLSPConfig(cwd).then((lspConfig) => {
+				const warmFiles = lspConfig.warmFiles ?? [];
+				dbg(
+					`session_start lsp-config: loaded (${warmFiles.length} warm file(s) configured)`,
 				);
-			}
+				if (warmFiles.length > 0) {
+					igniteWarmFiles(cwd, warmFiles, runtime, sessionGeneration, dbg).catch(
+						(err) => dbg(`session_start lsp-warm: unhandled error: ${err}`),
+					);
+				}
+			});
 		});
 		phase("lsp-config");
 	}

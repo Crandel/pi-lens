@@ -658,12 +658,16 @@ function scheduleProbeFlush(): void {
 	}, 300);
 }
 
-async function checkProbeCache(toolId: string): Promise<string | undefined> {
+// Exported for testing only.
+export async function checkProbeCache(
+	toolId: string,
+): Promise<string | undefined> {
 	const cache = await readProbeCache();
 	const entry = cache[toolId];
 	if (!entry) return undefined;
 
 	if (Date.now() - entry.cachedAt > PROBE_CACHE_TTL_MS) {
+		logSessionStart(`auto-install probe-cache ${toolId}: miss (ttl expired)`);
 		delete cache[toolId];
 		_probeCacheDirty = true;
 		scheduleProbeFlush();
@@ -674,6 +678,9 @@ async function checkProbeCache(toolId: string): Promise<string | undefined> {
 		await fs.access(entry.path);
 		const stat = await fs.stat(entry.path);
 		if (stat.mtimeMs !== entry.mtimeMs) {
+			logSessionStart(
+				`auto-install probe-cache ${toolId}: miss (mtime changed)`,
+			);
 			delete cache[toolId];
 			_probeCacheDirty = true;
 			scheduleProbeFlush();
@@ -681,6 +688,9 @@ async function checkProbeCache(toolId: string): Promise<string | undefined> {
 		}
 		return entry.path;
 	} catch {
+		logSessionStart(
+			`auto-install probe-cache ${toolId}: miss (gone: ${entry.path})`,
+		);
 		delete cache[toolId];
 		_probeCacheDirty = true;
 		scheduleProbeFlush();
@@ -688,7 +698,8 @@ async function checkProbeCache(toolId: string): Promise<string | undefined> {
 	}
 }
 
-async function updateProbeCache(
+// Exported for testing only.
+export async function updateProbeCache(
 	toolId: string,
 	resolvedPath: string,
 ): Promise<void> {
@@ -704,6 +715,16 @@ async function updateProbeCache(
 		scheduleProbeFlush();
 	} catch {
 		// best-effort
+	}
+}
+
+// Exported for testing only.
+export function resetProbeCacheStateForTesting(): void {
+	_probeCache = null;
+	_probeCacheDirty = false;
+	if (_probeCacheFlushTimer !== null) {
+		clearTimeout(_probeCacheFlushTimer);
+		_probeCacheFlushTimer = null;
 	}
 }
 

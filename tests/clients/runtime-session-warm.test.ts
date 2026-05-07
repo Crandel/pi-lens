@@ -180,6 +180,25 @@ describe("warmFiles session start", () => {
 		}
 	});
 
+	it("calls loadLSPConfig during full startup (deferred, not awaited)", async () => {
+		// Regression guard: loadLSPConfig must still be called even though it is
+		// deferred via setImmediate. vi.waitFor handles the async scheduling.
+		const env = setupTestEnvironment("pi-lens-warm-nonblock-");
+		const restoreStartupMode = setStartupMode("full");
+
+		vi.mocked(loadLSPConfig).mockResolvedValue({});
+
+		try {
+			await handleSessionStart(makeDeps({ ctxCwd: env.tmpDir }));
+			await vi.waitFor(() => expect(loadLSPConfig).toHaveBeenCalledOnce(), {
+				timeout: 500,
+			});
+		} finally {
+			env.cleanup();
+			restoreStartupMode();
+		}
+	});
+
 	it("skips touchFile when no-lsp flag is set", async () => {
 		const env = setupTestEnvironment("pi-lens-warm-");
 		const restoreStartupMode = setStartupMode("full");
