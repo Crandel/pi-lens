@@ -180,12 +180,29 @@ const ENTITY_QUERIES: Partial<Record<string, EntityQueryDef[]>> = {
 			kind: "enum",
 			query: "(enum_item name: (type_identifier) @NAME)",
 		},
+		// trait changes break all implementors — critical for blast-radius
+		{
+			id: "entity-rs-trait",
+			kind: "trait",
+			query: "(trait_item name: (type_identifier) @NAME)",
+		},
+		{
+			id: "entity-rs-type",
+			kind: "type",
+			query: "(type_item name: (type_identifier) @NAME)",
+		},
 	],
 	ruby: [
 		{
 			id: "entity-rb-method",
 			kind: "method",
 			query: "(method name: (identifier) @NAME)",
+		},
+		// singleton methods (def self.foo) — class-level, miss changes without this
+		{
+			id: "entity-rb-singleton-method",
+			kind: "method",
+			query: "(singleton_method name: (identifier) @NAME)",
 		},
 		{
 			id: "entity-rb-class",
