@@ -135,6 +135,88 @@ function depsFromPackageJson(pkgJson: PackageJson): string[] {
 	});
 }
 
+function extractYamlList(content: string, key: string): string[] {
+	const values: string[] = [];
+	let inList = false;
+	for (const rawLine of content.split(/\r?\n/)) {
+		const trimmed = rawLine.trim();
+		if (!trimmed || trimmed.startsWith("#")) continue;
+		if (!inList) {
+			if (trimmed === `${key}:`) inList = true;
+			continue;
+		}
+		if (trimmed.startsWith("-")) {
+			const value = stripQuotes(trimmed.slice(1).trim()).replace(/\/$/, "");
+			if (value) values.push(value);
+			continue;
+		}
+		// A new top-level key ends the list.
+		if (!rawLine.startsWith(" ") && !rawLine.startsWith("\t")) break;
+	}
+	return values;
+}
+
+function extractTomlArray(content: string, key: string): string[] {
+	const prefix = `${key}`;
+	let collecting = false;
+	let buffer = "";
+	for (const rawLine of content.split(/\r?\n/)) {
+		const line = rawLine.split("#", 1)[0].trim();
+		if (!line) continue;
+		if (!collecting) {
+			if (!line.startsWith(prefix)) continue;
+			const equalsIndex = line.indexOf("=");
+			if (equalsIndex === -1 || line.slice(0, equalsIndex).trim() !== key)
+				continue;
+			const afterEquals = line.slice(equalsIndex + 1).trim();
+			if (!afterEquals.startsWith("[")) continue;
+			collecting = true;
+			buffer += afterEquals.slice(1);
+		} else {
+			buffer += `,${line}`;
+		}
+		const closeIndex = buffer.indexOf("]");
+		if (closeIndex !== -1) {
+			buffer = buffer.slice(0, closeIndex);
+			break;
+		}
+	}
+	return buffer
+		.split(",")
+		.map((s) => stripQuotes(s.trim()))
+		.filter(Boolean);
+}
+
+function extractTomlSection(content: string, section: string): string[] {
+	const lines: string[] = [];
+	let inSection = false;
+	for (const rawLine of content.split(/\r?\n/)) {
+		const trimmed = rawLine.trim();
+		if (trimmed === `[${section}]`) {
+			inSection = true;
+			continue;
+		}
+		if (inSection && trimmed.startsWith("[") && trimmed.endsWith("]")) break;
+		if (inSection) lines.push(rawLine);
+	}
+	return lines;
+}
+
+function extractTomlString(content: string, key: string): string | undefined {
+	for (const rawLine of content.split(/\r?\n/)) {
+		const line = rawLine.split("#", 1)[0].trim();
+		const equalsIndex = line.indexOf("=");
+		if (equalsIndex === -1 || line.slice(0, equalsIndex).trim() !== key)
+			continue;
+		const value = line.slice(equalsIndex + 1).trim();
+		const quote = value[0];
+		if ((quote !== '"' && quote !== "'") || value.length < 2) return undefined;
+		const endIndex = value.indexOf(quote, 1);
+		return endIndex === -1 ? undefined : value.slice(1, endIndex);
+	}
+	return undefined;
+}
+
 function moduleFromPackageJson(
 	cwd: string,
 	pkgRoot: string,
@@ -160,17 +242,7 @@ function scanPnpmModules(cwd: string): WorkspaceModule[] {
 			path.join(cwd, "pnpm-workspace.yaml"),
 			"utf-8",
 		);
-		const match = content.match(/packages:\s*([\s\S]*?)(?:\n\S|$)/);
-		if (match) {
-			patterns = match[1]
-				.split("\n")
-				.map((line) => line.trim())
-				.filter((line) => line.startsWith("-"))
-				.map((line) =>
-					stripQuotes(line.replace(/^-\s*/, "").replace(/\/$/, "")),
-				)
-				.filter(Boolean);
-		}
+		patterns = extractYamlList(content, "packages");
 	} catch {
 		return [];
 	}
@@ -196,13 +268,7 @@ function scanCargoModules(cwd: string): WorkspaceModule[] {
 	let members: string[] = [];
 	try {
 		const content = fs.readFileSync(path.join(cwd, "Cargo.toml"), "utf-8");
-		const match = content.match(/members\s*=\s*\[([\s\S]*?)\]/);
-		if (match) {
-			members = match[1]
-				.split(",")
-				.map((s) => stripQuotes(s.trim()))
-				.filter(Boolean);
-		}
+		members = extractTomlArray(content, "members");
 	} catch {
 		return [];
 	}
@@ -215,14 +281,10 @@ function scanCargoModules(cwd: string): WorkspaceModule[] {
 		const deps: string[] = [];
 		try {
 			const content = fs.readFileSync(memberToml, "utf-8");
-			const nameMatch = content.match(/^name\s*=\s*["'](.+?)["']/m);
-			if (nameMatch) name = nameMatch[1];
-			const depMatch = content.match(/\[dependencies\]([\s\S]*?)(?:\n\[|$)/);
-			if (depMatch) {
-				for (const line of depMatch[1].split("\n")) {
-					const depName = line.trim().match(/^([A-Za-z0-9_-]+)\s*=/);
-					if (depName) deps.push(depName[1]);
-				}
+			name = extractTomlString(content, "name") ?? "";
+			for (const line of extractTomlSection(content, "dependencies")) {
+				const depName = line.trim().match(/^([A-Za-z0-9_-]+)\s*=/);
+				if (depName) deps.push(depName[1]);
 			}
 		} catch {
 			continue;

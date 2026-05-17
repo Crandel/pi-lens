@@ -31,6 +31,8 @@ export interface ReadRecord {
 		startLine: number;
 		endLine: number;
 	};
+	/** 1-indexed line → content hash captured at read time, used to ignore no-op mtime staleness. */
+	lineHashes?: Record<number, string>;
 	turnIndex: number;
 	writeIndex: number;
 	timestamp: number;
@@ -87,6 +89,49 @@ const OWN_EDIT_STALE_GRACE_MS = Math.max(
 	) || 120000,
 );
 
+/** Avoid hashing very large reads in the hot path. */
+const READ_HASH_MAX_LINES = Math.max(
+	0,
+	Number.parseInt(
+		process.env.PI_LENS_READ_GUARD_HASH_MAX_LINES ?? "1000",
+		10,
+	) || 1000,
+);
+
+function splitLines(text: string): string[] {
+	return text.split(/\r?\n/);
+}
+
+function lineContentHash(line: string): string {
+	// FNV-1a over whitespace-stripped content. This treats no-op formatter/touch
+	// changes as still-valid context while detecting semantic line changes.
+	const normalized = line.replace(/\s+/g, "");
+	let hash = 2166136261;
+	for (let i = 0; i < normalized.length; i++) {
+		hash = Math.imul(hash ^ normalized.charCodeAt(i), 16777619);
+	}
+	return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function captureLineHashes(
+	filePath: string,
+	offset: number,
+	limit: number,
+): Record<number, string> | undefined {
+	if (limit <= 0 || limit > READ_HASH_MAX_LINES) return undefined;
+	try {
+		const lines = splitLines(fs.readFileSync(filePath, "utf-8"));
+		const hashes: Record<number, string> = {};
+		const end = Math.min(lines.length, offset + limit - 1);
+		for (let lineNo = Math.max(1, offset); lineNo <= end; lineNo++) {
+			hashes[lineNo] = lineContentHash(lines[lineNo - 1] ?? "");
+		}
+		return Object.keys(hashes).length > 0 ? hashes : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 // --- ReadGuard Class ---
 
 export class ReadGuard {
@@ -110,32 +155,43 @@ export class ReadGuard {
 	 * Call this from the tool_call handler after any LSP expansion.
 	 */
 	recordRead(record: ReadRecord): void {
-		const arr = this.reads.get(record.filePath) ?? [];
-		arr.push(record);
-		this.reads.set(record.filePath, arr);
+		const storedRecord: ReadRecord = {
+			...record,
+			lineHashes:
+				record.lineHashes ??
+				captureLineHashes(
+					record.filePath,
+					record.effectiveOffset,
+					record.effectiveLimit,
+				),
+		};
+		const arr = this.reads.get(storedRecord.filePath) ?? [];
+		arr.push(storedRecord);
+		this.reads.set(storedRecord.filePath, arr);
 
 		logReadGuardEvent({
 			event: "read_recorded",
 			sessionId: this.sessionId,
-			filePath: record.filePath,
-			requestedOffset: record.requestedOffset,
-			requestedLimit: record.requestedLimit,
-			effectiveOffset: record.effectiveOffset,
-			effectiveLimit: record.effectiveLimit,
-			symbol: record.enclosingSymbol?.name,
-			symbolKind: record.enclosingSymbol?.kind,
-			symbolStartLine: record.enclosingSymbol?.startLine,
-			symbolEndLine: record.enclosingSymbol?.endLine,
+			filePath: storedRecord.filePath,
+			requestedOffset: storedRecord.requestedOffset,
+			requestedLimit: storedRecord.requestedLimit,
+			effectiveOffset: storedRecord.effectiveOffset,
+			effectiveLimit: storedRecord.effectiveLimit,
+			symbol: storedRecord.enclosingSymbol?.name,
+			symbolKind: storedRecord.enclosingSymbol?.kind,
+			symbolStartLine: storedRecord.enclosingSymbol?.startLine,
+			symbolEndLine: storedRecord.enclosingSymbol?.endLine,
 			metadata: {
-				expandedByLsp: record.expandedByLsp,
-				turnIndex: record.turnIndex,
-				writeIndex: record.writeIndex,
+				expandedByLsp: storedRecord.expandedByLsp,
+				turnIndex: storedRecord.turnIndex,
+				writeIndex: storedRecord.writeIndex,
 				readCountForFile: arr.length,
+				hashLineCount: Object.keys(storedRecord.lineHashes ?? {}).length,
 			},
 		});
 
 		// Also update FileTime stamp for this file
-		this.fileTime.read(record.filePath);
+		this.fileTime.read(storedRecord.filePath);
 	}
 
 	/**
@@ -183,10 +239,20 @@ export class ReadGuard {
 
 		// 2. FileTime check (actual staleness)
 		let ignoredOwnEditStaleness = false;
+		let ignoredHashStaleness = false;
 		if (this.fileTime.hasChanged(filePath)) {
 			const lastRead = fileReads[fileReads.length - 1];
 			if (this.canTreatStalenessAsOwnPriorEdit(filePath, lastRead.timestamp)) {
 				ignoredOwnEditStaleness = true;
+			} else if (
+				this.canIgnoreStalenessByHashes(
+					filePath,
+					fileReads,
+					touchedLines,
+					editRanges,
+				)
+			) {
+				ignoredHashStaleness = true;
 			} else {
 				const verdict = this.blockOrWarn(
 					"file-modified",
@@ -255,6 +321,7 @@ export class ReadGuard {
 			reasonKind: viaSymbol ? "symbol_coverage" : "range_coverage",
 			viaSymbol,
 			ignoredOwnEditStaleness,
+			ignoredHashStaleness,
 		});
 		return verdict;
 	}
@@ -373,6 +440,70 @@ export class ReadGuard {
 			return false;
 		if (latest.timestamp < lastReadTimestamp) return false;
 		return Date.now() - latest.timestamp <= OWN_EDIT_STALE_GRACE_MS;
+	}
+
+	private canIgnoreStalenessByHashes(
+		filePath: string,
+		reads: ReadRecord[],
+		touchedLines?: [number, number],
+		editRanges?: [number, number][],
+	): boolean {
+		let lines: string[];
+		try {
+			lines = splitLines(fs.readFileSync(filePath, "utf-8"));
+		} catch {
+			return false;
+		}
+
+		const rangesToCheck: [number, number][] | undefined = touchedLines
+			? editRanges && editRanges.length > 1
+				? editRanges
+				: [touchedLines]
+			: undefined;
+
+		if (!rangesToCheck) {
+			const lastRead = reads.at(-1);
+			return !!lastRead && this.readHashesStillMatch(lastRead, lines);
+		}
+
+		return rangesToCheck.every((range) =>
+			reads.some(
+				(read) =>
+					this.readCoversRange(read, range) &&
+					this.readHashesStillMatch(read, lines),
+			),
+		);
+	}
+
+	private readCoversRange(
+		read: ReadRecord,
+		[editStart, editEnd]: [number, number],
+	): boolean {
+		const readStart = Math.max(
+			1,
+			read.effectiveOffset - this.config.contextLines,
+		);
+		const readEnd =
+			read.effectiveOffset + read.effectiveLimit - 1 + this.config.contextLines;
+		if (editStart >= readStart && editEnd <= readEnd) return true;
+		if (!read.enclosingSymbol) return false;
+		return (
+			read.enclosingSymbol.startLine <= editStart &&
+			read.enclosingSymbol.endLine >= editEnd
+		);
+	}
+
+	private readHashesStillMatch(read: ReadRecord, lines: string[]): boolean {
+		const entries = Object.entries(read.lineHashes ?? {});
+		if (entries.length === 0) return false;
+		for (const [lineText, expected] of entries) {
+			const lineNo = Number(lineText);
+			if (!Number.isInteger(lineNo) || lineNo < 1 || lineNo > lines.length) {
+				return false;
+			}
+			if (lineContentHash(lines[lineNo - 1] ?? "") !== expected) return false;
+		}
+		return true;
 	}
 
 	private checkCoverage(

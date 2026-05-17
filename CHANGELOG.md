@@ -37,7 +37,11 @@ All notable changes to pi-lens will be documented in this file.
 
 - **Test suggestions for cascade neighbors** — `TestRunnerClient` gained `suggestTestFiles()` and `handleTurnEnd` now appends a "Likely tests for affected neighbors" section to the cascade output when cascade neighbors have diagnostics. Extends the existing test-discovery patterns (basename, `__tests__`, `tests/`, import-scan fallback) to affected neighbor files, capped at 5 suggestions.
 
+- **Content-hash staleness detection for ReadGuard** — read records now capture per-line content hashes for the effective read range (capped by `PI_LENS_READ_GUARD_HASH_MAX_LINES`, default 1000). When file mtime changes but the relevant read lines still hash-match, ReadGuard treats the context as fresh and avoids false `file_modified` blocks from no-op formatting/touching. Semantic line changes still block and require a re-read.
+
 ### Fixed
+
+- **SonarCloud regex hotspot in workspace scanner** — replaced `workspace-modules.ts` multi-line manifest regexes with linear line scanners for `pnpm-workspace.yaml` and Cargo TOML sections/arrays, avoiding super-linear regex hotspot reports while preserving monorepo module detection.
 
 - **Agent guidance now promotes active LSP diagnostics and ast-grep retries** — session-start guidance and shipped skills now direct agents to use `lsp_diagnostics` for proactive file/folder/batch validation, keep `lsp_navigation` for code intelligence, and retry `ast_grep_search` once with a simpler valid AST pattern before falling back to grep. `ast_grep_search` tool docs now describe `selector` correctly as a node-kind filter rather than an extraction mechanism.
 - **Startup language detection avoids fixture/tooling false positives** — plain Git repositories no longer count as configured C/C++ projects just because `.git` exists, and Ruby startup tooling now requires real Ruby project markers (`Gemfile`/`Rakefile`) before preinstalling RuboCop. This avoids noisy C++/RuboCop probes in JS/TS projects and fixture-only repos.

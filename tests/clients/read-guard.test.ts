@@ -6,9 +6,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createReadGuard, type ReadRecord } from "../../clients/read-guard.js";
 import { setupTestEnvironment } from "./test-utils.js";
+
+const fileTimeState = vi.hoisted(() => ({ hasChanged: false }));
 
 // Suppress log writes — tests care about verdicts, not log output
 vi.mock("../../clients/read-guard-logger.js", () => ({
@@ -20,7 +22,7 @@ vi.mock("../../clients/read-guard-logger.js", () => ({
 vi.mock("../../clients/file-time.js", () => ({
 	createFileTime: (_sessionId: string) => ({
 		read: vi.fn(),
-		hasChanged: vi.fn(() => false),
+		hasChanged: vi.fn(() => fileTimeState.hasChanged),
 		assert: vi.fn(),
 		get: vi.fn(),
 	}),
@@ -36,6 +38,9 @@ vi.mock("../../clients/file-time.js", () => ({
 }));
 
 describe("ReadGuard", () => {
+	beforeEach(() => {
+		fileTimeState.hasChanged = false;
+	});
 	describe("Phase 1: Zero-read and FileTime checks", () => {
 		it("blocks edit on never-read file", () => {
 			const guard = createReadGuard("test-session");
@@ -102,6 +107,47 @@ describe("ReadGuard", () => {
 				fs.writeFileSync(existingFile, "export const x = 1;");
 
 				expect(guard.isNewFile(existingFile)).toBe(false);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("ignores mtime staleness when read line hashes still match", () => {
+			const env = setupTestEnvironment("read-guard-hash-");
+			try {
+				const filePath = path.join(env.tmpDir, "api.ts");
+				fs.writeFileSync(filePath, "export const value = 1;\n");
+				const guard = createReadGuard("test-session");
+				guard.recordRead(createReadRecord(filePath, { effectiveLimit: 1 }));
+
+				// Whitespace-only change: content hash strips whitespace, so the read is still valid.
+				fs.writeFileSync(filePath, "export   const   value=1;\n");
+				fileTimeState.hasChanged = true;
+
+				const verdict = guard.checkEdit(filePath, [1, 1]);
+				expect(verdict.action).toBe("allow");
+				expect(guard.getEditHistory(filePath)[0]).toMatchObject({
+					verdict: "allowed",
+				});
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("blocks mtime staleness when read line hashes changed", () => {
+			const env = setupTestEnvironment("read-guard-hash-block-");
+			try {
+				const filePath = path.join(env.tmpDir, "api.ts");
+				fs.writeFileSync(filePath, "export const value = 1;\n");
+				const guard = createReadGuard("test-session");
+				guard.recordRead(createReadRecord(filePath, { effectiveLimit: 1 }));
+
+				fs.writeFileSync(filePath, "export const value = 2;\n");
+				fileTimeState.hasChanged = true;
+
+				const verdict = guard.checkEdit(filePath, [1, 1]);
+				expect(verdict.action).toBe("block");
+				expect(verdict.reason).toContain("File modified since read");
 			} finally {
 				env.cleanup();
 			}

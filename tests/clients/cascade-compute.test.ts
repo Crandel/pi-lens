@@ -181,7 +181,9 @@ describe("computeCascadeForFile", () => {
 			expect(references).toHaveBeenCalledWith(normalizedPrimary, 0, 16, false);
 			expect(
 				result?.neighbors.some(
-					(n) => n.filePath.split(path.sep).join("/") === reference.split(path.sep).join("/"),
+					(n) =>
+						n.filePath.split(path.sep).join("/") ===
+						reference.split(path.sep).join("/"),
 				),
 			).toBe(true);
 			expect(result?.formatted).toContain("consumer.ts");
