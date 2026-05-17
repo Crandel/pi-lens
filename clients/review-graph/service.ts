@@ -2,10 +2,8 @@ import type { FactStore } from "../dispatch/fact-store.js";
 import { computeImpactCascade as computeImpactCascadeImpl } from "./query.js";
 import { buildOrUpdateGraph as buildOrUpdateGraphImpl } from "./builder.js";
 import { formatImpactCascade as formatImpactCascadeImpl } from "./format.js";
-import type {
-	ImpactCascadeResult,
-	ReviewGraph,
-} from "./types.js";
+import { buildModuleGraph } from "./workspace-modules.js";
+import type { ImpactCascadeResult, ReviewGraph } from "./types.js";
 
 const CHANGED_SYMBOLS_PREFIX = "session.reviewGraph.changedSymbols:";
 const ENTITY_SNAPSHOT_PREFIX = "session.reviewGraph.entitySnapshot:";
@@ -21,8 +19,10 @@ export async function buildOrUpdateGraph(
 export function computeImpactCascade(
 	graph: ReviewGraph,
 	changedFile: string,
+	cwd?: string,
 ): ImpactCascadeResult {
-	return computeImpactCascadeImpl(graph, changedFile);
+	const moduleGraph = cwd ? buildModuleGraph(cwd) : null;
+	return computeImpactCascadeImpl(graph, changedFile, moduleGraph);
 }
 
 export function formatImpactCascade(
@@ -38,8 +38,9 @@ export function recordEntitySnapshotDiff(
 	nextSnapshot: Map<string, string>,
 ): { added: string[]; removed: string[]; modified: string[] } {
 	const prev =
-		facts.getSessionFact<Map<string, string>>(`${ENTITY_SNAPSHOT_PREFIX}${filePath}`) ??
-		new Map<string, string>();
+		facts.getSessionFact<Map<string, string>>(
+			`${ENTITY_SNAPSHOT_PREFIX}${filePath}`,
+		) ?? new Map<string, string>();
 	const added: string[] = [];
 	const removed: string[] = [];
 	const modified: string[] = [];
@@ -59,7 +60,10 @@ export function recordEntitySnapshotDiff(
 				.filter(Boolean),
 		),
 	];
-	facts.setSessionFact(`${ENTITY_SNAPSHOT_PREFIX}${filePath}`, new Map(nextSnapshot));
+	facts.setSessionFact(
+		`${ENTITY_SNAPSHOT_PREFIX}${filePath}`,
+		new Map(nextSnapshot),
+	);
 	facts.setSessionFact(`${CHANGED_SYMBOLS_PREFIX}${filePath}`, changedSymbols);
 	return { added, removed, modified };
 }

@@ -1,4 +1,10 @@
 import { normalizeMapKey } from "../path-utils.js";
+import type { ModuleGraph } from "./workspace-modules.js";
+import {
+	findModuleForPath,
+	getDownstreamModules,
+	getModuleSourceFiles,
+} from "./workspace-modules.js";
 import type {
 	ImpactCascadeResult,
 	ReviewGraph,
@@ -9,7 +15,10 @@ function dedupe(items: Iterable<string>): string[] {
 	return [...new Set(items)].sort((a, b) => a.localeCompare(b));
 }
 
-function filePathFromNode(graph: ReviewGraph, nodeId: string): string | undefined {
+function filePathFromNode(
+	graph: ReviewGraph,
+	nodeId: string,
+): string | undefined {
 	return graph.nodes.get(nodeId)?.filePath;
 }
 
@@ -30,6 +39,7 @@ function collectIncomingEdges(
 export function computeImpactCascade(
 	graph: ReviewGraph,
 	changedFile: string,
+	moduleGraph?: ModuleGraph | null,
 ): ImpactCascadeResult {
 	const normalizedFile = normalizeMapKey(changedFile);
 	const fileNodeId = graph.fileNodes.get(normalizedFile);
@@ -45,11 +55,15 @@ export function computeImpactCascade(
 	}
 
 	const changedSymbols = graph.changedSymbolsByFile.get(normalizedFile) ?? [];
-	const symbolNodeIds =
-		(graph.symbolNodesByFile.get(normalizedFile) ?? []).filter((nodeId) => {
-			const symbolName = graph.nodes.get(nodeId)?.symbolName;
-			return !changedSymbols.length || (symbolName && changedSymbols.includes(symbolName));
-		});
+	const symbolNodeIds = (
+		graph.symbolNodesByFile.get(normalizedFile) ?? []
+	).filter((nodeId) => {
+		const symbolName = graph.nodes.get(nodeId)?.symbolName;
+		return (
+			!changedSymbols.length ||
+			(symbolName && changedSymbols.includes(symbolName))
+		);
+	});
 	const effectiveSymbolNodeIds =
 		symbolNodeIds.length > 0
 			? symbolNodeIds
@@ -66,7 +80,11 @@ export function computeImpactCascade(
 			(edge) => filePathFromNode(graph, edge.from) ?? [],
 		),
 	);
-	if (callerFiles.length === 0 && changedSymbols.length > 0 && importerFiles.length > 0) {
+	if (
+		callerFiles.length === 0 &&
+		changedSymbols.length > 0 &&
+		importerFiles.length > 0
+	) {
 		callerFiles = importerFiles;
 	}
 
@@ -78,11 +96,30 @@ export function computeImpactCascade(
 		),
 	);
 
-	const neighborFiles = dedupe([
+	let neighborFiles = dedupe([
 		...importerFiles,
 		...callerFiles,
 		...referenceFiles,
 	]).filter((candidate) => normalizeMapKey(candidate) !== normalizedFile);
+
+	// Module-level downstream expansion for monorepos
+	const downstreamModuleFiles: string[] = [];
+	if (moduleGraph) {
+		const changedModule = findModuleForPath(moduleGraph, normalizedFile);
+		if (changedModule) {
+			const downstream = getDownstreamModules(moduleGraph, changedModule.name);
+			for (const depName of downstream) {
+				const depMod = moduleGraph.modules.get(depName);
+				if (depMod) {
+					// Add representative source files from downstream modules
+					downstreamModuleFiles.push(...getModuleSourceFiles(depMod.root));
+				}
+			}
+		}
+	}
+	if (downstreamModuleFiles.length > 0) {
+		neighborFiles = dedupe([...neighborFiles, ...downstreamModuleFiles]);
+	}
 	const directImports = dedupe(
 		(graph.edgesByFrom.get(fileNodeId) ?? [])
 			.filter((edge) => edge.kind === "imports")
@@ -100,10 +137,18 @@ export function computeImpactCascade(
 		if (fanout >= 4) riskFlags.add("high fanout");
 		const complexity = Number(node.metadata?.cyclomaticComplexity ?? 0);
 		if (complexity >= 8) riskFlags.add("high complexity");
-		if (node.metadata?.isBoundaryWrapper) riskFlags.add("boundary wrapper changed");
+		if (node.metadata?.isBoundaryWrapper)
+			riskFlags.add("boundary wrapper changed");
 	}
 	if (importerFiles.some((file) => directImports.includes(file))) {
 		riskFlags.add("cycle-adjacent file");
+	}
+
+	const riskFlagList = dedupe(riskFlags);
+	if (downstreamModuleFiles.length > 0) {
+		riskFlagList.push(
+			`${downstreamModuleFiles.length} downstream module file(s)`,
+		);
 	}
 
 	return {
@@ -112,6 +157,6 @@ export function computeImpactCascade(
 		directImporters: importerFiles,
 		directCallers: callerFiles,
 		neighborFiles,
-		riskFlags: dedupe(riskFlags),
+		riskFlags: riskFlagList,
 	};
 }

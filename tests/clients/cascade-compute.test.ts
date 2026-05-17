@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
 	ImpactCascadeResult,
@@ -109,6 +110,81 @@ describe("computeCascadeForFile", () => {
 			expect(touchFile).not.toHaveBeenCalled();
 			expect(result?.neighbors[0]?.diagnostics[0]?.filePath).toBe(neighbor);
 			expect(result?.formatted).toContain("neighbor.ts");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("adds LSP reference files for changed-symbol blast radius", async () => {
+		const env = setupTestEnvironment("cascade-lsp-refs-");
+		try {
+			const primary = path.join(env.tmpDir, "src", "primary.ts");
+			const reference = path.join(env.tmpDir, "src", "consumer.ts");
+			fs.mkdirSync(path.dirname(primary), { recursive: true });
+			fs.writeFileSync(primary, "export function changed() { return 1; }\n");
+			fs.writeFileSync(
+				reference,
+				"import { changed } from './primary';\nchanged();\n",
+			);
+
+			const graph = emptyGraph();
+			const normalizedPrimary = primary.split(path.sep).join("/");
+			const symbolId = `${normalizedPrimary}:changed`;
+			graph.symbolNodesByFile.set(normalizedPrimary, [symbolId]);
+			graph.nodes.set(symbolId, {
+				id: symbolId,
+				kind: "symbol",
+				language: "jsts",
+				filePath: normalizedPrimary,
+				symbolName: "changed",
+				symbolKind: "function",
+				metadata: { line: 1, column: 17 },
+			});
+			mocks.buildOrUpdateGraph.mockResolvedValue(graph);
+			mocks.computeImpactCascade.mockReturnValue({
+				...impact(primary, []),
+				changedSymbols: ["changed"],
+			});
+			const references = vi.fn().mockResolvedValue([
+				{
+					uri: pathToFileURL(reference).href,
+					range: {
+						start: { line: 1, character: 0 },
+						end: { line: 1, character: 7 },
+					},
+				},
+			]);
+			mocks.getLSPService.mockReturnValue({
+				getAllDiagnostics: vi
+					.fn()
+					.mockResolvedValue(
+						new Map([
+							[
+								reference.split(path.sep).join("/"),
+								{ diags: [lspError("reference broken")], ts: Date.now() },
+							],
+						]),
+					),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+				references,
+			});
+
+			const { computeCascadeForFile } = await import(
+				"../../clients/dispatch/integration.js"
+			);
+			const result = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+
+			expect(references).toHaveBeenCalledWith(normalizedPrimary, 0, 16, false);
+			expect(
+				result?.neighbors.some(
+					(n) => n.filePath.split(path.sep).join("/") === reference.split(path.sep).join("/"),
+				),
+			).toBe(true);
+			expect(result?.formatted).toContain("consumer.ts");
 		} finally {
 			env.cleanup();
 		}
@@ -262,14 +338,16 @@ describe("computeCascadeForFile", () => {
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 			const touchFile = vi.fn();
 			mocks.getLSPService.mockReturnValue({
-				getAllDiagnostics: vi.fn().mockResolvedValue(
-					new Map([
-						[
-							neighbor.split(path.sep).join("/"),
-							{ diags: [lspError("existing warning")], ts: Date.now() },
-						],
-					]),
-				),
+				getAllDiagnostics: vi
+					.fn()
+					.mockResolvedValue(
+						new Map([
+							[
+								neighbor.split(path.sep).join("/"),
+								{ diags: [lspError("existing warning")], ts: Date.now() },
+							],
+						]),
+					),
 				touchFile,
 				getDiagnostics: vi.fn(),
 			});
@@ -367,7 +445,9 @@ describe("computeCascadeForFile", () => {
 			);
 			resetDispatchBaselines();
 
-			mocks.computeImpactCascade.mockReturnValueOnce(impact(primaryA, [neighbor]));
+			mocks.computeImpactCascade.mockReturnValueOnce(
+				impact(primaryA, [neighbor]),
+			);
 			await computeCascadeForFile(primaryA, env.tmpDir, {
 				turnSeq: 1,
 				writeSeq: 1,
@@ -375,7 +455,9 @@ describe("computeCascadeForFile", () => {
 			expect(touchFile).toHaveBeenCalledTimes(1);
 
 			// Same turn, higher writeSeq — cache entry (writeSeq=1) must be invalidated
-			mocks.computeImpactCascade.mockReturnValueOnce(impact(primaryB, [neighbor]));
+			mocks.computeImpactCascade.mockReturnValueOnce(
+				impact(primaryB, [neighbor]),
+			);
 			const second = await computeCascadeForFile(primaryB, env.tmpDir, {
 				turnSeq: 1,
 				writeSeq: 2,

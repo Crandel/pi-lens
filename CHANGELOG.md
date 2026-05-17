@@ -31,6 +31,12 @@ All notable changes to pi-lens will be documented in this file.
 
 - **`.md` read-guard exemption tightened from `allow` to `warn`** — markdown files are no longer silently exempt from the read-before-edit guard. With the new markdown-section expansion providing precise heading-level coverage, edits outside the expanded read range trigger a warning instead of passing unchecked. Plain-text (`.txt`) and log (`.log`) files remain exempt.
 
+- **Module-level dependency graph for monorepo cascade** — `buildModuleGraph` (new `clients/review-graph/workspace-modules.ts`) scans workspace manifests (`pnpm-workspace.yaml`, `package.json` workspaces, `Cargo.toml` `[workspace]`, `go.work`) and builds a module dependency graph with transitive downstream BFS. `computeImpactCascade` now expands the blast radius to include source files from downstream dependent packages when an edited file belongs to a workspace module. Cache cleared on `resetDispatchBaselines`.
+
+- **LSP `references` for symbol-level blast radius** — when `changedSymbols` are detected in a file, `computeCascadeForFile` now calls LSP `references` for up to 3 changed symbols (with a 750ms timeout per symbol, 1200ms hard ceiling) to find the true call-site blast radius. Reference files are merged into `impact.neighborFiles`, giving cascade precision beyond coarse file-level import edges. Falls back silently to import-graph neighbors on timeout or LSP error.
+
+- **Test suggestions for cascade neighbors** — `TestRunnerClient` gained `suggestTestFiles()` and `handleTurnEnd` now appends a "Likely tests for affected neighbors" section to the cascade output when cascade neighbors have diagnostics. Extends the existing test-discovery patterns (basename, `__tests__`, `tests/`, import-scan fallback) to affected neighbor files, capped at 5 suggestions.
+
 ### Fixed
 
 - **Agent guidance now promotes active LSP diagnostics and ast-grep retries** — session-start guidance and shipped skills now direct agents to use `lsp_diagnostics` for proactive file/folder/batch validation, keep `lsp_navigation` for code intelligence, and retry `ast_grep_search` once with a simpler valid AST pattern before falling back to grep. `ast_grep_search` tool docs now describe `selector` correctly as a node-kind filter rather than an extraction mechanism.

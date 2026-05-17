@@ -42,6 +42,7 @@ export type { DispatchLatencyReport, RunnerLatency };
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 
 import * as nodeFs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { formatCascadeNeighborDiagnostics } from "../cascade-format.js";
 import { logCascade } from "../cascade-logger.js";
 import type { CascadeResult } from "../cascade-types.js";
@@ -58,6 +59,7 @@ import {
 	computeImpactCascade,
 	formatImpactCascade,
 } from "../review-graph/service.js";
+import { clearModuleGraphCache } from "../review-graph/workspace-modules.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
 // Register fact providers
 import { registerProvider, runProviders } from "./fact-runner.js";
@@ -402,6 +404,7 @@ export function resetDispatchBaselines(): void {
 	resetSessionSlopScore();
 	clearCoverageNoticeState();
 	clearReviewGraphWorkspaceCache();
+	clearModuleGraphCache();
 	neighborTouchCache.clear();
 	recentlyCleanNeighborCache.clear();
 	primaryFilesThisTurn.clear();
@@ -566,7 +569,70 @@ export async function computeCascadeForFile(
 			metadata: { graphBuildMode: graphBuildInfo.mode },
 		});
 
-		impact = computeImpactCascade(graph, normalizedFile);
+		impact = computeImpactCascade(graph, normalizedFile, cwd);
+
+		// Symbol-level blast radius via LSP references (precision upgrade over
+		// file-level import edges). Only when changed symbols are detected.
+		// Keep the budget tight: 750ms per symbol, 1200ms total, max 3 symbols.
+		if (impact.changedSymbols.length > 0) {
+			const lspService = getLSPService();
+			const symbolNodeIds =
+				graph.symbolNodesByFile.get(normalizedFileKey) ?? [];
+			const refFiles = new Set<string>();
+			const refsStart = Date.now();
+			for (const symbolName of impact.changedSymbols.slice(0, 3)) {
+				const symbolNodeId = symbolNodeIds.find((id) => {
+					const node = graph.nodes.get(id);
+					return node?.symbolName === symbolName;
+				});
+				if (!symbolNodeId) continue;
+				const node = graph.nodes.get(symbolNodeId);
+				const line = Number(node?.metadata?.line ?? 0);
+				const column = Number(node?.metadata?.column ?? 0);
+				if (line <= 0) continue;
+				try {
+					const refs = await Promise.race([
+						lspService.references(normalizedFile, line - 1, column - 1, false),
+						new Promise<never>((_, reject) =>
+							setTimeout(() => reject(new Error("timeout")), 750),
+						),
+					]);
+					for (const ref of refs) {
+						let resolved: string;
+						try {
+							resolved = ref.uri.startsWith("file://")
+								? fileURLToPath(ref.uri)
+								: ref.uri;
+						} catch {
+							continue;
+						}
+						if (
+							normalizeMapKey(resolved) !== normalizedFileKey &&
+							nodeFs.existsSync(resolved)
+						) {
+							refFiles.add(normalizeMapKey(resolved));
+						}
+					}
+				} catch {
+					// Timeout or LSP error — fall back to import-graph neighbors
+				}
+				if (Date.now() - refsStart > 1200) break; // Hard ceiling
+			}
+			if (refFiles.size > 0) {
+				impact.neighborFiles = [
+					...new Set([...impact.neighborFiles, ...refFiles]),
+				];
+				logCascade({
+					phase: "neighbor_snapshot",
+					filePath,
+					neighborFile: "[lsp-references]",
+					diagnosticCount: refFiles.size,
+					durationMs: Date.now() - refsStart,
+					autoPropagate: false,
+					metadata: { lspReferences: true },
+				});
+			}
+		}
 
 		// Sort by relationship strength (B6) then cap to MAX_FILES.
 		// directImporters are most impactful, then callers, then reference edges.

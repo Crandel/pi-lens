@@ -462,7 +462,12 @@ export class TestRunnerClient {
 		}
 
 		try {
-			const { command, args } = this.resolveExec(runner, config, absoluteTestFile, cwd);
+			const { command, args } = this.resolveExec(
+				runner,
+				config,
+				absoluteTestFile,
+				cwd,
+			);
 			this.log(`Running: ${command} ${args.join(" ")}`);
 
 			const result = safeSpawn(command, args, {
@@ -558,7 +563,12 @@ export class TestRunnerClient {
 		}
 
 		try {
-			const { command, args } = this.resolveExec(runner, config, absoluteTestFile, cwd);
+			const { command, args } = this.resolveExec(
+				runner,
+				config,
+				absoluteTestFile,
+				cwd,
+			);
 			this.log(`Running (async): ${command} ${args.join(" ")}`);
 
 			const result = await safeSpawnAsync(command, args, {
@@ -633,6 +643,31 @@ export class TestRunnerClient {
 	 */
 	hasTestFile(sourceFilePath: string, cwd: string): boolean {
 		return this.findTestFile(sourceFilePath, cwd) !== null;
+	}
+
+	/**
+	 * Suggest test files for a list of source files.
+	 * Returns deduplicated test file paths with their corresponding source file.
+	 */
+	suggestTestFiles(
+		sourceFiles: string[],
+		cwd: string,
+	): Array<{ testFile: string; sourceFile: string; runner: string }> {
+		const seen = new Set<string>();
+		const results: Array<{
+			testFile: string;
+			sourceFile: string;
+			runner: string;
+		}> = [];
+		for (const sourceFile of sourceFiles) {
+			const found = this.findTestFile(sourceFile, cwd);
+			if (!found) continue;
+			const abs = path.resolve(found.testFile);
+			if (seen.has(abs)) continue;
+			seen.add(abs);
+			results.push({ testFile: abs, sourceFile, runner: found.runner });
+		}
+		return results;
 	}
 
 	// --- Shared JSON test output parser (Vitest + Jest share the same structure) ---

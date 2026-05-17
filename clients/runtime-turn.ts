@@ -171,6 +171,33 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			);
 			if (ownsAny && result.formatted) parts.push(result.formatted);
 		}
+		// Suggest tests for cascade neighbors (files with diagnostics)
+		const neighborFilesWithErrors = cascadeResults
+			.flatMap((r) => r.neighbors)
+			.filter((n) => n.diagnostics.length > 0)
+			.map((n) => n.filePath);
+		const uniqueNeighborFiles = [...new Set(neighborFilesWithErrors)];
+		if (
+			uniqueNeighborFiles.length > 0 &&
+			typeof testRunnerClient.suggestTestFiles === "function"
+		) {
+			const testSuggestions = testRunnerClient.suggestTestFiles(
+				uniqueNeighborFiles,
+				cwd,
+			);
+			if (testSuggestions.length > 0) {
+				const testLines = testSuggestions
+					.slice(0, 5)
+					.map(
+						(s) => `  ${toRunnerDisplayPath(cwd, s.testFile)} (${s.runner})`,
+					);
+				let testSection = `🧪 Likely tests for affected neighbors:\n${testLines.join("\n")}`;
+				if (testSuggestions.length > 5) {
+					testSection += `\n  ... and ${testSuggestions.length - 5} more`;
+				}
+				parts.push(testSection);
+			}
+		}
 		if (parts.length > 0) blockerParts.push(parts.join("\n\n"));
 		logCascade({
 			phase: "cascade_turn_end",
@@ -217,9 +244,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		const previousFailedHard =
 			prevKnip &&
 			!prevKnip.data.success &&
-			/(timed out|killed|SIGTERM|SIGKILL|SIGABRT)/i.test(
-				prevKnip.data.summary,
-			);
+			/(timed out|killed|SIGTERM|SIGKILL|SIGABRT)/i.test(prevKnip.data.summary);
 
 		if (previousFailedHard) {
 			dbg(
