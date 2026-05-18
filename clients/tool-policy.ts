@@ -745,7 +745,8 @@ export type LintRunnerName =
 	| "psscriptanalyzer"
 	| "prisma-validate"
 	| "mypy"
-	| "detekt";
+	| "detekt"
+	| "vale";
 
 export interface LinterPolicy {
 	runnerNames: LintRunnerName[];
@@ -839,6 +840,7 @@ const TOOL_EXECUTION_POLICY = new Map<string, ToolExecutionPolicy>([
 	["phpstan", { gate: "config-first", autoInstall: false }],
 	["eslint", { gate: "config-first", autoInstall: false }],
 	["prettier", { gate: "smart-default", autoInstall: true }],
+	["vale", { gate: "config-first", autoInstall: true }],
 ]);
 
 const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
@@ -920,6 +922,15 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			windowsExt: ".cmd",
 			versionArgs: ["--version"],
 			managedToolId: "markdownlint",
+		},
+	],
+	[
+		"vale",
+		{
+			command: "vale",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "vale",
 		},
 	],
 	[

@@ -564,6 +564,32 @@ const TOOLS: ToolDefinition[] = [
 		},
 	},
 	{
+		id: "vale",
+		name: "Vale",
+		checkCommand: "vale",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "vale",
+		github: {
+			repo: "vale-cli/vale",
+			assetMatch: (platform, arch) => {
+				const version = "3.14.2";
+				if (platform === "linux")
+					return arch === "arm64"
+						? `vale_${version}_Linux_arm64.tar.gz`
+						: `vale_${version}_Linux_64-bit.tar.gz`;
+				if (platform === "darwin")
+					return arch === "arm64"
+						? `vale_${version}_macOS_arm64.tar.gz`
+						: `vale_${version}_macOS_64-bit.tar.gz`;
+				if (platform === "win32")
+					return `vale_${version}_Windows_64-bit.zip`;
+				return undefined;
+			},
+			binaryInArchive: "vale",
+		},
+	},
+	{
 		id: "terraform-ls",
 		name: "terraform-ls",
 		checkCommand: "terraform-ls",

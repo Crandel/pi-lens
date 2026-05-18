@@ -126,7 +126,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	json: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["json"] },
 	markdown: {
 		mode: "fallback",
-		runnerIds: ["spellcheck"],
+		runnerIds: ["spellcheck", "vale"],
 		filterKinds: ["markdown"],
 	},
 	css: {

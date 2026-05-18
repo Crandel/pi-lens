@@ -45,6 +45,7 @@ import sqlfluffRunner from "./sqlfluff.js";
 import stylelintRunner from "./stylelint.js";
 import taploRunner from "./taplo.js";
 import tflintRunner from "./tflint.js";
+import valeRunner from "./vale.js";
 // Import tree-sitter runner
 import treeSitterRunner from "./tree-sitter.js";
 import tsLspRunner from "./ts-lsp.js";
@@ -88,6 +89,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(factRulesRunner); // FactRule pipeline — all registered rules (priority 21)
 	registry.register(htmlhintRunner); // HTML linting — tag pairs, attribute rules (priority 20)
 	registry.register(hadolintRunner); // Dockerfile linting — syntax, best practices (priority 20)
+	registry.register(valeRunner); // Prose/style linting for Markdown — config-gated (.vale.ini) (priority 30)
 	registry.register(phpLintRunner); // PHP syntax validation via php -l (priority 20)
 	registry.register(psScriptAnalyzerRunner); // PowerShell linting via PSScriptAnalyzer module (priority 20)
 	registry.register(prismaValidateRunner); // Prisma schema validation via CLI (priority 20)
