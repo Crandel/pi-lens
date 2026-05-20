@@ -31,6 +31,7 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Changed
 
+- **`.md` / `.mdx` no longer auto-format with prettier defaults when the project has no prettier config.** Prettier's defaults reflow lines, normalize emphasis markers (`*` → `_`), and restyle lists, producing noisy diffs on doc-only writes. The smart-default gate still runs prettier when an explicit project config (`.prettierrc`, `prettier` field in `package.json`, etc.) is present — flip is on the no-config path only. To restore prior behaviour, add an empty `.prettierrc` (or any explicit prettier config) to the project root.
 - **README accuracy fixes** — corrected Python LSP label (pyright/basedpyright + jedi), bumped formatter count 26→27→32 (added oxfmt, fish_indent, google-java-format, cljfmt, cmake-format, psscriptanalyzer-format), fixed read-guard markdown exemption text, added `/lens-allow-edit` to key commands, bumped language coverage 35→36+ (added Fish, Svelte, Vue rows), added `tree-sitter` to C/C++ dispatch, added `detekt` to Kotlin dispatch, added formatters to Java/Clojure/CMake/PowerShell rows, added `vale` to Markdown row, added `swiftlint` to Swift row.
 
 - **`.md` read-guard exemption tightened from `allow` to `warn`** — markdown files are no longer silently exempt from the read-before-edit guard. With the new markdown-section expansion providing precise heading-level coverage, edits outside the expanded read range trigger a warning instead of passing unchecked. Plain-text (`.txt`) and log (`.log`) files remain exempt.
