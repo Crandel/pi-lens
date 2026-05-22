@@ -10,6 +10,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **Read-guard snapshot validation now blocks stale covered ranges** — touched edit ranges with hash-checkable prior reads are rejected when the current file lines no longer match what the agent saw. Hash-unavailable cases still fall back to existing range coverage to avoid false blocks, while unrelated line changes outside the edited range no longer cause file-modified false positives.
+- **Read-guard preflight blocks now emit structured telemetry** — unresolved native `edit` targets now log `edit_preflight_blocked` with `reasonKind`, failed edit indexes, resolution counts, and oldText previews, making exact-text failures distinguishable from later read-range verdicts.
 - **Safe indentation-only edit retries preserve replacement indentation** — when pi-lens auto-patches an `edit` call's tab/space-only `oldText` mismatch, it now also retargets leading whitespace in the paired `newText` using the same indentation mapping. Successful tab-vs-space retries no longer introduce mixed indentation in the edited block.
 - **Read-guard snapshot telemetry no longer mixes candidate states** — snapshot-validation events now clear stale `missingLines` when a later candidate produces a real mismatch, so `mismatch` telemetry no longer reports lines as both missing and mismatched.
 - **Safe indentation-only edit retries are auto-patched** — when an `edit` call's `oldText` differs only by leading tabs/spaces and the corrected text matches exactly one location, pi-lens now mutates the tool input before execution instead of blocking with a visually lossy retry instruction. Ambiguous or non-indentation-only corrections still block and require a re-read.
