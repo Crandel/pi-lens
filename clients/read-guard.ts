@@ -303,12 +303,18 @@ export class ReadGuard {
 			return verdict;
 		}
 
+		// "warn" pattern exemptions downgrade all blocking verdicts to warnings.
+		const effectiveMode: "block" | "warn" | undefined =
+			exemptionMode === "warn" ? "warn" : undefined;
+
 		// 1. Zero-read check
 		const fileReads = this.reads.get(filePath);
 		if (!fileReads || fileReads.length === 0) {
 			const verdict = this.blockOrWarn(
 				"zero-read",
 				`🔴 BLOCKED — Edit without read\n\nYou are trying to edit \`${filePath}\` but have not read it in this conversation.\n\nRead the file first, then retry the edit: \`read path="${filePath}"\``,
+				undefined,
+				effectiveMode,
 			);
 			this.recordVerdict(filePath, "edit", touchedLines, verdict, {
 				reasonKind: "zero_read",
@@ -336,6 +342,8 @@ export class ReadGuard {
 				const verdict = this.blockOrWarn(
 					"file-modified",
 					`🔴 BLOCKED — File modified since read\n\nYou last read \`${filePath}\` at ${new Date(lastRead.timestamp).toISOString()}.\nThe file has been modified on disk since then (auto-format, external tool, or previous edit).\n\nYour mental model is out of sync with the actual file content.\nTo proceed:\n  1. Re-read the file: \`read path="${filePath}"\``,
+					undefined,
+					effectiveMode,
 				);
 				this.recordVerdict(filePath, "edit", touchedLines, verdict, {
 					reasonKind: "file_modified",
@@ -387,6 +395,7 @@ export class ReadGuard {
 								end: r.enclosingSymbol!.endLine,
 							})),
 					},
+					effectiveMode,
 				);
 				this.recordVerdict(filePath, "edit", touchedLines, verdict, {
 					reasonKind: "out_of_range",
@@ -417,6 +426,7 @@ export class ReadGuard {
 							missingLines: snapshotValidation.missingLines,
 						},
 					},
+					effectiveMode,
 				);
 				this.recordVerdict(filePath, "edit", touchedLines, verdict, {
 					reasonKind: "range_stale",
@@ -874,8 +884,10 @@ export class ReadGuard {
 		_reason: string,
 		message: string,
 		details?: ReadGuardVerdict["details"],
+		overrideMode?: "block" | "warn",
 	): ReadGuardVerdict {
-		if (this.config.mode === "warn") {
+		const mode = overrideMode ?? this.config.mode;
+		if (mode === "warn") {
 			return { action: "warn", reason: message, details };
 		}
 		return { action: "block", reason: message, details };

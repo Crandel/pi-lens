@@ -1356,16 +1356,14 @@ export default function (pi: ExtensionAPI) {
 		const isEditOnly = isToolCallEventType("edit", event);
 		const isWriteOrEdit = isToolCallEventType("write", event) || isEditOnly;
 
-		// Track Write-to-new-file so recordWritten can inject a synthetic read.
-		// The agent authored the content, so it trivially "knows" the file.
+		// Track any Write so recordWritten can inject a synthetic read afterward.
+		// The agent authored the content (new or overwritten), so it trivially "knows" the file.
 		if (!isEditOnly && isWriteOrEdit && filePath && !getLensFlag("no-read-guard")) {
-			if (runtime.readGuard.isNewFile(filePath)) {
-				runtime.readGuard.noteCreatedFile(
-					filePath,
-					runtime.turnIndex,
-					runtime.peekWriteIndex(),
-				);
-			}
+			runtime.readGuard.noteCreatedFile(
+				filePath,
+				runtime.turnIndex,
+				runtime.peekWriteIndex(),
+			);
 		}
 
 		// --- Indentation mismatch correction ---
