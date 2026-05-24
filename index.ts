@@ -1429,6 +1429,30 @@ export default function (pi: ExtensionAPI) {
 				// File unreadable — corrections will be skipped gracefully below.
 			}
 
+			// --- Pass 0: escaped control-char correction ---
+			// Models may write literal \n or \t in oldText (JSON interprets them as actual
+			// newline/tab) when the file has the two-character escape sequences (e.g. inside
+			// a regex or string literal). Safety gates: original must not match at all;
+			// escaped version must match exactly once.
+			if (matchNormalizedContent !== undefined) {
+				for (const entry of oldTexts) {
+					const v = entry.value;
+					if (!v.includes("\t") && !v.includes("\n")) continue;
+					if (countOldTextMatches(filePath, v, matchNormalizedContent) !== 0) continue;
+					const escaped = v.replace(/\t/g, "\\t").replace(/\n/g, "\\n");
+					if (escaped === v) continue;
+					if (countOldTextMatches(filePath, escaped, matchNormalizedContent) !== 1) continue;
+					entry.apply(escaped);
+					entry.value = escaped;
+					logReadGuardEvent({
+						event: "oldtext_escape_autopatched",
+						sessionId: runtime.telemetrySessionId,
+						filePath,
+						metadata: { tool: "edit", label: entry.label },
+					});
+				}
+			}
+
 			// --- Pass 1: trailing whitespace correction ---
 			// Editors strip trailing whitespace on save; the model may copy content
 			// that had it. Normalize before indentation correction so the subsequent
