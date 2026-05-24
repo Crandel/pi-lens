@@ -14,7 +14,7 @@ try {
 export interface CascadeLogEntry {
 	ts?: string;
 	phase:
-		| "cascade_skip" // primary has blockers — cascade suppressed
+		| "cascade_skip" // primary has blockers, non-code file, or unsupported graph kind
 		| "graph_build" // graph built or reused
 		| "neighbors_computed" // impact cascade result ready
 		| "neighbor_touch" // single neighbor LSP active touch result

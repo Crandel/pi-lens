@@ -665,19 +665,12 @@ export async function computeCascadeForFile(
 			.slice(0, MAX_FILES);
 	} else {
 		logCascade({
-			phase: "graph_build",
+			phase: "cascade_skip",
 			filePath,
-			graphBuiltMs: 0,
-			graphReused: false,
-			graphNodeCount: 0,
-			graphFileCount: 0,
-			graphChangedSymbolCount: 0,
-			metadata: {
-				graphBuildMode: "skipped",
-				reason: "unsupported_kind",
-				fileKind,
-			},
+			reason: "unsupported_graph_kind",
+			metadata: { fileKind },
 		});
+		return undefined;
 	}
 
 	logCascade({
@@ -991,6 +984,10 @@ export async function computeCascadeForFile(
 			// Log when cascade ran but found nothing — distinguishes "clean" from "no signal"
 			noNeighbors: visibleNeighbors.length === 0,
 			noErrors: visibleNeighbors.length > 0 && filesWithErrors === 0,
+			neighbors: visibleNeighbors.slice(0, 10).map(n => ({
+				file: n.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/"),
+				diagnostics: n.diagnostics.length,
+			})),
 		},
 	});
 
