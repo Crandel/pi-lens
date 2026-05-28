@@ -114,7 +114,6 @@ import {
 	duplicateStringLiteralRule,
 	dynamicRegexpRule,
 	functionInLoopRule,
-	jwtWithoutVerifyRule,
 	maxSwitchCasesRule,
 } from "./rules/sonar-rules.js";
 import { unsafeBoundaryRule } from "./rules/unsafe-boundary.js";
@@ -132,7 +131,6 @@ registerRule(highFanOutRule);
 registerRule(commentedOutCodeRule);
 registerRule(duplicateStringLiteralRule);
 registerRule(functionInLoopRule);
-registerRule(jwtWithoutVerifyRule);
 registerRule(corsWildcardRule);
 registerRule(dynamicRegexpRule);
 registerRule(maxSwitchCasesRule);
@@ -163,7 +161,6 @@ const FACT_RULE_IDS = new Set([
 	"commented-out-code",
 	"duplicate-string-literal",
 	"function-in-loop",
-	"jwt-without-verify",
 	"cors-wildcard",
 	"dynamic-regexp",
 	"max-switch-cases",
