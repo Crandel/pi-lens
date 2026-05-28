@@ -5,6 +5,15 @@ import * as path from "node:path";
 export type PiLensFormatMode = "deferred" | "immediate";
 
 export interface PiLensGlobalConfig {
+	dispatch?: {
+		/**
+		 * Minimum wall-clock budget (ms) for every dispatch runner.
+		 * Acts as a floor: effective timeout = max(runner.timeoutMs ?? 30_000, runnerTimeoutMs).
+		 * Useful for large monorepos where slow toolchains (e.g. cargo clippy) exceed
+		 * any runner's declared budget. Also overridable via PI_LENS_RUNNER_TIMEOUT_MS.
+		 */
+		runnerTimeoutMs?: number;
+	};
 	widget?: {
 		/** Whether the diagnostics widget is visible when a session starts. */
 		visible?: boolean;
@@ -43,6 +52,11 @@ export function loadPiLensGlobalConfig(
 		if (!parsed || typeof parsed !== "object") return undefined;
 
 		const raw = parsed as Record<string, unknown>;
+		const dispatchRaw = raw.dispatch;
+		const dispatch =
+			dispatchRaw && typeof dispatchRaw === "object"
+				? (dispatchRaw as Record<string, unknown>)
+				: undefined;
 		const widgetRaw = raw.widget;
 		const widget =
 			widgetRaw && typeof widgetRaw === "object"
@@ -70,6 +84,15 @@ export function loadPiLensGlobalConfig(
 				: undefined;
 
 		return {
+			dispatch: dispatch
+				? {
+						runnerTimeoutMs:
+							typeof dispatch.runnerTimeoutMs === "number" &&
+							dispatch.runnerTimeoutMs > 0
+								? dispatch.runnerTimeoutMs
+								: undefined,
+					}
+				: undefined,
 			widget: widget
 				? {
 						visible:

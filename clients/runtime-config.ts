@@ -3,6 +3,32 @@
  * Keep these values in one place so behavior is consistent and easy to tune.
  */
 
+/**
+ * Minimum wall-clock budget for every dispatch runner. Acts as a floor:
+ * effective timeout = max(runner.timeoutMs ?? 30_000, RUNNER_TIMEOUT_FLOOR_MS).
+ *
+ * Resolution order (highest priority first):
+ *   1. `dispatch.runnerTimeoutMs` in `~/.pi-lens/config.json`
+ *   2. `PI_LENS_RUNNER_TIMEOUT_MS` environment variable
+ *   3. 0 (no floor — runner budgets and the 30 s default apply as-is)
+ *
+ * @example ~/.pi-lens/config.json
+ * ```json
+ * { "dispatch": { "runnerTimeoutMs": 180000 } }
+ * ```
+ *
+ * @example env var
+ * ```bash
+ * PI_LENS_RUNNER_TIMEOUT_MS=180000 pi
+ * ```
+ */
+import { loadPiLensGlobalConfig } from "./lens-config.js";
+const _globalConfig = loadPiLensGlobalConfig();
+const _configFloor = _globalConfig?.dispatch?.runnerTimeoutMs ?? 0;
+const _envFloor = Number(process.env.PI_LENS_RUNNER_TIMEOUT_MS);
+export const RUNNER_TIMEOUT_FLOOR_MS =
+	_configFloor > 0 ? _configFloor : _envFloor > 0 ? _envFloor : 0;
+
 export const RUNTIME_CONFIG = {
 	pipeline: {
 		lspMaxFileBytes: 2 * 1024 * 1024,
