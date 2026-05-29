@@ -3,30 +3,59 @@
  * Keep these values in one place so behavior is consistent and easy to tune.
  */
 
+import { loadPiLensGlobalConfig } from "./lens-config.js";
+
 /**
- * Minimum wall-clock budget for every dispatch runner. Acts as a floor:
- * effective timeout = max(runner.timeoutMs ?? 30_000, RUNNER_TIMEOUT_FLOOR_MS).
+ * Coerce an arbitrary input to a non-negative finite number, or 0 otherwise.
+ * Used to gate config/env inputs into Math.max — passing NaN through Math.max
+ * poisons the result and produces NaN timeouts downstream, which setTimeout
+ * silently treats as 0 (immediate-abort all dispatch runners).
+ */
+function toPositiveFinite(value: unknown): number {
+	const num = typeof value === "number" ? value : Number(value);
+	return Number.isFinite(num) && num > 0 ? num : 0;
+}
+
+let _runnerTimeoutFloorCache: number | undefined;
+
+/**
+ * Minimum wall-clock budget (ms) for every dispatch runner. Acts as a floor:
+ * effective timeout = max(runner.timeoutMs ?? 30_000, runnerTimeoutFloorMs).
  *
  * Resolution order (highest priority first):
- *   1. `dispatch.runnerTimeoutMs` in `~/.pi-lens/config.json`
- *   2. `PI_LENS_RUNNER_TIMEOUT_MS` environment variable
+ *   1. `dispatch.runnerTimeoutFloorMs` in `~/.pi-lens/config.json`
+ *   2. `PI_LENS_RUNNER_TIMEOUT_FLOOR_MS` environment variable
  *   3. 0 (no floor — runner budgets and the 30 s default apply as-is)
+ *
+ * Lazy + memoized so importing `runtime-config.ts` does not trigger disk IO.
+ * The config file is read at most once per process, on first dispatch.
  *
  * @example ~/.pi-lens/config.json
  * ```json
- * { "dispatch": { "runnerTimeoutMs": 180000 } }
+ * { "dispatch": { "runnerTimeoutFloorMs": 180000 } }
  * ```
  *
  * @example env var
  * ```bash
- * PI_LENS_RUNNER_TIMEOUT_MS=180000 pi
+ * PI_LENS_RUNNER_TIMEOUT_FLOOR_MS=180000 pi
  * ```
  */
-import { loadPiLensGlobalConfig } from "./lens-config.js";
-const _globalConfig = loadPiLensGlobalConfig();
-const _configFloor = _globalConfig?.dispatch?.runnerTimeoutMs ?? 0;
-const _envFloor = Number(process.env.PI_LENS_RUNNER_TIMEOUT_MS);
-export const RUNNER_TIMEOUT_FLOOR_MS = Math.max(_configFloor, _envFloor, 0);
+export function getRunnerTimeoutFloorMs(): number {
+	if (_runnerTimeoutFloorCache !== undefined) return _runnerTimeoutFloorCache;
+	const config = loadPiLensGlobalConfig();
+	const configFloor = toPositiveFinite(config?.dispatch?.runnerTimeoutFloorMs);
+	const envFloor = toPositiveFinite(process.env.PI_LENS_RUNNER_TIMEOUT_FLOOR_MS);
+	_runnerTimeoutFloorCache = Math.max(configFloor, envFloor, 0);
+	return _runnerTimeoutFloorCache;
+}
+
+/**
+ * Test-only: clear the memoized floor so a subsequent call re-reads the
+ * config file and env var. Use after mutating either in a test.
+ */
+export function _resetRunnerTimeoutFloorCacheForTests(): void {
+	_runnerTimeoutFloorCache = undefined;
+}
 
 export const RUNTIME_CONFIG = {
 	pipeline: {

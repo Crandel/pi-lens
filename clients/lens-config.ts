@@ -8,11 +8,11 @@ export interface PiLensGlobalConfig {
 	dispatch?: {
 		/**
 		 * Minimum wall-clock budget (ms) for every dispatch runner.
-		 * Acts as a floor: effective timeout = max(runner.timeoutMs ?? 30_000, runnerTimeoutMs).
+		 * Acts as a floor: effective timeout = max(runner.timeoutMs ?? 30_000, runnerTimeoutFloorMs).
 		 * Useful for large monorepos where slow toolchains (e.g. cargo clippy) exceed
-		 * any runner's declared budget. Also overridable via PI_LENS_RUNNER_TIMEOUT_MS.
+		 * any runner's declared budget. Also overridable via PI_LENS_RUNNER_TIMEOUT_FLOOR_MS.
 		 */
-		runnerTimeoutMs?: number;
+		runnerTimeoutFloorMs?: number;
 	};
 	widget?: {
 		/** Whether the diagnostics widget is visible when a session starts. */
@@ -86,10 +86,11 @@ export function loadPiLensGlobalConfig(
 		return {
 			dispatch: dispatch
 				? {
-						runnerTimeoutMs:
-							typeof dispatch.runnerTimeoutMs === "number" &&
-							dispatch.runnerTimeoutMs > 0
-								? dispatch.runnerTimeoutMs
+						runnerTimeoutFloorMs:
+							typeof dispatch.runnerTimeoutFloorMs === "number" &&
+							Number.isFinite(dispatch.runnerTimeoutFloorMs) &&
+							dispatch.runnerTimeoutFloorMs > 0
+								? dispatch.runnerTimeoutFloorMs
 								: undefined,
 					}
 				: undefined,
