@@ -488,6 +488,104 @@ export function writeActionableWarningsReport(
 	cacheManager.writeCache("actionable-warnings", report, cwd);
 }
 
+export interface ActionableWarningsHistoryEntry {
+	timestamp: string;
+	sessionId: string;
+	turnIndex: number;
+	projectSeq?: number;
+	filePath: string;
+	displayPath: string;
+	fileSeq?: number;
+	line?: number;
+	column?: number;
+	severity: ActionableWarningRecord["severity"];
+	tool: string;
+	source?: string;
+	rule?: string;
+	code?: string;
+	message: string;
+	fixKind?: string;
+	autoFixAvailable?: boolean;
+	actionCount: number;
+	autoFixEligibleActionCount: number;
+	suppressed: boolean;
+	suppressionReason?: string;
+	origin: ActionableWarningRecord["origin"];
+	warningId: string;
+}
+
+export function getActionableWarningsHistoryPath(cwd: string): string {
+	return path.join(getProjectDataDir(cwd), "actionable-warnings.jsonl");
+}
+
+/**
+ * Append every actionable warning from this turn to the project's rolling
+ * NDJSON history. Mirrors `appendCodeQualityWarningsHistory` so the two
+ * advisory families have the same shape of cross-turn persistence:
+ *
+ *   - One line per warning (not per turn).
+ *   - Carries the stable `aw:<hash>` id so callers can correlate the same
+ *     warning across turns / sessions.
+ *   - Captures suppression state at write time so historical analyses can
+ *     reconstruct what the agent actually saw.
+ *   - Captures action counts (and autoFixEligible counts) — the LSP code-
+ *     action enrichment is the actionable-warnings-only signal; preserving
+ *     it lets later analyses ask "which warnings ship with an autofix?".
+ *
+ * Skips the write entirely when no warnings exist — matching the code-
+ * quality history's no-op-on-empty behaviour and keeping the file from
+ * accumulating 0-warning noise.
+ */
+export function appendActionableWarningsHistory(
+	cwd: string,
+	report: ActionableWarningsReport,
+): void {
+	const entries: ActionableWarningsHistoryEntry[] = [];
+	for (const file of report.files) {
+		for (const warning of file.warnings) {
+			entries.push({
+				timestamp: report.generatedAt,
+				sessionId: report.sessionId,
+				turnIndex: report.turnIndex,
+				projectSeq: report.projectSeqEnd,
+				filePath: warning.filePath,
+				displayPath: warning.displayPath,
+				fileSeq: file.fileSeq,
+				line: warning.line,
+				column: warning.column,
+				severity: warning.severity,
+				tool: warning.tool,
+				source: warning.source,
+				rule: warning.rule,
+				code: warning.code,
+				message: warning.message,
+				fixKind: warning.fixKind,
+				autoFixAvailable: warning.autoFixAvailable,
+				actionCount: warning.actions.length,
+				autoFixEligibleActionCount: warning.actions.filter(
+					(action) => action.autoFixEligible,
+				).length,
+				suppressed: warning.suppressed,
+				suppressionReason: warning.suppressionReason,
+				origin: warning.origin,
+				warningId: warning.id,
+			});
+		}
+	}
+	if (entries.length === 0) return;
+	const historyPath = getActionableWarningsHistoryPath(cwd);
+	try {
+		fs.mkdirSync(path.dirname(historyPath), { recursive: true });
+		fs.appendFileSync(
+			historyPath,
+			`${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+			"utf8",
+		);
+	} catch {
+		// Non-fatal — history write failure must never surface to the agent.
+	}
+}
+
 export interface ActionableWarningsAutofixSummary {
 	considered: number;
 	applied: number;

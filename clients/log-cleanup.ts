@@ -11,12 +11,14 @@
  *   - ~/.pi-lens/*.log.* (rotated backups)
  *
  * Excluded (intentionally NOT cleaned - project-scoped or persistent):
- *   - <project-data>/worklog.jsonl        - Agent fixable diagnostics
- *   - <project-data>/metrics-history.json - Complexity trends (capped internally)
- *   - <project-data>/reviews/*            - Code review snapshots
- *   - <project-data>/turn-state.json      - Turn tracking
- *   - <project-data>/fix-session.json     - Active fix sessions
- *   - <project-data>/todo-baseline.json   - TODO baseline
+ *   - <project-data>/worklog.jsonl                - Agent fixable diagnostics
+ *   - <project-data>/code-quality-warnings.jsonl  - Non-fixable warning history
+ *   - <project-data>/actionable-warnings.jsonl    - Actionable warning history
+ *   - <project-data>/metrics-history.json         - Complexity trends (capped internally)
+ *   - <project-data>/reviews/*                    - Code review snapshots
+ *   - <project-data>/turn-state.json              - Turn tracking
+ *   - <project-data>/fix-session.json             - Active fix sessions
+ *   - <project-data>/todo-baseline.json           - TODO baseline
  */
 
 import * as fs from "node:fs";

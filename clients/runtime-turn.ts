@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import {
+	appendActionableWarningsHistory,
 	buildActionableWarningsReport,
 	formatActionableWarningsAdvisory,
 	writeActionableWarningsReport,
@@ -508,6 +509,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				dbg,
 			});
 			writeActionableWarningsReport(cacheManager, cwd, report);
+			appendActionableWarningsHistory(cwd, report);
 			const advisory = formatActionableWarningsAdvisory(report);
 			if (advisory) advisoryParts.push(advisory);
 			logActionableWarningsEvent({
