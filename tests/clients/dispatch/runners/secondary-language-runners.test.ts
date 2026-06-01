@@ -182,14 +182,14 @@ describe("secondary language fallback runners", () => {
 			fs.writeFileSync(path.join(env.tmpDir, "mix.exs"), "defmodule Demo.MixProject do end\n");
 			fs.writeFileSync(filePath, "defmodule App do\n");
 
-			safeSpawnAsync
-				.mockResolvedValueOnce({ error: null, status: 0, stdout: "Mix 1.18.0", stderr: "" })
-				.mockResolvedValueOnce({
-					error: null,
-					status: 1,
-					stdout: "",
-					stderr: "** (SyntaxError) lib/app.ex:1:1: unexpected end of file",
-				});
+			// mix availability is now answered by the mocked createAvailabilityChecker
+			// (#120), so only the actual `mix compile` spawn needs mocking here.
+			safeSpawnAsync.mockResolvedValueOnce({
+				error: null,
+				status: 1,
+				stdout: "",
+				stderr: "** (SyntaxError) lib/app.ex:1:1: unexpected end of file",
+			});
 
 			const runner = (await import(
 				"../../../../clients/dispatch/runners/elixir-check.js"

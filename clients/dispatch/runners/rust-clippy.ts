@@ -17,8 +17,36 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { PRIORITY } from "../priorities.js";
+import { createCwdCachedProbe } from "./utils/runner-helpers.js";
 
 const rustClient = new RustClient();
+
+// Cached per-cwd `cargo clippy --version` probe (#120). Before this, the
+// probe fired on every Rust file save in a project where clippy was already
+// installed.
+//
+// `tryLazyInstall("rust-clippy", cwd)` mutates installed state, so on a
+// false initial result the runner needs a way to bust the cache and re-probe
+// after install. We can't `delete` a Promise mid-flight, so the safe path
+// is: if the cached probe resolves false AND the install just succeeded,
+// fall back to a one-shot fresh probe rather than reusing the cached false.
+const probeClippy = (cargoExe: string) =>
+	createCwdCachedProbe(async (cwd) => {
+		const r = await safeSpawnAsync(cargoExe, ["clippy", "--version"], {
+			timeout: 8000,
+			cwd,
+		});
+		return !r.error && r.status === 0;
+	});
+
+const clippyProbeByCargo = new Map<string, ReturnType<typeof probeClippy>>();
+function getClippyProbe(cargoExe: string) {
+	const existing = clippyProbeByCargo.get(cargoExe);
+	if (existing) return existing;
+	const created = probeClippy(cargoExe);
+	clippyProbeByCargo.set(cargoExe, created);
+	return created;
+}
 
 const rustClippyRunner: RunnerDefinition = {
 	id: "rust-clippy",
@@ -34,17 +62,12 @@ const rustClippyRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		const clippyCheck = await safeSpawnAsync(cargoExe, ["clippy", "--version"], {
-			timeout: 8000,
-			cwd: ctx.cwd,
-		});
-		if (clippyCheck.error || clippyCheck.status !== 0) {
+		const clippyProbe = getClippyProbe(cargoExe);
+		if (!(await clippyProbe(ctx.cwd))) {
 			await tryLazyInstall("rust-clippy", ctx.cwd);
-			const retry = await safeSpawnAsync(cargoExe, ["clippy", "--version"], {
-				timeout: 8000,
-				cwd: ctx.cwd,
-			});
-			if (retry.error || retry.status !== 0) {
+			// Bust the cwd-keyed cache so the post-install state is observed.
+			clippyProbeByCargo.set(cargoExe, probeClippy(cargoExe));
+			if (!(await getClippyProbe(cargoExe)(ctx.cwd))) {
 				return { status: "skipped", diagnostics: [], semantic: "none" };
 			}
 		}
