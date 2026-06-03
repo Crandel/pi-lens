@@ -358,20 +358,41 @@ function resolveOldTextEdits(
 			);
 			if (quoteHit !== undefined) {
 				errorMsg += ` The file uses a different quote style — your oldText has ${needle.includes('"') ? "double" : "single"} quotes but the file has ${needle.includes('"') ? "single" : "double"} quotes. Fix the quote style in both oldText and newText before retrying.`;
-			} else if (failCount >= 2) {
-				const lineHint = findFirstLineOfOldText(content, oldText);
-				errorMsg +=
-					` This is attempt #${failCount} for this text — your mental model of this file is stale.` +
-					` Copy oldText verbatim from a fresh read; do NOT reconstruct from memory.` +
-					(lineHint !== undefined
-						? ` The first line of your oldText appears near line ${lineHint} — re-read: \`offset=${Math.max(1, lineHint - 2)} limit=20\``
-						: ` Re-read the full relevant section before retrying.`);
 			} else {
 				const lineHint = findFirstLineOfOldText(content, oldText);
-				errorMsg +=
+				const offsetHint =
 					lineHint !== undefined
-						? ` The first line of your oldText appears near line ${lineHint}, but the rest doesn't match — re-read \`offset=${Math.max(1, lineHint - 2)} limit=20\` and rebuild oldText from the verbatim file content.`
-						: ` Re-read the relevant section of the file to confirm the exact text, then retry with the verbatim content.`;
+						? `\`offset=${Math.max(1, lineHint - 2)} limit=20\``
+						: undefined;
+				if (lineHint !== undefined) {
+					// First line content exists in the file — the surrounding block has drifted.
+					// Indentation autopatch already ran before this point and did not fix it,
+					// so this is a content-drift failure, not a whitespace issue.
+					if (failCount >= 2) {
+						errorMsg +=
+							` This is attempt #${failCount} — the first line of your oldText appears near line ${lineHint}` +
+							` but the surrounding content no longer matches. This is a content-drift failure,` +
+							` not an indentation issue (indentation autopatch already ran and did not fix it).` +
+							` Re-read ${offsetHint} and rebuild oldText verbatim from the current file.`;
+					} else {
+						errorMsg +=
+							` The first line of your oldText appears near line ${lineHint} but the rest doesn't match.` +
+							` The file has likely changed since your last read — this is a content-drift issue, not indentation.` +
+							` Re-read ${offsetHint} and rebuild oldText from the verbatim file content.`;
+					}
+				} else {
+					// First line not found anywhere in the file, even ignoring whitespace.
+					if (failCount >= 2) {
+						errorMsg +=
+							` This is attempt #${failCount} — this text does not appear anywhere in the file,` +
+							` even ignoring whitespace differences. Do NOT retry from memory.` +
+							` Re-read the relevant section before rebuilding your edit.`;
+					} else {
+						errorMsg +=
+							` This text does not appear anywhere in the file, even ignoring indentation differences —` +
+							` the file has likely changed significantly. Re-read the relevant section before retrying.`;
+					}
+				}
 			}
 			errors.push(errorMsg);
 			logReadGuardEvent({
