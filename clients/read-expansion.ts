@@ -48,6 +48,16 @@ const EXT_TO_LANG: Record<string, string> = {
 	".hh": "cpp",
 	".hpp": "cpp",
 	".hxx": "cpp",
+	".cs": "csharp",
+	".php": "php",
+	".phtml": "php",
+	".swift": "swift",
+	".lua": "lua",
+	".ml": "ocaml",
+	".mli": "ocaml",
+	".zig": "zig",
+	".sh": "bash",
+	".bash": "bash",
 };
 
 /** AST node types considered "enclosing symbols" for coverage purposes. */
@@ -89,6 +99,19 @@ const ENCLOSING_TYPES: Record<string, string[]> = {
 	elixir: ["call"],
 	c: ["function_definition"],
 	cpp: ["function_definition", "class_specifier", "struct_specifier"],
+	csharp: [
+		"method_declaration",
+		"constructor_declaration",
+		"class_declaration",
+		"interface_declaration",
+		"struct_declaration",
+	],
+	php: ["function_definition", "method_declaration", "class_declaration"],
+	swift: ["function_declaration", "class_declaration", "protocol_declaration", "init_declaration"],
+	lua: ["function_declaration", "function_definition"],
+	ocaml: ["value_definition", "module_definition"],
+	zig: ["function_declaration"],
+	bash: ["function_definition"],
 };
 
 export interface ExpandedRead {
