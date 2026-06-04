@@ -33,6 +33,21 @@ const EXT_TO_LANG: Record<string, string> = {
 	".go": "go",
 	".rs": "rust",
 	".rb": "ruby",
+	".java": "java",
+	".kt": "kotlin",
+	".kts": "kotlin",
+	".dart": "dart",
+	".ex": "elixir",
+	".exs": "elixir",
+	".c": "c",
+	".h": "c",
+	".cc": "cpp",
+	".cpp": "cpp",
+	".cxx": "cpp",
+	".c++": "cpp",
+	".hh": "cpp",
+	".hpp": "cpp",
+	".hxx": "cpp",
 };
 
 /** AST node types considered "enclosing symbols" for coverage purposes. */
@@ -62,6 +77,18 @@ const ENCLOSING_TYPES: Record<string, string[]> = {
 	go: ["function_declaration", "method_declaration"],
 	rust: ["function_item", "impl_item"],
 	ruby: ["method", "class", "module"],
+	java: [
+		"method_declaration",
+		"constructor_declaration",
+		"class_declaration",
+		"interface_declaration",
+		"enum_declaration",
+	],
+	kotlin: ["function_declaration", "class_declaration", "object_declaration"],
+	dart: ["function_declaration", "method_declaration", "class_definition", "mixin_declaration"],
+	elixir: ["call"],
+	c: ["function_definition"],
+	cpp: ["function_definition", "class_specifier", "struct_specifier"],
 };
 
 export interface ExpandedRead {

@@ -215,6 +215,108 @@ const SYMBOL_QUERIES: Record<string, { defs: string; refs: string }> = {
       (type_identifier) @typeIdent
     `,
 	},
+	java: {
+		defs: `
+      (method_declaration
+        name: (identifier) @methodName
+        parameters: (formal_parameters) @methodParams) @methodDef
+
+      (class_declaration
+        name: (identifier) @className) @classDef
+
+      (interface_declaration
+        name: (identifier) @interfaceName) @interfaceDef
+
+      (constructor_declaration
+        name: (identifier) @funcName
+        parameters: (formal_parameters) @funcParams) @funcDef
+
+      (enum_declaration
+        name: (identifier) @className) @classDef
+    `,
+		refs: `
+      (method_invocation
+        name: (identifier) @callMethod) @callRef
+
+      (object_creation_expression
+        type: (type_identifier) @newIdent) @newRef
+
+      (type_identifier) @typeIdent
+    `,
+	},
+	kotlin: {
+		defs: `
+      (function_declaration
+        (simple_identifier) @funcName) @funcDef
+
+      (class_declaration
+        (type_identifier) @className) @classDef
+
+      (object_declaration
+        (type_identifier) @className) @classDef
+
+      (class_declaration
+        (simple_identifier) @className) @classDef
+    `,
+		refs: `
+      (call_expression
+        calleeExpression: (simple_identifier) @callIdent) @callRef
+
+      (call_expression
+        calleeExpression: (navigation_expression
+          selectorExpression: (simple_identifier) @callMethod)) @callMethodRef
+
+      (user_type (type_reference (simple_identifier) @typeIdent)) @typeRef
+    `,
+	},
+	dart: {
+		defs: `
+      (function_signature
+        name: (identifier) @funcName
+        parameters: (formal_parameter_list) @funcParams) @funcDef
+
+      (method_signature
+        name: (identifier) @methodName
+        parameters: (formal_parameter_list) @methodParams) @methodDef
+
+      (class_definition
+        name: (identifier) @className) @classDef
+
+      (mixin_declaration
+        name: (identifier) @className) @classDef
+
+      (extension_declaration
+        name: (identifier) @className) @classDef
+    `,
+		refs: `
+      (function_expression_body
+        (identifier) @callIdent) @callRef
+
+      (type_identifier) @typeIdent
+    `,
+	},
+	elixir: {
+		defs: `
+      (call
+        target: (identifier) @_kw
+        (arguments
+          (call
+            target: (identifier) @funcName
+            (arguments) @funcParams) @funcDef)
+        (#match? @_kw "^def[pm]?$"))
+
+      (call
+        target: (identifier) @_kw
+        (arguments (alias) @moduleName) @moduleDef
+        (#match? @_kw "^defmodule$"))
+    `,
+		refs: `
+      (call
+        target: (identifier) @callIdent) @callRef
+
+      (alias) @typeIdent
+    `,
+	},
 };
 
 export interface ExtractedSymbols {
