@@ -35,6 +35,14 @@ function sgExcludeArgsForProject(rootDir: string): string[] {
 	]);
 }
 
+interface SgMetaVarNode {
+	text: string;
+	range: {
+		start: { line: number; column: number };
+		end: { line: number; column: number };
+	};
+}
+
 export interface SgMatch {
 	file: string;
 	range: {
@@ -43,6 +51,11 @@ export interface SgMatch {
 	};
 	text: string;
 	replacement?: string;
+	metaVariables?: {
+		single: Record<string, SgMetaVarNode>;
+		multi: Record<string, SgMetaVarNode[]>;
+		transformed: Record<string, string>;
+	};
 }
 
 export interface SgResult {
@@ -50,6 +63,35 @@ export interface SgResult {
 	totalMatches: number;
 	truncated: boolean;
 	error?: string;
+}
+
+/**
+ * Format metavariable captures for display below a match line.
+ * Single captures: $VAR=x  $NAME=foo
+ * Multi captures:  $$$ARGS=a,b,c
+ * Returns undefined when there are no meaningful captures.
+ */
+function formatMetaVarCaptures(
+	mv: SgMatch["metaVariables"],
+): string | undefined {
+	if (!mv) return undefined;
+	const parts: string[] = [];
+
+	for (const [name, node] of Object.entries(mv.single)) {
+		if (node.text) parts.push(`$${name}=${node.text}`);
+	}
+	for (const [name, nodes] of Object.entries(mv.multi)) {
+		if (nodes.length > 0) {
+			const joined = nodes.map((n) => n.text).join("");
+			if (joined) parts.push(`$$$${name}=${joined}`);
+		}
+	}
+	for (const [name, value] of Object.entries(mv.transformed)) {
+		if (value) parts.push(`@${name}=${value}`);
+	}
+
+	if (parts.length === 0) return undefined;
+	return `  ${parts.join("  ")}`;
 }
 
 export class SgRunner {
@@ -446,9 +488,11 @@ export class SgRunner {
 		const lines = shown.map((m) => {
 			const loc = `${m.file}:${m.range.start.line + 1}:${m.range.start.column + 1}`;
 			const text = m.text.length > 100 ? `${m.text.slice(0, 100)}...` : m.text;
-			return isDryRun && m.replacement
+			const base = isDryRun && m.replacement
 				? `${loc}\n  - ${text}\n  + ${m.replacement}`
 				: `${loc}: ${text}`;
+			const captures = formatMetaVarCaptures(m.metaVariables);
+			return captures ? `${base}\n${captures}` : base;
 		});
 
 		if (matches.length > maxItems) {
