@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **Six new structural rules covering SonarCloud BLOCKER/CRITICAL TS gaps** — pure-AST checks (no taint analysis required), each with tests run through the production runner. ast-grep: `no-sort-without-comparator` (S2871 — `.sort()`/`.toSorted()` with no compare function), `no-octal-literal` (S1314 — legacy leading-zero octals), `no-mutable-export` (S6861 — exported `let`/`var`), `switch-without-default` (S131 — `switch` with no `default` clause). tree-sitter: `no-equality-in-for-condition` (S888 — `==`/`!=` as a `for`-loop exit test), `no-jump-in-finally` (S1143 — `return`/`break`/`continue`/`throw` written directly in a `finally` block). All `warning` severity.
+
 - **`redos-nested-quantifier` ast-grep rule — flags catastrophic-backtracking (ReDoS) regex literals** — detects an unbounded quantifier nested inside an unbounded-quantified group (`(a+)+`, `(a*)*`, `([a-z]+)*`, `(\d+){2,}`, `(a{2,})+`), the classic CWE-1333 / S5852 exponential case. Fires only when both inner and outer quantifiers are unbounded (`+`, `*`, `{n,}`); bounded quantifiers like `{2,3}` are intentionally not flagged. Runs in the NAPI runner via `kind: regex_pattern` + a linear detector regex (no self-ReDoS). `warning` severity with fix guidance (bounded quantifier, atomic-group emulation, negated character class, or RE2/node-re2 for untrusted input).
 
 - Extended oxfmt formatter to CSS, SCSS, Less, HTML, JSON, YAML, Markdown, MDX, GraphQL, TOML, Vue files. Updated tool-policy entries and added unit tests.
