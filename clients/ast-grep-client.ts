@@ -65,7 +65,7 @@ function formatDebugAst(tree: string, source: string): string {
 	return tree
 		.split(/\r\n|\n/)
 		.map((line) => {
-			const match = /^(\s*)([^(]*) \((\d+),(\d+)\)-\((\d+),(\d+)\)$/.exec(line);
+			const match = /^([ \t]*)([^ \t(][^(]*)? \((\d+),(\d+)\)-\((\d+),(\d+)\)$/.exec(line);
 			if (!match) return line;
 			const [, indent = "", label = "", startLine, startCol, endLine, endCol] =
 				match;

@@ -105,7 +105,7 @@ function parseSymbolSelector(symbol: string): {
 	debug?: string;
 } {
 	const trimmed = symbol.trim();
-	const match = /^(.*?)(?:#(-?\d+))?$/.exec(trimmed);
+	const match = /^([^#]*)(?:#(-?\d+))?$/.exec(trimmed);
 	const baseSymbol = (match?.[1] ?? trimmed).trim();
 	const rawOccurrence = match?.[2];
 	if (!rawOccurrence) return { baseSymbol, occurrence: 1 };
