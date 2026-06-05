@@ -89,6 +89,16 @@ describe("LSP Client Integration", () => {
 		expect(symbols[0].kind).toBe(12); // Function
 	});
 
+	it("strips noisy URL lines from pulled diagnostics", async () => {
+		const filePath = path.join(process.cwd(), "test.ts");
+		await client!.notify.open(filePath, "oops();", "typescript");
+		await client!.waitForDiagnostics(filePath, 1000);
+
+		const diagnostics = client!.getDiagnostics(filePath);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].message).toBe("actual diagnostic");
+	});
+
 	it("returns hover info", async () => {
 		const filePath = path.join(process.cwd(), "test.ts");
 		await client!.notify.open(filePath, "const message = 'hi';", "typescript");

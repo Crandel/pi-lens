@@ -13,6 +13,7 @@ import {
 	clientShutdown,
 	clientWaitForDiagnostics,
 	handleNotifyChange,
+	stripDiagnosticNoiseLines,
 	handleNotifyOpen,
 	type LSPClientState,
 } from "../../../clients/lsp/client.js";
@@ -96,6 +97,16 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 		...overrides,
 	};
 }
+
+describe("stripDiagnosticNoiseLines", () => {
+	it("removes bare URL and further-information diagnostic lines", () => {
+		expect(
+			stripDiagnosticNoiseLines(
+				"actual error\nfor further information visit https://example.test\nhttps://example.test/docs",
+			),
+		).toBe("actual error");
+	});
+});
 
 describe("clientShutdown", () => {
 	it("skips LSP protocol handshake in fast mode", async () => {

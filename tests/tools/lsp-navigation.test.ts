@@ -101,6 +101,47 @@ describe("lsp_navigation tool", () => {
 		).toHaveBeenCalledWith("ReportProcessor", undefined);
 	});
 
+	it("deduplicates workspaceSymbol results", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		(
+			mocked.service as { workspaceSymbol: ReturnType<typeof vi.fn> }
+		).workspaceSymbol = vi.fn().mockResolvedValue([
+			{
+				name: "ReportProcessor",
+				kind: 12,
+				location: {
+					uri: "file:///tmp/report.ts",
+					range: {
+						start: { line: 1, character: 2 },
+						end: { line: 1, character: 17 },
+					},
+				},
+			},
+			{
+				name: "ReportProcessor",
+				kind: 12,
+				location: {
+					uri: "file:///tmp/report.ts",
+					range: {
+						start: { line: 1, character: 2 },
+						end: { line: 1, character: 17 },
+					},
+				},
+			},
+		]);
+
+		const result = await tool.execute(
+			"workspace-symbol-dedupe",
+			{ operation: "workspaceSymbol", query: "ReportProcessor" },
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.resultCount).toBe(1);
+	});
+
 	it("opens scoped file before workspaceSymbol query", async () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));

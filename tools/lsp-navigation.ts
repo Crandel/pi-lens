@@ -425,6 +425,31 @@ function pickLocalSymbolLocation(
 		);
 }
 
+function workspaceSymbolDedupeKey(symbol: SymbolNode): string {
+	const location = symbol.location;
+	const start = rangeStart(location?.range ?? symbol.range ?? symbol.selectionRange);
+	return [
+		symbol.name ?? "",
+		symbol.detail ?? "",
+		symbol.kind ?? "",
+		location?.uri ?? "",
+		start.line ?? "",
+		start.character ?? "",
+	].join(":");
+}
+
+function dedupeWorkspaceSymbols<T extends SymbolNode>(symbols: T[]): T[] {
+	const out: T[] = [];
+	const seen = new Set<string>();
+	for (const symbol of symbols) {
+		const key = workspaceSymbolDedupeKey(symbol);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(symbol);
+	}
+	return out;
+}
+
 function classifyCodeActions(actions: Array<{ kind?: string }> | undefined): {
 	quickfix: number;
 	refactor: number;
@@ -1071,14 +1096,22 @@ export function createLspNavigationTool(
 									typeof s === "object" &&
 									s !== null &&
 									(!s.kind || NAVIGABLE_KINDS.has(s.kind)),
-							);
-							return filtered.slice(0, 15);
+							) as SymbolNode[];
+							return dedupeWorkspaceSymbols(filtered).slice(0, 15);
 						} catch (err) {
 							const msg = err instanceof Error ? err.message : String(err);
 							if (rawPath && /No Project/i.test(msg)) {
 								await openFileBestEffort(lspService, filePath);
 								await new Promise((resolve) => setTimeout(resolve, 120));
-								return lspService.workspaceSymbol(query ?? "", filePath);
+								const retryRaw = await lspService.workspaceSymbol(
+									query ?? "",
+									filePath,
+								);
+								const retrySymbols = (Array.isArray(retryRaw)
+									? retryRaw
+									: [retryRaw]
+								).filter((s) => typeof s === "object" && s !== null) as SymbolNode[];
+								return dedupeWorkspaceSymbols(retrySymbols);
 							}
 							throw err;
 						}

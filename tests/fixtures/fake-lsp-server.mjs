@@ -189,6 +189,29 @@ function handle(raw) {
 		return;
 	}
 
+	// Pull diagnostics
+	if (data.method === "textDocument/diagnostic") {
+		send({
+			jsonrpc: "2.0",
+			id: data.id,
+			result: {
+				kind: "full",
+				items: [
+					{
+						severity: 1,
+						message:
+							"actual diagnostic\nfor further information visit https://example.test\nhttps://example.test/docs",
+						range: {
+							start: { line: 0, character: 0 },
+							end: { line: 0, character: 5 },
+						},
+					},
+				],
+			},
+		});
+		return;
+	}
+
 	// Code actions return lightweight actions; resolve populates the edit.
 	if (data.method === "textDocument/codeAction") {
 		send({

@@ -426,6 +426,29 @@ async function killProcessTree(
 	}
 }
 
+export function stripDiagnosticNoiseLines(message: string): string {
+	const cleaned = message
+		.split(/\r?\n/)
+		.filter((line) => {
+			const trimmed = line.trim();
+			if (/^for further information visit\b/i.test(trimmed)) return false;
+			if (/^https?:\/\/\S+$/i.test(trimmed)) return false;
+			return true;
+		})
+		.join("\n")
+		.trim();
+	return cleaned || message.trim() || message;
+}
+
+function normalizeLspDiagnostic(diagnostic: LSPDiagnostic): LSPDiagnostic {
+	const message = stripDiagnosticNoiseLines(diagnostic.message);
+	return message === diagnostic.message ? diagnostic : { ...diagnostic, message };
+}
+
+function normalizeLspDiagnostics(diagnostics: LSPDiagnostic[]): LSPDiagnostic[] {
+	return diagnostics.map(normalizeLspDiagnostic);
+}
+
 function mergeDiagnosticLists(
 	push: LSPDiagnostic[] | undefined,
 	pull: LSPDiagnostic[] | undefined,
@@ -535,7 +558,7 @@ function setupIncomingHandlers(
 		(params: { uri: string; diagnostics?: LSPDiagnostic[] }) => {
 			const filePath = uriToPath(params.uri);
 			const normalizedPath = normalizeMapKey(filePath);
-			const newDiags: LSPDiagnostic[] = params.diagnostics || [];
+			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
 			const strategy = getStrategy(state.serverId);
 
 			// Seed on first push for servers whose first push is known complete.
@@ -650,7 +673,7 @@ async function clientRequestPullDiagnostics(
 		if (!report) return 0;
 
 		const normalizedPath = normalizeMapKey(filePath);
-		const primaryItems = report.items ?? [];
+		const primaryItems = normalizeLspDiagnostics(report.items ?? []);
 		const now = Date.now();
 		state.documentPullDiagnostics.set(normalizedPath, primaryItems);
 		state.documentPullDiagnosticTimestamps.set(normalizedPath, now);
@@ -662,7 +685,7 @@ async function clientRequestPullDiagnostics(
 				report.relatedDocuments,
 			)) {
 				const relatedPath = uriToPath(relatedUri);
-				const relatedItems = related?.items ?? [];
+				const relatedItems = normalizeLspDiagnostics(related?.items ?? []);
 				state.documentPullDiagnostics.set(
 					normalizeMapKey(relatedPath),
 					relatedItems,
