@@ -502,7 +502,11 @@ function formatCapabilities(
 			(s) => s.workspaceDiagnosticsSupport.mode === "pull",
 			"pull diagnostics",
 		],
-		["rename_file", () => true, "willRenameFiles/didRenameFiles helper available"],
+		[
+			"rename_file",
+			() => true,
+			"willRenameFiles/didRenameFiles helper available",
+		],
 	];
 
 	const lines: string[] = [];
@@ -1270,10 +1274,14 @@ export function createLspNavigationTool(
 						const resolvedNewFilePath = path.isAbsolute(newFilePath)
 							? newFilePath
 							: path.resolve(ctx.cwd || ".", newFilePath);
-						const result = await lspService.renameFile(filePath, resolvedNewFilePath, {
-							cwd: ctx.cwd || ".",
-							apply: apply ?? false,
-						});
+						const result = await lspService.renameFile(
+							filePath,
+							resolvedNewFilePath,
+							{
+								cwd: ctx.cwd || ".",
+								apply: apply ?? false,
+							},
+						);
 						if (result.applied) {
 							for (const touchedFile of result.files ?? []) {
 								try {

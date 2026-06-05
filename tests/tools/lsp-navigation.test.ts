@@ -612,17 +612,17 @@ describe("lsp_navigation tool", () => {
 		const filePath = path.join(tmpDir, "old.ts");
 		const newFilePath = path.join(tmpDir, "new.ts");
 		fs.writeFileSync(filePath, "export const value = 1;\n");
-		(
-			mocked.service as { renameFile: ReturnType<typeof vi.fn> }
-		).renameFile = vi.fn().mockResolvedValue({
-			applied: false,
-			serverIds: ["typescript", "eslint"],
-			willRenameFailures: [],
-			didRenameFailures: [],
-			droppedConflicts: 1,
-			inputEditCount: 2,
-			summary: ["Apply 1 edit(s) to import.ts"],
-		});
+		(mocked.service as { renameFile: ReturnType<typeof vi.fn> }).renameFile = vi
+			.fn()
+			.mockResolvedValue({
+				applied: false,
+				serverIds: ["typescript", "eslint"],
+				willRenameFailures: [],
+				didRenameFailures: [],
+				droppedConflicts: 1,
+				inputEditCount: 2,
+				summary: ["Apply 1 edit(s) to import.ts"],
+			});
 
 		try {
 			const result = await tool.execute(

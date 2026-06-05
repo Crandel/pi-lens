@@ -1415,7 +1415,10 @@ export class LSPService {
 		);
 
 		const successfulWillResults = willResults.filter(
-			(result) => !willRenameFailures.some((failure) => failure.serverId === result.serverId),
+			(result) =>
+				!willRenameFailures.some(
+					(failure) => failure.serverId === result.serverId,
+				),
 		);
 		if (activeClients.length > 0 && successfulWillResults.length === 0) {
 			throw new Error(
@@ -1440,8 +1443,12 @@ export class LSPService {
 		const applied = await applyWorkspaceEdit(merged.edit, cwd);
 		await fs.mkdir(path.dirname(newFilePath), { recursive: true });
 		await fs.rename(oldFilePath, newFilePath);
-		const relOld = path.relative(cwd, oldFilePath).replace(/\\/g, "/") || path.basename(oldFilePath);
-		const relNew = path.relative(cwd, newFilePath).replace(/\\/g, "/") || path.basename(newFilePath);
+		const relOld =
+			path.relative(cwd, oldFilePath).replace(/\\/g, "/") ||
+			path.basename(oldFilePath);
+		const relNew =
+			path.relative(cwd, newFilePath).replace(/\\/g, "/") ||
+			path.basename(newFilePath);
 		const renameDescription = `Renamed ${relOld} → ${relNew}`;
 
 		await Promise.all(

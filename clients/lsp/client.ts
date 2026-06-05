@@ -229,7 +229,10 @@ export interface LSPClientInfo {
 		newName: string,
 	): Promise<LSPWorkspaceEdit | null>;
 	/** Ask server for edits before a source file rename. */
-	willRenameFiles(oldFilePath: string, newFilePath: string): Promise<LSPWorkspaceEdit | null>;
+	willRenameFiles(
+		oldFilePath: string,
+		newFilePath: string,
+	): Promise<LSPWorkspaceEdit | null>;
 	/** Notify server after a source file rename. */
 	didRenameFiles(oldFilePath: string, newFilePath: string): Promise<void>;
 	/** Go to implementation */

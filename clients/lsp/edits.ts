@@ -188,7 +188,13 @@ export interface MergeWorkspaceEditsResult {
 }
 
 export function mergeWorkspaceTextEditsByPriority(
-	entries: Array<{ serverId: string; edit: { changes?: Record<string, unknown[]>; documentChanges?: unknown[] } | null | undefined }>,
+	entries: Array<{
+		serverId: string;
+		edit:
+			| { changes?: Record<string, unknown[]>; documentChanges?: unknown[] }
+			| null
+			| undefined;
+	}>,
 ): MergeWorkspaceEditsResult {
 	const merged = new Map<string, LSPTextEdit[]>();
 	const seenExact = new Set<string>();
@@ -205,7 +211,9 @@ export function mergeWorkspaceTextEditsByPriority(
 				inputEditCount += 1;
 				const exactKey = textEditKey(uri, edit);
 				if (seenExact.has(exactKey)) continue;
-				if (kept.some((existing) => rangesOverlap(existing.range, edit.range))) {
+				if (
+					kept.some((existing) => rangesOverlap(existing.range, edit.range))
+				) {
 					droppedConflicts += 1;
 					continue;
 				}
@@ -297,7 +305,10 @@ export async function applyWorkspaceEdit(
 			if (typeof change !== "object" || change === null || !("kind" in change))
 				continue;
 			const kind = (change as { kind?: unknown }).kind;
-			if (kind === "create" && typeof (change as CreateFileOp).uri === "string") {
+			if (
+				kind === "create" &&
+				typeof (change as CreateFileOp).uri === "string"
+			) {
 				const filePath = uriToPath((change as CreateFileOp).uri);
 				await fs.mkdir(path.dirname(filePath), { recursive: true });
 				await fs
