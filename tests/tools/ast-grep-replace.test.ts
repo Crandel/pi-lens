@@ -47,6 +47,7 @@ describe("ast_grep_replace tool", () => {
 				"typescript",
 				expect.anything(),
 				expect.anything(),
+				expect.anything(),
 			);
 		});
 
@@ -64,6 +65,7 @@ describe("ast_grep_replace tool", () => {
 				"var $X",
 				"let $X",
 				"javascript",
+				expect.anything(),
 				expect.anything(),
 				expect.anything(),
 			);
@@ -86,6 +88,7 @@ describe("ast_grep_replace tool", () => {
 			expect.anything(),
 			expect.anything(),
 			false,
+			expect.anything(),
 		);
 	});
 
@@ -105,6 +108,7 @@ describe("ast_grep_replace tool", () => {
 			expect.anything(),
 			expect.anything(),
 			true,
+			expect.anything(),
 		);
 	});
 });
