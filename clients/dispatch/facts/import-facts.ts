@@ -1,4 +1,5 @@
 import * as ts from "typescript";
+import { logLatency } from "../latency-logger.js";
 import type { FactProvider } from "../fact-provider-types.js";
 
 export interface ImportEntry {
@@ -179,5 +180,24 @@ export const importFactProvider: FactProvider = {
 		// Re-export edges (used by call graph for barrel-file traversal)
 		const reexports = collectReExports(sourceFile);
 		store.setFileFact(ctx.filePath, "file.reexports", reexports);
+
+		// Telemetry: log when a file has dynamic imports or re-exports so we can
+		// measure coverage and validate the implementation across real projects.
+		const dynamicCount = dynamic.length;
+		const reexportCount = reexports.length;
+		if (dynamicCount > 0 || reexportCount > 0) {
+			logLatency({
+				type: "call_graph_facts" as any,
+				filePath: ctx.filePath,
+				durationMs: 0,
+				metadata: {
+					moduleType,
+					staticImports: imports.length - dynamicCount,
+					dynamicImports: dynamicCount,
+					reexports: reexportCount,
+					starReexports: reexports.filter((r) => r.names.length === 0).length,
+				},
+			});
+		}
 	},
 };
