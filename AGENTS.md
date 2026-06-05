@@ -12,8 +12,8 @@ clients/
   project-changes.ts      Append-only project/file sequence change log
   reverse-deps.ts         Snapshot-backed reverse dependency index/query helpers
   installer/index.ts      Auto-install + ensureTool; probe-cache.json for fast restarts
-  lsp/                    37 LSP servers, config, lifecycle
-  dispatch/               Pipeline dispatcher + 48 runners
+  lsp/                    37 LSP server IDs, config, lifecycle
+  dispatch/               Pipeline dispatcher + 47 registered runners
   widget-state.ts         Footer widget rendering (@earendil-works/pi-tui)
 tools/                    ast-grep-search, lsp-navigation tool handlers
 tests/                    Vitest test suite (mirrors clients/ structure)
@@ -34,7 +34,7 @@ Because many test imports use `.js` specifiers while the source of truth is `.ts
 ```
 npm run build && npm test
 ```
-Do not hand-edit generated `.js`; regenerate it from the corresponding `.ts`.
+Do not hand-edit generated `.js`; regenerate it from the corresponding `.ts`. This includes `scripts/download-grammars.js`, which is the runtime/postinstall artifact generated from `scripts/download-grammars.ts` and must stay in sync for published installs.
 
 ## Data directory conventions
 
@@ -202,7 +202,7 @@ Mixing different capture names in one `[...]` block causes tree-sitter to silent
 **Post-filters** (`post_filter` in YAML, `applyPostFilter` in `clients/tree-sitter-client.ts`): evaluated after query matching to reject false positives. Key ones: `count_params` (long-param-list: excludes optional/defaulted params), `ts_ssrf_sink` (requires URL to look like external input), `check_secret_pattern` (variable name must match secret-sounding pattern).
 
 ## Current version / state
-v3.8.45 is the package version. Master includes unreleased work: read-guard autopatch improvements (trailing empty lines, `out_of_range` downgrade, repeat-failure escalation), actionable/code-quality warning reports with sequence metadata, project/file sequencing plus append-only change logs, project snapshot hydration, reverse-dependency snapshot cache/query helpers, structured NDJSON telemetry for the actionable-warnings pipeline (`actionable-warnings-logger.ts`), and async/fast lifecycle consistency (jscpd/Madge/formatters use `safeSpawnAsync`; LSP teardown uses fast/unref paths). CI runs `npm ci` + tsc lint + vitest.
+v3.8.47 is the package version. Master includes unreleased work: read-guard autopatch improvements (trailing empty lines, `out_of_range` downgrade, repeat-failure escalation), actionable/code-quality warning reports with sequence metadata, project/file sequencing plus append-only change logs, project snapshot hydration, reverse-dependency snapshot cache/query helpers, structured NDJSON telemetry for the actionable-warnings pipeline (`actionable-warnings-logger.ts`), async/fast lifecycle consistency (jscpd/Madge/formatters use `safeSpawnAsync`; LSP teardown uses fast/unref paths), expanded tree-sitter language coverage/read expansion/symbol extraction for issue #152, and ast-grep tool hardening for issue #125/#151 (strictness, skip pagination, stale-preview detection, metavariable captures). CI runs `npm ci` + tsc lint + vitest.
 
 ## Commit conventions
 - Always include the GitHub issue number in the commit subject line: `(closes #NNN)` or `(refs #NNN)`.
