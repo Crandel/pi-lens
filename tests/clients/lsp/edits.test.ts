@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
 	applyTextEditsToString,
 	applyWorkspaceEdit,
+	mergeWorkspaceTextEditsByPriority,
 } from "../../../clients/lsp/edits.js";
 
 describe("LSP workspace edits", () => {
@@ -28,6 +29,55 @@ describe("LSP workspace edits", () => {
 				},
 			]),
 		).toThrow(/overlapping LSP edits: 1:2-1:5 conflicts with 1:4-1:6/);
+	});
+
+	it("merges workspace edits by priority and drops lower-priority overlaps", () => {
+		const uri = "file:///tmp/app.ts";
+		const result = mergeWorkspaceTextEditsByPriority([
+			{
+				serverId: "typescript",
+				edit: {
+					changes: {
+						[uri]: [
+							{
+								range: {
+									start: { line: 0, character: 1 },
+									end: { line: 0, character: 4 },
+								},
+								newText: "primary",
+							},
+						],
+					},
+				},
+			},
+			{
+				serverId: "eslint",
+				edit: {
+					changes: {
+						[uri]: [
+							{
+								range: {
+									start: { line: 0, character: 2 },
+									end: { line: 0, character: 5 },
+								},
+								newText: "secondary",
+							},
+						],
+					},
+				},
+			},
+		]);
+
+		expect(result.droppedConflicts).toBe(1);
+		expect(result.edit.changes[uri]).toEqual([
+			{
+				range: {
+					start: { line: 0, character: 1 },
+					end: { line: 0, character: 4 },
+				},
+				newText: "primary",
+			},
+		]);
 	});
 
 	it("applies text edits before resource renames", async () => {

@@ -26,6 +26,7 @@ const VALID_OPERATIONS = [
 	"workspaceSymbol",
 	"codeAction",
 	"rename",
+	"rename_file",
 	"implementation",
 	"prepareCallHierarchy",
 	"incomingCalls",
@@ -74,6 +75,7 @@ function emptyReasonForOperation(operation: LspNavigationOperation): string {
 		return "position-sensitive-or-no-signature";
 	if (operation === "codeAction") return "no-applicable-actions";
 	if (operation === "rename") return "no-rename-edits-or-symbol-not-renamable";
+	if (operation === "rename_file") return "no-file-rename-result";
 	if (operation === "findSymbol") return "no-matching-symbols";
 	if (operation === "workspaceSymbol")
 		return "no-matching-symbols-or-server-index-unavailable";
@@ -500,7 +502,7 @@ function formatCapabilities(
 			(s) => s.workspaceDiagnosticsSupport.mode === "pull",
 			"pull diagnostics",
 		],
-		["rename_file", () => false, "not implemented yet (#148)"],
+		["rename_file", () => true, "willRenameFiles/didRenameFiles helper available"],
 	];
 
 	const lines: string[] = [];
@@ -583,6 +585,7 @@ export function createLspNavigationTool(
 			"- workspaceSymbol: Search symbols across the whole project (best with filePath context)\n" +
 			"- codeAction: Find available quick fixes/refactors at a range\n" +
 			"- rename: Compute or apply workspace edits for renaming a symbol\n" +
+			"- rename_file: Preview/apply LSP-aware source file rename notifications\n" +
 			"- implementation: Jump to interface implementations\n" +
 			"- prepareCallHierarchy: Get callable item at position (for incoming/outgoing)\n" +
 			"- incomingCalls: Find all functions/methods that CALL this function\n" +
@@ -637,6 +640,11 @@ export function createLspNavigationTool(
 			newName: Type.Optional(
 				Type.String({
 					description: "Required for rename operation.",
+				}),
+			),
+			newFilePath: Type.Optional(
+				Type.String({
+					description: "Required for rename_file operation.",
 				}),
 			),
 			apply: Type.Optional(
@@ -791,6 +799,7 @@ export function createLspNavigationTool(
 				endLine,
 				endCharacter,
 				newName,
+				newFilePath,
 				apply,
 				query,
 				kinds,
@@ -806,6 +815,7 @@ export function createLspNavigationTool(
 				endLine?: number;
 				endCharacter?: number;
 				newName?: string;
+				newFilePath?: string;
 				apply?: boolean;
 				query?: string;
 				kinds?: string[];
@@ -1250,6 +1260,30 @@ export function createLspNavigationTool(
 							}
 						}
 						return { applied: true, ...applied };
+					}
+					case "rename_file": {
+						if (!newFilePath || newFilePath.trim().length === 0) {
+							throw new Error(
+								"__BADINPUT__ newFilePath parameter required for rename_file",
+							);
+						}
+						const resolvedNewFilePath = path.isAbsolute(newFilePath)
+							? newFilePath
+							: path.resolve(ctx.cwd || ".", newFilePath);
+						const result = await lspService.renameFile(filePath, resolvedNewFilePath, {
+							cwd: ctx.cwd || ".",
+							apply: apply ?? false,
+						});
+						if (result.applied) {
+							for (const touchedFile of result.files ?? []) {
+								try {
+									await openFileBestEffort(lspService, touchedFile, false);
+								} catch {
+									// Best-effort LSP resync only; disk edit already succeeded.
+								}
+							}
+						}
+						return result;
 					}
 					case "implementation":
 						return lspService.implementation(filePath, lspLine, lspChar);

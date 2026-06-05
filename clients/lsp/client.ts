@@ -228,6 +228,10 @@ export interface LSPClientInfo {
 		character: number,
 		newName: string,
 	): Promise<LSPWorkspaceEdit | null>;
+	/** Ask server for edits before a source file rename. */
+	willRenameFiles(oldFilePath: string, newFilePath: string): Promise<LSPWorkspaceEdit | null>;
+	/** Notify server after a source file rename. */
+	didRenameFiles(oldFilePath: string, newFilePath: string): Promise<void>;
 	/** Go to implementation */
 	implementation(
 		filePath: string,
@@ -1374,6 +1378,34 @@ export async function createLSPClient(options: {
 				},
 			);
 			return result ?? null;
+		},
+
+		async willRenameFiles(oldFilePath, newFilePath) {
+			const result = await navRequest<LSPWorkspaceEdit>(
+				state,
+				"workspace/willRenameFiles",
+				{
+					files: [
+						{
+							oldUri: pathToFileURL(oldFilePath).href,
+							newUri: pathToFileURL(newFilePath).href,
+						},
+					],
+				},
+			);
+			return result ?? null;
+		},
+
+		async didRenameFiles(oldFilePath, newFilePath) {
+			if (!isClientAlive(state)) return;
+			await safeSendNotification(state.connection, "workspace/didRenameFiles", {
+				files: [
+					{
+						oldUri: pathToFileURL(oldFilePath).href,
+						newUri: pathToFileURL(newFilePath).href,
+					},
+				],
+			});
 		},
 
 		async implementation(filePath, line, character) {

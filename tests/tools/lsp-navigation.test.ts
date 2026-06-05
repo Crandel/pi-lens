@@ -29,6 +29,15 @@ describe("lsp_navigation tool", () => {
 					{ title: "Move to new file", kind: "refactor.move.newFile" },
 				]),
 			rename: vi.fn().mockResolvedValue(null),
+			renameFile: vi.fn().mockResolvedValue({
+				applied: false,
+				serverIds: [],
+				willRenameFailures: [],
+				didRenameFailures: [],
+				droppedConflicts: 0,
+				inputEditCount: 0,
+				summary: [],
+			}),
 			references: vi.fn().mockResolvedValue([
 				{
 					uri: "file:///tmp/sample.ts",
@@ -92,7 +101,7 @@ describe("lsp_navigation tool", () => {
 			"signatureHelp          ✗",
 		);
 		expect(String(result.content[0]?.text)).toContain(
-			"rename_file            ✗  (not implemented yet (#148))",
+			"rename_file            ✓  (willRenameFiles/didRenameFiles helper available)",
 		);
 		expect(result.details?.servers).toEqual(["typescript"]);
 	});
@@ -592,6 +601,52 @@ describe("lsp_navigation tool", () => {
 				(mocked.service as { getDiagnostics: ReturnType<typeof vi.fn> })
 					.getDiagnostics,
 			).toHaveBeenCalledWith(filePath);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("previews LSP-aware file renames", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "old.ts");
+		const newFilePath = path.join(tmpDir, "new.ts");
+		fs.writeFileSync(filePath, "export const value = 1;\n");
+		(
+			mocked.service as { renameFile: ReturnType<typeof vi.fn> }
+		).renameFile = vi.fn().mockResolvedValue({
+			applied: false,
+			serverIds: ["typescript", "eslint"],
+			willRenameFailures: [],
+			didRenameFailures: [],
+			droppedConflicts: 1,
+			inputEditCount: 2,
+			summary: ["Apply 1 edit(s) to import.ts"],
+		});
+
+		try {
+			const result = await tool.execute(
+				"rename-file-preview",
+				{
+					operation: "rename_file",
+					filePath,
+					newFilePath,
+					apply: false,
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: tmpDir },
+			);
+
+			expect(result.isError).toBeUndefined();
+			expect(
+				(mocked.service as { renameFile: ReturnType<typeof vi.fn> }).renameFile,
+			).toHaveBeenCalledWith(filePath, newFilePath, {
+				cwd: tmpDir,
+				apply: false,
+			});
+			expect(String(result.content[0]?.text)).toContain("typescript");
+			expect(result.details?.resultCount).toBe(1);
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}

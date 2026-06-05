@@ -29,6 +29,11 @@ import type { LSPServerInfo } from "./server.js";
 import { isDirectLspCommandTemporarilyUnavailable } from "./server.js";
 import { getStrategy } from "./server-strategies.js";
 import { raceToCompletion } from "./aggregation.js";
+import {
+	applyWorkspaceEdit,
+	mergeWorkspaceTextEditsByPriority,
+	summarizeWorkspaceEdit,
+} from "./edits.js";
 
 // --- Types ---
 
@@ -119,6 +124,18 @@ export interface LSPCapabilitySnapshot {
 	root: string;
 	operationSupport: LSPOperationSupport;
 	workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
+}
+
+export interface LSPRenameFileResult {
+	applied: boolean;
+	serverIds: string[];
+	willRenameFailures: Array<{ serverId: string; error: string }>;
+	didRenameFailures: Array<{ serverId: string; error: string }>;
+	droppedConflicts: number;
+	inputEditCount: number;
+	summary: string[];
+	descriptions?: string[];
+	files?: string[];
 }
 
 export interface LSPDiagnosticsHealth {
@@ -295,6 +312,34 @@ export class LSPService {
 				}
 			}
 		}
+	}
+
+	private activeClientsForCwd(
+		cwd: string,
+		priorityServerIds: string[] = [],
+	): Array<{ serverId: string; client: LSPClientInfo }> {
+		const normalizedCwd = normalizeMapKey(cwd);
+		const priority = new Map(
+			priorityServerIds.map((serverId, index) => [serverId, index]),
+		);
+		const entries: Array<{ serverId: string; client: LSPClientInfo }> = [];
+		for (const [key, client] of this.state.clients) {
+			if (!client.isAlive()) continue;
+			const separator = key.indexOf(":");
+			const serverId = separator >= 0 ? key.slice(0, separator) : key;
+			const root = normalizeMapKey(client.root);
+			const sameOrNested =
+				root === normalizedCwd ||
+				root.startsWith(`${normalizedCwd}/`) ||
+				normalizedCwd.startsWith(`${root}/`);
+			if (!sameOrNested) continue;
+			entries.push({ serverId, client });
+		}
+		return entries.sort(
+			(a, b) =>
+				(priority.get(a.serverId) ?? Number.MAX_SAFE_INTEGER) -
+				(priority.get(b.serverId) ?? Number.MAX_SAFE_INTEGER),
+		);
 	}
 
 	/**
@@ -1336,6 +1381,93 @@ export class LSPService {
 		);
 		if (!spawned) return null;
 		return spawned.client.rename(filePath, line, character, newName);
+	}
+
+	async renameFile(
+		oldFilePath: string,
+		newFilePath: string,
+		options: { cwd: string; apply?: boolean },
+	): Promise<LSPRenameFileResult> {
+		const cwd = options.cwd;
+		const apply = options.apply ?? false;
+		const priorityServerIds = getServersForFileWithConfig(oldFilePath).map(
+			(server) => server.id,
+		);
+		const activeClients = this.activeClientsForCwd(cwd, priorityServerIds);
+		const willRenameFailures: Array<{ serverId: string; error: string }> = [];
+		const didRenameFailures: Array<{ serverId: string; error: string }> = [];
+
+		const willResults = await Promise.all(
+			activeClients.map(async ({ serverId, client }) => {
+				try {
+					return {
+						serverId,
+						edit: await client.willRenameFiles(oldFilePath, newFilePath),
+					};
+				} catch (err) {
+					willRenameFailures.push({
+						serverId,
+						error: err instanceof Error ? err.message : String(err),
+					});
+					return { serverId, edit: null };
+				}
+			}),
+		);
+
+		const successfulWillResults = willResults.filter(
+			(result) => !willRenameFailures.some((failure) => failure.serverId === result.serverId),
+		);
+		if (activeClients.length > 0 && successfulWillResults.length === 0) {
+			throw new Error(
+				`workspace/willRenameFiles failed for all active LSP servers: ${willRenameFailures.map((failure) => `${failure.serverId}: ${failure.error}`).join("; ")}`,
+			);
+		}
+
+		const merged = mergeWorkspaceTextEditsByPriority(successfulWillResults);
+		const summary = summarizeWorkspaceEdit(merged.edit, cwd);
+		if (!apply) {
+			return {
+				applied: false,
+				serverIds: activeClients.map((entry) => entry.serverId),
+				willRenameFailures,
+				didRenameFailures,
+				droppedConflicts: merged.droppedConflicts,
+				inputEditCount: merged.inputEditCount,
+				summary,
+			};
+		}
+
+		const applied = await applyWorkspaceEdit(merged.edit, cwd);
+		await fs.mkdir(path.dirname(newFilePath), { recursive: true });
+		await fs.rename(oldFilePath, newFilePath);
+		const relOld = path.relative(cwd, oldFilePath).replace(/\\/g, "/") || path.basename(oldFilePath);
+		const relNew = path.relative(cwd, newFilePath).replace(/\\/g, "/") || path.basename(newFilePath);
+		const renameDescription = `Renamed ${relOld} → ${relNew}`;
+
+		await Promise.all(
+			activeClients.map(async ({ serverId, client }) => {
+				try {
+					await client.didRenameFiles(oldFilePath, newFilePath);
+				} catch (err) {
+					didRenameFailures.push({
+						serverId,
+						error: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}),
+		);
+
+		return {
+			applied: true,
+			serverIds: activeClients.map((entry) => entry.serverId),
+			willRenameFailures,
+			didRenameFailures,
+			droppedConflicts: merged.droppedConflicts,
+			inputEditCount: merged.inputEditCount,
+			summary,
+			descriptions: [...applied.descriptions, renameDescription],
+			files: [...new Set([...applied.files, oldFilePath, newFilePath])],
+		};
 	}
 
 	/**
