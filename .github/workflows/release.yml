@@ -68,7 +68,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.meta.outputs.should_release == 'true' && steps.meta.outputs.has_npm_token == 'true'
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Dry-run publish (validates tarball + registry auth)
         if: steps.meta.outputs.should_release == 'true' && steps.meta.outputs.has_npm_token == 'true'

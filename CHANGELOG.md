@@ -8,6 +8,10 @@ All notable changes to pi-lens will be documented in this file.
 
 - **Disable automatic context injection without disabling pi-lens (closes #165)** — a narrow opt-out for the prompt-cache cost of prepending automatic findings. `--no-lens-context` flag, `contextInjection.enabled: false` in `~/.pi-lens/config.json`, `PI_LENS_NO_CONTEXT_INJECTION=1` env, and a runtime `/lens-context-toggle` command. When off, the `context` hook stops prepending session-start guidance / turn-end findings / test findings, but everything else keeps running — tools, LSP, read-guard, formatting, inline tool-result feedback — and findings are still cached so `lens_diagnostics` and `/lens-health` work. Precedence: env → CLI flag → config.
 
+### Fixed
+
+- **Extension updates no longer break with `Cannot find module …` after a failed install** — the committed `package-lock.json` is removed and git-ignored. A committed lockfile that drifted from `package.json` (e.g. the exact `web-tree-sitter` pin recorded as `^0.25.10` in the lock) made `npm ci` delete `node_modules` and then hard-fail on the desync, leaving an empty `node_modules` so the extension failed to load on its first import. Extensions now install via self-healing `npm install`; exact pins in `package.json` still enforce ABI-critical versions. CI/release workflows switched from `npm ci` to `npm install` (and dropped `setup-node`'s `cache: npm`, which requires a lockfile).
+
 ### Changed
 
 - **`lens_diagnostics` mode=all now shows the actual diagnostics, not just counts** — previously it printed `file.ts  3W` with no indication of *what* the warnings were. It now lists each stored diagnostic in the same `L<line>: <message> [rule]` shape as the inline blocker output (blockers first, 🔴-marked), honouring the `severity` filter, with a `… N more not shown` note when a file exceeds the per-file storage cap. `getFileDiagnosticSummaries()` now returns the underlying `WidgetDiagnostic[]` (defensively copied) alongside the counts.
