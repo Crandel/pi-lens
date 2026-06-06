@@ -36,6 +36,16 @@ export interface PiLensGlobalConfig {
 			enabled?: boolean;
 		};
 	};
+	contextInjection?: {
+		/**
+		 * Whether pi-lens prepends automatic findings (session-start guidance,
+		 * turn-end findings, test findings) into the next model turn via the
+		 * `context` hook. Defaults true. Set false to keep tools/LSP/read-guard/
+		 * formatting running while avoiding prompt-cache invalidation from injected
+		 * messages. Findings are still cached for `lens_diagnostics` / `/lens-health`.
+		 */
+		enabled?: boolean;
+	};
 }
 
 export function getPiLensGlobalConfigPath(homeDir = os.homedir()): string {
@@ -77,6 +87,11 @@ export function loadPiLensGlobalConfig(
 			actionableWarningsAutoFixRaw &&
 			typeof actionableWarningsAutoFixRaw === "object"
 				? (actionableWarningsAutoFixRaw as Record<string, unknown>)
+				: undefined;
+		const contextInjectionRaw = raw.contextInjection;
+		const contextInjection =
+			contextInjectionRaw && typeof contextInjectionRaw === "object"
+				? (contextInjectionRaw as Record<string, unknown>)
 				: undefined;
 		const formatMode =
 			format?.mode === "immediate" || format?.mode === "deferred"
@@ -131,6 +146,14 @@ export function loadPiLensGlobalConfig(
 							: undefined,
 					}
 				: undefined,
+			contextInjection: contextInjection
+				? {
+						enabled:
+							typeof contextInjection.enabled === "boolean"
+								? contextInjection.enabled
+								: undefined,
+					}
+				: undefined,
 		};
 	} catch {
 		return undefined;
@@ -147,6 +170,12 @@ export function getGlobalAutoformatEnabled(configPath?: string): boolean {
 
 export function getGlobalImmediateFormatDefault(configPath?: string): boolean {
 	return loadPiLensGlobalConfig(configPath)?.format?.mode === "immediate";
+}
+
+export function getGlobalContextInjectionEnabled(configPath?: string): boolean {
+	return (
+		loadPiLensGlobalConfig(configPath)?.contextInjection?.enabled !== false
+	);
 }
 
 export function resolvePiLensFlag(
@@ -172,6 +201,9 @@ export function resolvePiLensFlag(
 	}
 	if (name === "lens-actionable-warning-all") {
 		return config?.actionableWarnings?.deltaOnly === false;
+	}
+	if (name === "no-lens-context") {
+		return config?.contextInjection?.enabled === false;
 	}
 	return value;
 }

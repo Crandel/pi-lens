@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	getGlobalAutoformatEnabled,
+	getGlobalContextInjectionEnabled,
 	getGlobalImmediateFormatDefault,
 	getGlobalWidgetDefaultVisible,
 	getPiLensGlobalConfigPath,
@@ -132,6 +133,49 @@ describe("global pi-lens config", () => {
 		expect(resolvePiLensFlag("lens-semgrep-config", "p/ci", config)).toBe(
 			"p/ci",
 		);
+	});
+
+	it("parses contextInjection.enabled and resolves the no-lens-context flag", () => {
+		const home = makeTempHome();
+		const configPath = writeConfig(
+			home,
+			JSON.stringify({ contextInjection: { enabled: false } }),
+		);
+
+		expect(loadPiLensGlobalConfig(configPath)).toEqual({
+			contextInjection: { enabled: false },
+		});
+		expect(getGlobalContextInjectionEnabled(configPath)).toBe(false);
+
+		// no-lens-context flag is true (i.e. "disable") when config disables injection
+		expect(
+			resolvePiLensFlag("no-lens-context", false, {
+				contextInjection: { enabled: false },
+			}),
+		).toBe(true);
+		// CLI flag set explicitly wins regardless of config
+		expect(
+			resolvePiLensFlag("no-lens-context", true, {
+				contextInjection: { enabled: true },
+			}),
+		).toBe(true);
+		// config enabled=true (or absent) → flag resolves falsy (injection stays on)
+		expect(
+			resolvePiLensFlag("no-lens-context", false, {
+				contextInjection: { enabled: true },
+			}),
+		).toBe(false);
+		expect(resolvePiLensFlag("no-lens-context", false, {})).toBe(false);
+	});
+
+	it("defaults context injection to enabled when unset", () => {
+		const home = makeTempHome();
+		const configPath = writeConfig(home, JSON.stringify({ widget: {} }));
+		expect(getGlobalContextInjectionEnabled(configPath)).toBe(true);
+		// missing config file → enabled
+		expect(
+			getGlobalContextInjectionEnabled(path.join(home, "nope.json")),
+		).toBe(true);
 	});
 
 	it("parses a positive dispatch.runnerTimeoutFloorMs", () => {

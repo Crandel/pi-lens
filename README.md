@@ -226,6 +226,7 @@ pi
 
 # Optional switches
 pi --no-lens             # Start pi-lens disabled for this session; /lens-toggle can re-enable
+pi --no-lens-context     # Disable automatic context injection only (tools/LSP/read-guard/format stay on); /lens-context-toggle
 pi --no-lsp              # Disable unified LSP diagnostics
 pi --no-autoformat        # Skip auto-formatting entirely
 pi --immediate-format      # Format immediately after each edit instead of deferring to agent_end
@@ -260,11 +261,16 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
       "enabled": false,
       "maxFixes": 5
     }
+  },
+  "contextInjection": {
+    "enabled": false
   }
 }
 ```
 
 `format.mode` can be `"deferred"` (default) or `"immediate"`. Set `format.enabled` to `false` to match `--no-autoformat`. `/lens-widget-toggle` still works as a session-only override.
+
+`contextInjection.enabled` (default `true`) controls whether pi-lens prepends automatic findings — session-start guidance, turn-end findings, and test findings — into the next model turn. Set it to `false` (or use `--no-lens-context` / `PI_LENS_NO_CONTEXT_INJECTION=1` / `/lens-context-toggle`) to keep tools, LSP, read-guard, and formatting running while avoiding the prompt-cache invalidation that injected messages cause in long, cache-sensitive sessions. Findings are still cached, so `lens_diagnostics` and `/lens-health` keep working.
 
 `actionableWarnings.enabled` gates the turn_end report. `includeLspCodeActions` fetches LSP code actions for each warning (requires an active language server). `deltaOnly` (default `true`) limits the report to lines touched in the current turn. `autoFix.enabled` applies conservative LSP quickfixes at `agent_end`; `autoFix.maxFixes` caps the number applied per turn (default `5`).
 
@@ -284,10 +290,15 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 - `PI_LENS_STARTUP_MODE` — `full` | `minimal` | `quick`. Override the
   auto-selected startup path. One-shot `pi --print` sessions auto-use `quick`
   to reduce latency.
+- `PI_LENS_NO_CONTEXT_INJECTION` — set to `1` to disable automatic context
+  injection (equivalent to `--no-lens-context` / `contextInjection.enabled:
+  false`). Tools, LSP, read-guard, and formatting stay active; findings are
+  still cached for `lens_diagnostics` and `/lens-health`.
 
 ## Key Commands
 
 - `/lens-toggle` — toggle pi-lens on/off for the current session without restarting
+- `/lens-context-toggle` — toggle automatic context injection on/off for the session (tools/LSP/read-guard/formatting stay active)
 - `/lens-widget-toggle` — show/hide the pi-lens diagnostics widget below the editor
 - `/lens-booboo` — full quality report for current project state
 - `/lens-health` — runtime health, latency, and diagnostic telemetry

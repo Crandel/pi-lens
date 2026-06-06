@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Disable automatic context injection without disabling pi-lens (closes #165)** — a narrow opt-out for the prompt-cache cost of prepending automatic findings. `--no-lens-context` flag, `contextInjection.enabled: false` in `~/.pi-lens/config.json`, `PI_LENS_NO_CONTEXT_INJECTION=1` env, and a runtime `/lens-context-toggle` command. When off, the `context` hook stops prepending session-start guidance / turn-end findings / test findings, but everything else keeps running — tools, LSP, read-guard, formatting, inline tool-result feedback — and findings are still cached so `lens_diagnostics` and `/lens-health` work. Precedence: env → CLI flag → config.
+
 ### Changed
 
 - **`lens_diagnostics` mode=all now shows the actual diagnostics, not just counts** — previously it printed `file.ts  3W` with no indication of *what* the warnings were. It now lists each stored diagnostic in the same `L<line>: <message> [rule]` shape as the inline blocker output (blockers first, 🔴-marked), honouring the `severity` filter, with a `… N more not shown` note when a file exceeds the per-file storage cap. `getFileDiagnosticSummaries()` now returns the underlying `WidgetDiagnostic[]` (defensively copied) alongside the counts.

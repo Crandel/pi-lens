@@ -456,6 +456,13 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
+	pi.registerFlag("no-lens-context", {
+		description:
+			"Disable automatic context injection (session-start guidance, turn-end & test findings) while keeping tools, LSP, read-guard, and formatting active. Toggle with /lens-context-toggle. Also via contextInjection.enabled=false in config or PI_LENS_NO_CONTEXT_INJECTION=1.",
+		type: "boolean",
+		default: false,
+	});
+
 	const globalConfig = loadPiLensGlobalConfig();
 	const globalConfigOnlyFlags = new Set([
 		"lens-actionable-warnings",
@@ -471,6 +478,12 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	let lensEnabled = !getLensFlag("no-lens");
+	// Automatic context injection (the `context` hook). Independent of lensEnabled
+	// so tools/LSP/read-guard/formatting keep running when it is off. Precedence:
+	// env override → CLI flag → global config (resolved inside getLensFlag).
+	let contextInjectionEnabled =
+		process.env.PI_LENS_NO_CONTEXT_INJECTION !== "1" &&
+		!getLensFlag("no-lens-context");
 	let lensWidgetVisible = globalConfig?.widget?.visible !== false;
 	type LensWidgetTui = { requestRender: () => void };
 	type LensWidgetTheme = { fg: (color: string, s: string) => string };
@@ -526,6 +539,20 @@ export default function (pi: ExtensionAPI) {
 					? "pi-lens enabled for this session."
 					: "pi-lens disabled for this session. Run /lens-toggle again to resume.",
 				lensEnabled ? "info" : "warning",
+			);
+		},
+	});
+
+	pi.registerCommand("lens-context-toggle", {
+		description:
+			"Toggle automatic context injection on/off for the current session (tools/LSP/read-guard/formatting stay active). Usage: /lens-context-toggle",
+		handler: async (_args, ctx) => {
+			contextInjectionEnabled = !contextInjectionEnabled;
+			ctx.ui.notify(
+				contextInjectionEnabled
+					? "pi-lens context injection enabled — findings will be added to the next turn."
+					: "pi-lens context injection disabled — findings are still cached (lens_diagnostics, /lens-health) but not added to model context.",
+				contextInjectionEnabled ? "info" : "warning",
 			);
 		},
 	});
@@ -1922,7 +1949,7 @@ export default function (pi: ExtensionAPI) {
 			event: { messages?: Array<{ role: string; content: unknown }> } | unknown,
 			ctx: { cwd?: string },
 		) => {
-			if (!lensEnabled) return;
+			if (!lensEnabled || !contextInjectionEnabled) return;
 			try {
 				const cwd = ctx.cwd ?? process.cwd();
 				const turnEndFindings = consumeTurnEndFindings(cacheManager, cwd);
