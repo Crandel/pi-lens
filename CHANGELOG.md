@@ -4,13 +4,23 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+## [3.8.50] - 2026-06-07
+
 ### Added
+
+- **Function-level call graph + impact analysis (closes #154)** — a cross-file call graph is built at session-start (ref→def resolution, bidirectional callers/callees, in-degree centrality, ambiguity-discounted edges); at turn-end the symbols a modified file touches surface a `WillBreak`/`MayBreak`/`Review` impact advisory. Backed by `import-facts` extended to JS/JSX/MJS/CJS with dynamic imports, module-type detection and re-export edges, and a `review-graph` whose `MAIN_KINDS`/language mapping spans every WASM-backed grammar.
+
+- **Internal codebase mental model (closes #155)** — a compact structural summary ranked by call-graph in-degree, cached to `<project-data>/cache/codebase-model.json`. Internal-only (a session-start debug line) until validated across real sessions; agent exposure + hybrid ranking are tracked in #162.
+
+- **`lens_diagnostics` tool (closes #159)** — queries pi-lens's cached diagnostic state with no LSP/dispatch re-run. `mode=delta` = the current turn's fixable + code-quality warnings; `mode=all` = every file edited this session.
 
 - **`ast_grep_search` results register as reads so a follow-up edit isn't blocked (refs #169)** — the search→edit flow (find where something must change, then edit those lines) was blocked by the read-guard because the search didn't count as a read. `ast_grep_search` now attaches the shown match locations to its result (`details.searchReads`), and the tool_result handler registers each as a read **± 2 lines** of context via the new `clients/search-read-registration.ts`. Only the shown lines are registered — never the whole file — so editing an unseen region is still guarded. (`lsp_navigation` and bash `grep` are the remaining parts of #169.)
 
 - **Disable automatic context injection without disabling pi-lens (closes #165)** — a narrow opt-out for the prompt-cache cost of prepending automatic findings. `--no-lens-context` flag, `contextInjection.enabled: false` in `~/.pi-lens/config.json`, `PI_LENS_NO_CONTEXT_INJECTION=1` env, and a runtime `/lens-context-toggle` command. When off, the `context` hook stops prepending session-start guidance / turn-end findings / test findings, but everything else keeps running — tools, LSP, read-guard, formatting, inline tool-result feedback — and findings are still cached so `lens_diagnostics` and `/lens-health` work. Precedence: env → CLI flag → config.
 
 ### Fixed
+
+- **Read-guard tracks non-Read file access (closes #168, refs #169)** — bash file views (`cat`/`head`/`tail`/`sed -n`) register as reads with their exact line ranges; bash writes (`>`/`>>`/`tee`/`sed -i`/`cp`/`mv`/`touch`) register as authored-by-agent like the Write tool; search-tool matches register the shown lines ±2 context. So a follow-up edit to something the agent viewed, wrote, or searched is no longer falsely blocked. `grep`/`find`/`ls` are not treated as content reads.
 
 - **`LSP Inactive` footer status no longer rendered in red (closes #167)** — having no LSP server running for the current file (or after the idle timer releases them) is a passive state, not a fault, but it was painted in the `error` (red) color, implying something was broken. It now uses the neutral `dim` (grey) color; `LSP Active (n)` stays green. Surfacing genuine LSP *failures* in red is tracked in #170.
 
@@ -37,36 +47,11 @@ All notable changes to pi-lens will be documented in this file.
 - **`ast_grep_search` raw YAML rule passthrough — `rule` parameter (closes #125 Phase 4)** — passing a complete ast-grep YAML rule bypasses `sg run -p` entirely and routes through `sg scan --config`, unlocking `all`/`any`/`not`, `nthChild`, `regex`, field constraints, and multi-pattern rules. Each path is scanned independently and results are merged. Pagination (`skip`) works the same as the pattern path.
 
 - **`ast_grep_search` and `ast_grep_replace` metavariable captures in output (refs #125)** — named captures (`$VAR`, `$$$ARGS`) from `sg --json=compact` appear below each match. Language field (`[TypeScript]`) surfaced per match.
-
-- **`ast_dump` tool — expose raw tree-sitter AST for pattern debugging (closes #156)** — parses a source snippet with `sg --debug-query=ast|cst` and returns an indented AST tree with 1-indexed line:col positions. Use when `ast_grep_search` returns zero matches and the correct node kind is unknown.
-
-- **`lsp_navigation` symbol-to-column resolution (closes #147)** — omitting `character` and supplying `symbol` resolves the column automatically via word-boundary regex with `symbol#N` occurrence selectors and case-insensitive fallback.
-
-- **`lsp_navigation` `rename_file` operation (closes #148)** — sends `willRenameFiles`, merges workspace edits with primary-server priority and overlap detection, renames on disk, sends `didRenameFiles`.
-
-- **`lsp_navigation` `capabilities` operation (closes #149)** — shows cached server feature map from post-`initialize` state; no LSP round-trip.
-
-- **tree-sitter WASM grammar coverage expanded from 13 to 26 languages (refs #152)** — bash, c_sharp, css, html, json, lua, ocaml, php, swift, toml, vue, yaml, zig added to download script and LANG_MAP. C#, PHP, CSS dispatch rules now active. Read expansion and symbol extraction wired for Java, Kotlin, Dart, Elixir, C, C++, C#, PHP, Swift, Lua, OCaml, Zig, Bash.
-
 - **SgRunner binary resolution extended with platform package and Homebrew fallback (refs #153)** — probes `@ast-grep/cli-{os}-{arch}` npm packages (walking up 5 directory levels) and Homebrew (`brew --prefix ast-grep`) before falling back to auto-install.
-
-- **`ast_grep_search` / `ast_grep_replace` `strictness` parameter** — `smart`/`relaxed`/`ast`/`cst`/`signature`/`template` passed to `sg --strictness`. `relaxed` is the most useful for patterns that miss matches due to optional trailing commas.
-
-- **`ast_grep_search` `skip` pagination** — offsets into large result sets; truncated results include a next-page hint.
 
 - **Read expansion ancestry chain (refs #153)** — `ExpandedRead` now includes `ancestry?: AncestorSymbol[]` (outermost first) so the full structural path is available (e.g. `ReviewManager → runSynthesis`). The session-start debug log now shows the full path instead of just the immediate enclosing symbol.
 
 ### Fixed
-
-- **`ast_grep_replace` stale-preview detection** — re-validates pattern before writing; returns `stalePreview` error if files changed since the preview.
-
-- **`oldtext_not_found` messages distinguish content-drift from indentation mismatch (refs #144)** — states explicitly when indentation autopatch already ran and did not fix it.
-
-- **LSP diagnostics version guard (refs #150)** — `waitForDiagnostics` captures a baseline version before `refreshFile`; only accepts a newer `publishDiagnostics`, preventing stale results from prior edits.
-
-- **Lazy `codeAction/resolve` (refs #150)** — resolves lightweight code action objects before applying; falls back silently if server does not support resolve.
-
-- **Workspace edit ordering and overlap detection (refs #150)** — text edits flushed before resource operations; overlapping edits throw a descriptive error.
 
 - **Windows subprocess encoding (garbled tool output)** — `safeSpawnAsync` prefixes Windows shell commands with `chcp 65001 >nul 2>&1 &&` to force UTF-8 code page, eliminating garbled characters in `sg`/`biome`/`ruff` error messages.
 
