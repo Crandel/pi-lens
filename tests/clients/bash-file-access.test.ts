@@ -133,6 +133,10 @@ describe("extractWrittenPathsFromCommand — bash writes", () => {
 		["touch", (f) => `touch ${f}`],
 		["cp destination", (f) => `cp /other/src.ts ${f}`],
 		["mv destination", (f) => `mv /other/src.ts ${f}`],
+		["git checkout -- <file>", (f) => `git checkout -- ${f}`],
+		["git checkout <ref> -- <file>", (f) => `git checkout HEAD~1 -- ${f}`],
+		["git restore <file>", (f) => `git restore ${f}`],
+		["git restore --staged <file>", (f) => `git restore --staged ${f}`],
 	];
 
 	for (const [label, build] of cases) {
@@ -147,6 +151,17 @@ describe("extractWrittenPathsFromCommand — bash writes", () => {
 		const r = extractWrittenPathsFromCommand(`cp /other/src.ts ${dst}`, tmp);
 		expect(r).toContain(dst);
 		expect(r).not.toContain("/other/src.ts");
+	});
+
+	it("whole-tree / non-content git ops are NOT registered (can't enumerate files)", () => {
+		const f = pathIn("a.ts");
+		// branch switch (no `--`), hard reset, status, diff, add, stash pop
+		expect(extractWrittenPathsFromCommand(`git checkout main`, tmp)).toHaveLength(0);
+		expect(extractWrittenPathsFromCommand(`git reset --hard`, tmp)).toHaveLength(0);
+		expect(extractWrittenPathsFromCommand(`git status`, tmp)).toHaveLength(0);
+		expect(extractWrittenPathsFromCommand(`git diff ${f}`, tmp)).not.toContain(f);
+		expect(extractWrittenPathsFromCommand(`git add ${f}`, tmp)).not.toContain(f);
+		expect(extractWrittenPathsFromCommand(`git stash pop`, tmp)).toHaveLength(0);
 	});
 });
 

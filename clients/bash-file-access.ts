@@ -195,6 +195,24 @@ export function extractWrittenPathsFromCommand(
 		} else if (verb === "cp" || verb === "mv" || verb === "install") {
 			const files = args.filter((a) => !a.startsWith("-"));
 			if (files.length >= 1) add(files[files.length - 1]); // destination
+		} else if (verb === "git") {
+			// git ops that REWRITE working-tree files with explicit paths:
+			//   git checkout [<ref>] -- <files>   git restore [opts] <files>
+			// These restore content but never go through the edit tool, so without
+			// this pi-lens keeps stale diagnostics/fileSeq for the restored file.
+			// Whole-tree ops (reset --hard, stash pop, revert, merge, rebase, pull,
+			// or `git checkout <branch>`) don't name files and aren't handled here.
+			const sub = args[0];
+			if (sub === "checkout" || sub === "restore") {
+				const dashDash = args.indexOf("--");
+				const fileArgs =
+					dashDash >= 0
+						? args.slice(dashDash + 1)
+						: sub === "restore"
+							? args.slice(1).filter((a) => !a.startsWith("-"))
+							: []; // `git checkout` without `--` is ambiguous (ref vs path)
+				for (const a of fileArgs) add(a);
+			}
 		}
 	}
 

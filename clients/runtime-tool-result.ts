@@ -301,20 +301,31 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		: rawFilePath;
 	const behaviorWarnings = agentBehaviorRecord(event.toolName, filePath);
 
-	// Bash writes (redirects, tee, sed -i, cp/mv, touch) — mark the resulting
-	// files authored-by-agent, exactly like the Write tool, so a follow-up edit
-	// is not blocked. noteCreatedFile fired at tool_call; recordWritten here adds
-	// the authoritative writtenThisSession entry and injects the creation read.
+	// Bash writes (redirects, tee, sed -i, cp/mv, touch, git checkout/restore) —
+	// these change file content but never go through the edit tool, so bash
+	// early-returns before the dispatch pipeline below. For each in-project file
+	// the command wrote/restored we therefore: (1) mark it authored-by-agent for
+	// the read-guard (like the Write tool), and (2) re-run the pipeline via a
+	// synthetic `write` event so its diagnostics, fileSeq, and change-log refresh.
+	// Without (2) a `git checkout -- f` restore keeps serving the pre-restore
+	// (e.g. broken-state) warnings on every later lens_diagnostics call.
 	if (
 		event.toolName === "bash" &&
-		!getFlag("no-read-guard") &&
 		typeof (event.input as { command?: unknown }).command === "string"
 	) {
 		const command = (event.input as { command: string }).command;
-		for (const wp of extractWrittenPathsFromCommand(command, workspaceRoot)) {
-			if (isExternalOrVendorFile(wp, workspaceRoot)) continue;
-			if (isPathIgnoredByProject(wp, workspaceRoot, false)) continue;
-			deps.readGuard?.recordWritten(wp);
+		const written = extractWrittenPathsFromCommand(command, workspaceRoot).filter(
+			(wp) =>
+				!isExternalOrVendorFile(wp, workspaceRoot) &&
+				!isPathIgnoredByProject(wp, workspaceRoot, false),
+		);
+		for (const wp of written) {
+			if (!getFlag("no-read-guard")) deps.readGuard?.recordWritten(wp);
+			await handleToolResult({
+				...deps,
+				event: { ...event, toolName: "write", input: { path: wp } },
+				_bypassDebounce: true,
+			});
 		}
 	}
 

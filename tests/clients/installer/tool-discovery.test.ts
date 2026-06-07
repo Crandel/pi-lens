@@ -215,7 +215,7 @@ describe("ensureTool force-reinstall", () => {
 		// installTool fails (no GitHub API mock) → undefined
 		// Key: NOT returning the stale "/fake/stale/rust-analyzer" from cache
 		expect(result).not.toBe(stalePath);
-	});
+	}, 30000); // installTool makes a real GitHub-API fetch (own 5-10s timeouts) — 5s default is too tight under CI
 
 	it("skips cache layers and reaches installTool", async () => {
 		// Pre-populate probe cache with a stale PATH entry
@@ -239,5 +239,5 @@ describe("ensureTool force-reinstall", () => {
 
 		expect(result).not.toBe("/fake/cached/rust-analyzer");
 		expect(spawnCalls.length).toBeGreaterThan(0);
-	});
+	}, 30000); // installTool makes a real GitHub-API fetch (own 5-10s timeouts) — 5s default is too tight under CI
 });
