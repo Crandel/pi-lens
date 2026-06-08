@@ -25,7 +25,17 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 			get: (_target, prop) =>
 				typeof prop === "string" ? mock.handlers.get(prop) : undefined,
 		}),
-		commands: { get: (name: string) => mock.getCommand(name) },
+		commands: {
+			// Legacy call sites invoke handlers as `handler(event, ctx)` with loose
+			// args; expose that signature (the adapter is the compatibility layer).
+			get: (name: string) =>
+				mock.getCommand(name) as
+					| {
+							handler?: (args: unknown, ctx: unknown) => unknown;
+							description?: string;
+					  }
+					| undefined,
+		},
 		tools: mock.tools,
 		async trigger(event: string, ev: unknown, ctx: unknown = {}) {
 			const results: unknown[] = [];
