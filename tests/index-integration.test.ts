@@ -3,7 +3,39 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../clients/cache-manager.js";
-import { createMockPi } from "./support/mock-pi.js";
+import { createPiMock } from "./support/pi-mock.js";
+
+// This suite predates the consolidated harness and is written against the
+// legacy `{ pi, handlers, commands }` shape. Adapt the canonical createPiMock
+// to that shape so there is a single mock recorder (the old tests/support/
+// mock-pi.ts is removed), and preserve the default flags these tests assume.
+// Call sites can move to the native createPiMock API (getHandlers/emit)
+// opportunistically (#171).
+type IntegrationHook = (event: unknown, ctx: unknown) => unknown;
+function createMockPi(overrides: Record<string, boolean> = {}) {
+	const mock = createPiMock({
+		"lens-lsp": true,
+		"no-lsp": false,
+		"lens-guard": false,
+		...overrides,
+	});
+	return {
+		pi: mock.asExtensionAPI(),
+		handlers: new Proxy({} as Record<string, IntegrationHook[]>, {
+			get: (_target, prop) =>
+				typeof prop === "string" ? mock.handlers.get(prop) : undefined,
+		}),
+		commands: { get: (name: string) => mock.getCommand(name) },
+		tools: mock.tools,
+		async trigger(event: string, ev: unknown, ctx: unknown = {}) {
+			const results: unknown[] = [];
+			for (const handler of mock.getHandlers(event)) {
+				results.push(await handler(ev, ctx));
+			}
+			return results;
+		},
+	};
+}
 
 // Mock read-guard for integration tests to avoid dynamic require issues
 vi.mock("../clients/read-guard.js", () => ({
