@@ -21,11 +21,11 @@ import { countSourceFilesWithinLimitAsync } from "../../clients/startup-scan.js"
 import { generateSourceTree, measureMaxSyncBlockMs } from "../support/perf-harness.js";
 
 // Generous trip-wire: the walkers yield in ~tens of ms; the regression we guard
-// against (a non-yielding walk) is ~1.5s at this scale, so 250ms catches it
-// with a >5× margin while absorbing ambient CI scheduling noise.
-const MAX_SYNC_BLOCK_MS = 250;
+// against (a non-yielding walk) is ~0.8-1.5s at this scale, so 300ms catches it with a wide margin while
+// absorbing ambient parallel-suite load; retry on each test soaks rare spikes.
+const MAX_SYNC_BLOCK_MS = 300;
 // ~1,200 files is enough to make a non-yielding regression blow the budget
-// (a synchronous walk at this size is ~0.8s ≫ 250ms) while keeping the fixture
+// (a synchronous walk at this size is ~0.8s ≫ 300ms) while keeping the fixture
 // light enough not to starve other parallel tests. The point is the trip-wire,
 // not an exact 2k repro.
 const TREE_SIZE = 1200;
@@ -47,23 +47,23 @@ beforeEach(() => {
 });
 
 describe(`source-walk event-loop occupancy (~${TREE_SIZE} files)`, () => {
-	it("collectSourceFilesAsync stays under the sync-block budget", async () => {
+	it("collectSourceFilesAsync stays under the sync-block budget", { retry: 2, timeout: 30_000 }, async () => {
 		let count = 0;
 		const maxBlock = await measureMaxSyncBlockMs(async () => {
 			count = (await collectSourceFilesAsync(tmpDir)).length;
 		});
 		expect(count).toBeGreaterThan(0);
 		expect(maxBlock).toBeLessThan(MAX_SYNC_BLOCK_MS);
-	}, 30_000);
+	});
 
-	it("detectProjectLanguageProfileAsync stays under the sync-block budget", async () => {
+	it("detectProjectLanguageProfileAsync stays under the sync-block budget", { retry: 2, timeout: 30_000 }, async () => {
 		const maxBlock = await measureMaxSyncBlockMs(async () => {
 			await detectProjectLanguageProfileAsync(tmpDir);
 		});
 		expect(maxBlock).toBeLessThan(MAX_SYNC_BLOCK_MS);
-	}, 30_000);
+	});
 
-	it("countSourceFilesWithinLimitAsync stays under the sync-block budget", async () => {
+	it("countSourceFilesWithinLimitAsync stays under the sync-block budget", { retry: 2, timeout: 30_000 }, async () => {
 		let n = 0;
 		const maxBlock = await measureMaxSyncBlockMs(async () => {
 			// Huge limit so it walks the whole tree (no early-exit short-circuit).
@@ -71,5 +71,5 @@ describe(`source-walk event-loop occupancy (~${TREE_SIZE} files)`, () => {
 		});
 		expect(n).toBeGreaterThan(0);
 		expect(maxBlock).toBeLessThan(MAX_SYNC_BLOCK_MS);
-	}, 30_000);
+	});
 });

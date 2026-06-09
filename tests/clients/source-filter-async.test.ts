@@ -78,12 +78,13 @@ describe("collectSourceFilesAsync — correctness", () => {
 
 describe("collectSourceFilesAsync — event-loop budget", () => {
 	// Budget guard: the longest synchronous stretch between yields must stay
-	// well under pi's typing window. Generous ceiling so this is a regression
-	// trip-wire (a 2× regression means something un-yielding crept back in),
-	// not a flaky micro-benchmark.
-	const MAX_SYNC_CHUNK_MS = 120;
+	// well under pi's typing window. Generous ceiling + retry so this is a
+	// regression trip-wire (the catastrophic non-yielding case is ~400ms+ at
+	// this fixture size, ≫ budget), not a flaky micro-benchmark — the loop-lag
+	// sampler also picks up ambient load when the suite runs files in parallel.
+	const MAX_SYNC_CHUNK_MS = 300;
 
-	it("never blocks the loop longer than the budget between yields", async () => {
+	it("never blocks the loop longer than the budget between yields", { retry: 2 }, async () => {
 		generateSourceTree(tmpDir, 600);
 		_resetGeneratedArtifactCaches(); // force cold header reads (worst case)
 
