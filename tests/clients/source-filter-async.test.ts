@@ -25,50 +25,12 @@ import {
 	collectSourceFiles,
 	collectSourceFilesAsync,
 } from "../../clients/source-filter.js";
+import {
+	generateSourceTree,
+	measureMaxSyncBlockMs,
+} from "../support/perf-harness.js";
 
 let tmpDir: string;
-
-/** Build a nested tree of `target` source files plus ignored noise. */
-function buildFixture(root: string, target: number): number {
-	fs.mkdirSync(root, { recursive: true });
-	fs.writeFileSync(
-		path.join(root, ".gitignore"),
-		"node_modules/\ndist/\n*.log\nbuild/\n",
-	);
-	// .git marker so the gitignore root resolves to `root`.
-	fs.writeFileSync(path.join(root, ".git"), "");
-	const exts = [".ts", ".ts", ".js", ".py", ".tsx"];
-	let made = 0;
-	const mk = (dir: string, depth: number): void => {
-		fs.mkdirSync(dir, { recursive: true });
-		const here = depth >= 2 ? 6 : 3;
-		for (let i = 0; i < here && made < target; i++) {
-			const ext = exts[made % exts.length];
-			fs.writeFileSync(
-				path.join(dir, `file${i}${ext}`),
-				`export const x${i} = ${i};\n`,
-			);
-			made++;
-			// A shadowed .js next to a .ts must be filtered as a build artifact.
-			if (ext === ".ts" && i % 2 === 0) {
-				fs.writeFileSync(path.join(dir, `file${i}.js`), `var x=${i};`);
-			}
-		}
-		if (depth < 4 && made < target) {
-			for (let d = 0; d < 3 && made < target; d++) {
-				mk(path.join(dir, `sub${d}`), depth + 1);
-			}
-		}
-	};
-	mk(path.join(root, "src"), 0);
-	mk(path.join(root, "lib"), 0);
-	// Ignored noise that must never appear in the result.
-	const nm = path.join(root, "node_modules", "pkg");
-	fs.mkdirSync(nm, { recursive: true });
-	for (let i = 0; i < 50; i++)
-		fs.writeFileSync(path.join(nm, `m${i}.js`), "module.exports=1");
-	return made;
-}
 
 beforeEach(() => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sf-async-"));
@@ -82,7 +44,7 @@ afterEach(() => {
 
 describe("collectSourceFilesAsync — correctness", () => {
 	it("returns the same file set as the synchronous collector", async () => {
-		buildFixture(tmpDir, 200);
+		generateSourceTree(tmpDir, 200);
 		const sync = collectSourceFiles(tmpDir);
 		_resetGeneratedArtifactCaches();
 		const async = await collectSourceFilesAsync(tmpDir);
@@ -92,7 +54,7 @@ describe("collectSourceFilesAsync — correctness", () => {
 	});
 
 	it("filters build artifacts and ignored dirs identically", async () => {
-		buildFixture(tmpDir, 120);
+		generateSourceTree(tmpDir, 120);
 		const result = await collectSourceFilesAsync(tmpDir);
 		// No shadowed .js (a .ts sibling exists), no node_modules.
 		expect(result.some((f) => f.includes("node_modules"))).toBe(false);
@@ -104,7 +66,7 @@ describe("collectSourceFilesAsync — correctness", () => {
 	});
 
 	it("respects the extensions option the same way as sync", async () => {
-		buildFixture(tmpDir, 150);
+		generateSourceTree(tmpDir, 150);
 		const opts = { extensions: [".py"] };
 		const sync = collectSourceFiles(tmpDir, opts);
 		_resetGeneratedArtifactCaches();
@@ -122,40 +84,25 @@ describe("collectSourceFilesAsync — event-loop budget", () => {
 	const MAX_SYNC_CHUNK_MS = 120;
 
 	it("never blocks the loop longer than the budget between yields", async () => {
-		buildFixture(tmpDir, 600);
+		generateSourceTree(tmpDir, 600);
 		_resetGeneratedArtifactCaches(); // force cold header reads (worst case)
 
-		let maxChunk = 0;
-		let last = process.hrtime.bigint();
-		const orig = global.setImmediate;
-		// Wrap setImmediate to measure the synchronous gap between successive
-		// yields performed by the collector.
-		(global as { setImmediate: typeof setImmediate }).setImmediate = ((
-			cb: () => void,
-		) =>
-			orig(() => {
-				const now = process.hrtime.bigint();
-				const d = Number(now - last) / 1e6;
-				if (d > maxChunk) maxChunk = d;
-				last = process.hrtime.bigint();
-				cb();
-			})) as unknown as typeof setImmediate;
-
-		try {
-			last = process.hrtime.bigint();
+		// Independent loop-lag sampler (perf-harness): unlike wrapping the
+		// collector's own setImmediate, this still catches a regression that
+		// stops yielding entirely (the catastrophic case) — that would surface
+		// as one large block, not a missed measurement.
+		const maxBlock = await measureMaxSyncBlockMs(async () => {
 			const files = await collectSourceFilesAsync(tmpDir, { yieldEvery: 50 });
 			expect(files.length).toBeGreaterThan(0);
-		} finally {
-			(global as { setImmediate: typeof setImmediate }).setImmediate = orig;
-		}
+		});
 
-		expect(maxChunk).toBeLessThan(MAX_SYNC_CHUNK_MS);
+		expect(maxBlock).toBeLessThan(MAX_SYNC_CHUNK_MS);
 	});
 });
 
 describe("generated-header read memo", () => {
 	it("reuses the header verdict on a repeat scan of unchanged files", async () => {
-		buildFixture(tmpDir, 400);
+		generateSourceTree(tmpDir, 400);
 
 		// Cold scan: every kept file pays the 4 KB header read.
 		_resetGeneratedArtifactCaches();
@@ -176,7 +123,7 @@ describe("generated-header read memo", () => {
 	});
 
 	it("re-reads the header after a file is modified (memo self-invalidates)", async () => {
-		buildFixture(tmpDir, 60);
+		generateSourceTree(tmpDir, 60);
 		_resetGeneratedArtifactCaches();
 
 		// First scan keeps a plain source file.

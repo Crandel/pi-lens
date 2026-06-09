@@ -179,7 +179,8 @@ pi-lens's lifecycle hooks (`session_start`, `tool_call`, `tool_result`, `context
 - **Per-file / per-event work must be O(1) amortized** — memoize expensive derivations keyed by an invalidation signal (`.gitignore` mtime, `fileSeq`, content hash); never recompute-from-scratch on repeat (e.g. `ignoreMatcher.isIgnored` was recomputed per file per scan — now memoized).
 - **Expensive scans run once, cache (process memo + disk), reuse across sessions/turns.** Cold start does the minimum (forced "quick" mode), then a deferred background warmup fills caches.
 - **No `readdirSync`/`statSync`/`readFileSync` or regex-over-all-files on a hook path** unless bounded and yielding.
-- **Measure, don't guess:** `~/.pi-lens/latency.log` logs per-phase/`tool_result` durations + `session_start total`; `npm run logs:smells`. Validate on a real ≥1500-file repo. Add a budget-guard test in the style of `tests/clients/startup-overhead.test.ts` for any hot path you touch. PR #188 is the worked template.
+- **Measure, don't guess:** `~/.pi-lens/latency.log` logs per-phase/`tool_result` durations + `session_start total`; `npm run logs:smells`. PR #188 is the worked template.
+- **Guard occupancy, not duration, at scale (#192):** use `tests/support/perf-harness.ts` — `measureMaxSyncBlockMs(work)` measures the longest synchronous stretch the work held the event loop (an independent loop-lag sampler, so it catches a *fully non-yielding* regression, which a duration timer or wrapping the code's own `setImmediate` would miss), and `generateSourceTree(dir, n)` builds a scaled fixture (the burst is O(files) and hides at pi-lens's ~300). New hot-path budget guards (see `tests/clients/source-walk-occupancy.test.ts`) assert `measureMaxSyncBlockMs(...) < ~250ms` on a ~1k+ fixture. Keep the fixture light enough not to starve the parallel suite.
 
 ## Internal edit substrate direction
 
