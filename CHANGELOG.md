@@ -16,6 +16,14 @@ All notable changes to pi-lens will be documented in this file.
 
 - **Skills resolve under the moved entry** — unlike pi-lens's own assets, pi resolves a package's `pi.skills` relative to the **extension entry's directory**. Once the entry moved to `./dist/index.js`, `pi.skills: ["./skills"]` pointed at `dist/skills` (which didn't exist) and pi warned `[Skill conflicts] … skill path does not exist`. The build now copies `skills/` into `dist/skills`, keeping the entry and its declared resources together; guarded by `tests/packaging.test.ts` and a CI tarball check that `dist/skills/` ships.
 
+- **`ast_grep_replace` apply no longer falsely reports "no matches" on a successful replacement (closes #178)** — the apply path counted matches *after* writing the fix, so any content-changing replacement reported `[APPLIED] No changes made (no matches found)` despite succeeding, misleading agents into thinking the edit failed. Both replace paths (pattern and rule) now report the **pre-apply** match count, and the apply-zero display message is unambiguous (`[NOT APPLIED] No matches found …`).
+
+- **Reliable alphabetical sort of project-diagnostic sources** — `[...sources].sort()` relied on default UTF-16 ordering, which SonarCloud flags as unreliable (`typescript:S2871`); now uses an explicit `String.localeCompare` comparator.
+
+- **`session_start` no longer freezes TUI input on cold boot / `/new` (closes #188)** — the synchronous `session_start` walks (scan-context, language profile, todo / call-graph scheduling) ran O(N) without yielding, starving the stdin macrotask queue for 3–6s on large projects. Fixed with an `ignoreMatcher` path-memo (mtime-invalidated), process-lifetime memos for scan-context and language-profile, async chunked-yield walk variants, background scans deferred past the typing window, a per-file chunked todo scan, and a cold-start forced-quick + delayed-warmup. `session_start` total drops from 3000–6000ms to ~3ms on a 1832-file project. Env knobs: `PI_LENS_COLD_START_QUICK`, `PI_LENS_WARMUP_DELAY_MS`, `PI_LENS_STARTUP_MODE`. Together with #182 this fixes both halves of startup latency (jiti transpile + scan). Thanks @amit-gshe.
+
+## [3.8.50] - 2026-06-07
+
 ### Added
 
 - **Function-level call graph + impact analysis (closes #154)** — a cross-file call graph is built at session-start (ref→def resolution, bidirectional callers/callees, in-degree centrality, ambiguity-discounted edges); at turn-end the symbols a modified file touches surface a `WillBreak`/`MayBreak`/`Review` impact advisory. Backed by `import-facts` extended to JS/JSX/MJS/CJS with dynamic imports, module-type detection and re-export edges, and a `review-graph` whose `MAIN_KINDS`/language mapping spans every WASM-backed grammar.
