@@ -19,7 +19,8 @@
  */
 
 import * as path from "node:path";
-import { analyzeFile, type McpAnalyzeResult } from "../clients/mcp/analyze.js";
+import type { McpAnalyzeResult } from "../clients/mcp/analyze.js";
+import { requestWarmAnalyze } from "../clients/mcp/ipc.js";
 
 console.log = (...args: unknown[]) => console.error(...args);
 
@@ -80,14 +81,19 @@ async function main(): Promise<void> {
 	const { file, cwd } = await resolveTarget();
 	if (!file) process.exit(0); // nothing to analyze — stay silent
 
-	const result = await analyzeFile(file, cwd, {
-		// Fast path by default; --lsp opts into the (slow, cold) type-check.
-		flags: withLsp ? {} : { "no-lsp": true },
-		record: false,
-		// This IS the edit-detection path (PostToolUse) — mark the file so a later
-		// pilens_turn_end picks it up.
-		registerTurnState: true,
-	});
+	// Warm path first: if the MCP server is up for this workspace, it analyzes in
+	// its warm process (LSP-COMPLETE) and we never load the dispatch graph here.
+	// Falls back to a cold, no-LSP local run when no server is reachable.
+	let result = await requestWarmAnalyze(cwd, file);
+	if (!result) {
+		const { analyzeFile } = await import("../clients/mcp/analyze.js");
+		result = await analyzeFile(file, cwd, {
+			flags: withLsp ? {} : { "no-lsp": true },
+			record: false,
+			// Edit-detection path (PostToolUse) — mark the file for pilens_turn_end.
+			registerTurnState: true,
+		});
+	}
 
 	if (result.counts.diagnostics === 0) process.exit(0); // clean → no noise
 

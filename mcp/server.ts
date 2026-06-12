@@ -20,9 +20,11 @@
  */
 
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CacheManager } from "../clients/cache-manager.js";
+import { ipcPathForCwd, type WarmAnalyzeRequest } from "../clients/mcp/ipc.js";
 import { analyzeFile, type McpAnalyzeResult } from "../clients/mcp/analyze.js";
 import {
 	analyzeFileFresh,
@@ -121,6 +123,76 @@ function maybeAutoSessionStart(): void {
 		.catch((err) =>
 			console.error(`[pi-lens-mcp] auto session_start failed: ${err}`),
 		);
+}
+
+// --- Warm side-channel (server side) ----------------------------------------
+// A local IPC endpoint the PostToolUse-hook bin connects to, so inline feedback
+// runs in THIS warm process (LSP-complete) instead of a cold hook process.
+// Responses go over the socket — never stdout — so the MCP stream is untouched.
+
+const IPC_PATH = ipcPathForCwd(DEFAULT_CWD);
+
+function startIpcServer(): void {
+	// POSIX: a stale socket file blocks listen; remove it first. (Named pipes on
+	// Windows don't need this.)
+	if (process.platform !== "win32") {
+		try {
+			fs.unlinkSync(IPC_PATH);
+		} catch {
+			// no stale socket — fine
+		}
+	}
+
+	const ipc = net.createServer((socket) => {
+		socket.setEncoding("utf8");
+		let buffer = "";
+		socket.on("data", (chunk: string) => {
+			buffer += chunk;
+			const newline = buffer.indexOf("\n");
+			if (newline === -1) return;
+			const line = buffer.slice(0, newline);
+			void (async () => {
+				try {
+					const req = JSON.parse(line) as WarmAnalyzeRequest;
+					console.error(`[pi-lens-mcp] warm analyze: ${req.file}`);
+					// Warm = full LSP + an edit-detection path (register turn-state).
+					const result = await analyzeFile(req.file, req.cwd, {
+						registerTurnState: true,
+					});
+					socket.end(`${JSON.stringify({ result })}\n`);
+				} catch (err) {
+					socket.end(`${JSON.stringify({ error: String(err) })}\n`);
+				}
+			})();
+		});
+		socket.on("error", () => socket.destroy());
+	});
+
+	ipc.on("error", (err) => {
+		// Listener failure must not take down the MCP server — warm channel is an
+		// optimization; the hook falls back to cold analysis.
+		console.error(`[pi-lens-mcp] IPC listener unavailable: ${err}`);
+	});
+
+	ipc.listen(IPC_PATH, () => {
+		console.error(`[pi-lens-mcp] warm side-channel listening at ${IPC_PATH}`);
+	});
+
+	const cleanup = () => {
+		try {
+			ipc.close();
+		} catch {
+			// ignore
+		}
+		if (process.platform !== "win32") {
+			try {
+				fs.unlinkSync(IPC_PATH);
+			} catch {
+				// ignore
+			}
+		}
+	};
+	process.on("exit", cleanup);
 }
 
 // --- JSON-RPC plumbing -------------------------------------------------------
@@ -670,4 +742,5 @@ process.stdin.on("data", (chunk: string) => {
 });
 process.stdin.on("end", () => process.exit(0));
 
+startIpcServer();
 console.error(`[pi-lens-mcp] ready (cwd=${DEFAULT_CWD})`);
