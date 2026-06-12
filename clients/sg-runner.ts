@@ -9,10 +9,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	getSgCommand,
-	isSgAvailable,
-} from "./dispatch/runners/utils/runner-helpers.js";
+import { getSgCommand } from "./dispatch/runners/utils/runner-helpers.js";
 import { getProjectIgnoreGlobs } from "./file-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
@@ -259,17 +256,6 @@ export class SgRunner {
 			// brew not installed or timed out
 		}
 		return undefined;
-	}
-
-	/**
-	 * Check if ast-grep CLI is available (legacy sync method)
-	 * Prefer ensureAvailable() for auto-install behavior
-	 */
-	isAvailable(): boolean {
-		if (this.available !== null) return this.available;
-
-		this.available = isSgAvailable();
-		return this.available;
 	}
 
 	private isAstGrepVersionOutput(output: string): boolean {

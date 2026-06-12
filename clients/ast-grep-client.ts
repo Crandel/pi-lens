@@ -79,7 +79,6 @@ function formatDebugAst(tree: string, source: string): string {
 }
 
 export class AstGrepClient {
-	private available: boolean | null = null;
 	private ruleDir: string;
 	private log: (msg: string) => void;
 	private ruleManager: AstGrepRuleManager;
@@ -172,19 +171,6 @@ export class AstGrepClient {
 			}
 		}
 		return { matches: allMatches, totalMatches: allMatches.length };
-	}
-
-	/**
-	 * Check if ast-grep CLI is available (legacy sync method)
-	 * Prefer ensureAvailable() for auto-install behavior
-	 */
-	isAvailable(): boolean {
-		if (this.available !== null) return this.available;
-		this.available = this.runner.isAvailable();
-		if (this.available) {
-			this.log("ast-grep available");
-		}
-		return this.available;
 	}
 
 	/**
@@ -364,7 +350,7 @@ export class AstGrepClient {
 		ruleYaml: string,
 		timeout = 30000,
 	): Promise<AstGrepMatch[]> {
-		if (!this.isAvailable()) return [];
+		if (!(await this.ensureAvailable())) return [];
 		return this.runner.tempScanAsync(dir, ruleId, ruleYaml, timeout);
 	}
 

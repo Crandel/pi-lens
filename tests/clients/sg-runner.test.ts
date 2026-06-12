@@ -5,14 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
-const isSgAvailable = vi.fn();
 const getSgCommand = vi.fn();
 const ensureTool = vi.fn();
 
 vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
 vi.mock("../../clients/installer/index.js", () => ({ ensureTool }));
 vi.mock("../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	isSgAvailable,
 	getSgCommand,
 }));
 
@@ -31,32 +29,8 @@ describe("SgRunner", () => {
 			stderr: "",
 			error: undefined,
 		});
-		isSgAvailable.mockReturnValue(false);
 		getSgCommand.mockReturnValue({ cmd: "ast-grep", args: [] });
 		ensureTool.mockResolvedValue(null);
-	});
-
-	describe("isAvailable()", () => {
-		it("returns false when isSgAvailable returns false", async () => {
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			expect(runner.isAvailable()).toBe(false);
-		});
-
-		it("returns true when isSgAvailable returns true", async () => {
-			isSgAvailable.mockReturnValue(true);
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			expect(runner.isAvailable()).toBe(true);
-		});
-
-		it("caches the result on second call", async () => {
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			runner.isAvailable();
-			runner.isAvailable();
-			expect(isSgAvailable).toHaveBeenCalledTimes(1);
-		});
 	});
 
 	describe("ensureAvailable()", () => {
