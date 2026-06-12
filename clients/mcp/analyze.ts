@@ -12,13 +12,28 @@
  * + perf impact first-hand rather than inferring it from pasted logs.
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	dispatchLintWithResult,
 	getLatencyReports,
 } from "../dispatch/integration.js";
 import type { Diagnostic } from "../dispatch/types.js";
+import { getDiagnosticTracker } from "../diagnostic-tracker.js";
+import { getLSPService } from "../lsp/index.js";
+import { recordDiagnostics } from "../widget-state.js";
 import { createMcpHost } from "./host-shim.js";
+
+// Generous warm-up budgets: a cold language server needs to spawn AND publish
+// diagnostics. The per-edit dispatch runner caps these tightly (spawn budget +
+// 2500ms) for latency; a review tool prioritises completeness, so we pre-warm
+// with room to spare, then the measured dispatch reads the warm cache.
+// Bounded so a cold analysis can't hang: enough for fast servers (pyright,
+// rust-analyzer, gopls) and a warm typescript-language-server, but NOT enough to
+// fully load a large TS project from cold — that exceeds any per-call budget and
+// is the persistent warm server's job (see the `lsp` honesty signal + Tier 2).
+const WARMUP_CLIENT_WAIT_MS = 10_000;
+const WARMUP_DIAGNOSTICS_WAIT_MS = 6_000;
 
 /** One diagnostic, flattened to the fields an MCP consumer needs. */
 export interface McpAnalyzeDiagnostic {
@@ -56,6 +71,19 @@ export interface McpAnalyzeResult {
 		fixed: number;
 	};
 	diagnostics: McpAnalyzeDiagnostic[];
+	/**
+	 * The LSP runner's outcome, surfaced explicitly so a cold/indexing server's
+	 * `0 diagnostics` is never silently mistaken for "clean". On a large project a
+	 * cold language server can take longer to load than any per-call warm-up, so
+	 * `ran` + `status` + `durationMs` let the consumer judge completeness (and
+	 * prefer warm mode / a re-run once the persistent server has indexed).
+	 */
+	lsp?: {
+		ran: boolean;
+		status: string;
+		diagnosticCount: number;
+		durationMs: number;
+	};
 	/** The dispatch latency report for this run (latency.log schema), if captured. */
 	latency?: {
 		totalDurationMs: number;
@@ -67,6 +95,23 @@ export interface McpAnalyzeResult {
 export interface AnalyzeFileOptions {
 	/** Per-call flag overrides for the host shim (e.g. `{ "no-lsp": true }`). */
 	flags?: Record<string, boolean | string | undefined>;
+	/**
+	 * Only run blocking (error-level) rules — pi's fast on-write path. Default
+	 * false: a review wants the full picture (warnings + structural smells).
+	 */
+	blockingOnly?: boolean;
+	/**
+	 * Pre-warm the LSP (spawn + wait for published diagnostics) before the
+	 * measured dispatch, so a cold server doesn't make the run report 0 LSP
+	 * diagnostics. Default true; the `fresh` worker relies on it (always cold).
+	 */
+	warmLsp?: boolean;
+	/**
+	 * Record results into the session widget-state + diagnostic tracker so the
+	 * query tools (`pilens_diagnostics`, `pilens_health`) reflect this analysis.
+	 * Default true; harmless (and discarded) in the short-lived `fresh` worker.
+	 */
+	record?: boolean;
 }
 
 function toMcpDiagnostic(diagnostic: Diagnostic): McpAnalyzeDiagnostic {
@@ -85,7 +130,45 @@ function toMcpDiagnostic(diagnostic: Diagnostic): McpAnalyzeDiagnostic {
 }
 
 /**
- * Run the per-edit pipeline on `filePath` and return a structured result.
+ * Pre-warm the LSP for a file: spawn the server and wait for it to publish
+ * diagnostics, so the subsequent dispatch reads a warm cache instead of a cold
+ * (empty) one. Best-effort — failures never block the analysis.
+ */
+async function warmLspForFile(
+	absPath: string,
+	host: ReturnType<typeof createMcpHost>,
+): Promise<void> {
+	if (host.getFlag("no-lsp")) return;
+	const lspService = getLSPService();
+	if (!lspService.supportsLSP(absPath)) return;
+	let content: string;
+	try {
+		content = fs.readFileSync(absPath, "utf8");
+	} catch {
+		return;
+	}
+	try {
+		await lspService.touchFile(absPath, content, {
+			diagnostics: "document",
+			collectDiagnostics: true,
+			clientScope: "primary",
+			maxClientWaitMs: WARMUP_CLIENT_WAIT_MS,
+			maxDiagnosticsWaitMs: WARMUP_DIAGNOSTICS_WAIT_MS,
+			source: "mcp-warmup",
+		});
+	} catch {
+		// Best-effort warm-up; the dispatch runner still tries on its own.
+	}
+}
+
+/**
+ * Run the dispatch pipeline on `filePath` and return a structured result.
+ *
+ * Unlike pi's per-edit path this defaults to the *full* analysis (warnings +
+ * structural smells, not just blocking errors), pre-warms the LSP so a cold
+ * server doesn't under-report, records into the session diagnostic state so the
+ * query tools compose, and runs delta-free so a repeated analysis of an
+ * unchanged file is a consistent full snapshot rather than "new issues only".
  *
  * The latency report is matched against the dispatches appended *during this
  * call* (we snapshot the report count first), so concurrent callers don't pick
@@ -99,12 +182,29 @@ export async function analyzeFile(
 	const absPath = path.isAbsolute(filePath)
 		? filePath
 		: path.resolve(cwd, filePath);
-	const host = createMcpHost(options.flags);
+	// no-delta by default → a full snapshot every call (not delta-filtered);
+	// caller flags win over the default.
+	const host = createMcpHost({ "no-delta": true, ...(options.flags ?? {}) });
+
+	if (options.warmLsp !== false) {
+		await warmLspForFile(absPath, host);
+	}
 
 	const reportsBefore = getLatencyReports().length;
 	const start = Date.now();
-	const result = await dispatchLintWithResult(absPath, cwd, host);
+	const result = await dispatchLintWithResult(absPath, cwd, host, undefined, undefined, {
+		blockingOnly: options.blockingOnly ?? false,
+	});
 	const durationMs = Date.now() - start;
+
+	if (options.record !== false) {
+		// Mirror pipeline.ts's recording so pilens_diagnostics (mode=all) and
+		// pilens_health see what this analysis found.
+		recordDiagnostics(absPath, result.diagnostics);
+		if (result.diagnostics.length > 0) {
+			getDiagnosticTracker().trackShown(result.diagnostics);
+		}
+	}
 
 	// dispatchForFile appended a latency report during the call above. Match the
 	// newly-added report for this exact path; fall back to the most recent new
@@ -113,6 +213,20 @@ export async function analyzeFile(
 	const latencyReport =
 		newReports.find((report) => path.resolve(report.filePath) === absPath) ??
 		newReports[newReports.length - 1];
+
+	const lspRunner = latencyReport?.runners.find(
+		(runner) => runner.runnerId === "lsp",
+	);
+	const lsp = lspRunner
+		? {
+				ran:
+					lspRunner.status !== "skipped" &&
+					lspRunner.status !== "when_skipped",
+				status: lspRunner.status,
+				diagnosticCount: lspRunner.diagnosticCount,
+				durationMs: lspRunner.durationMs,
+			}
+		: undefined;
 
 	return {
 		filePath: absPath,
@@ -126,6 +240,7 @@ export async function analyzeFile(
 			warnings: result.warnings.length,
 			fixed: result.fixed.length,
 		},
+		lsp,
 		diagnostics: result.diagnostics.map(toMcpDiagnostic),
 		latency: latencyReport
 			? {

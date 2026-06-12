@@ -1242,13 +1242,17 @@ export async function dispatchLintWithResult(
 	pi: PiAgentAPI,
 	modifiedRanges?: ModifiedRange[],
 	logContext?: LogContext,
+	options?: { blockingOnly?: boolean },
 ): Promise<DispatchResult> {
+	// Default true preserves the per-edit fast path (errors only). Callers that
+	// want the full picture (warnings + structural smells), e.g. the MCP review
+	// facade, pass blockingOnly=false to run every runner.
 	const ctx = createDispatchContext(
 		filePath,
 		cwd,
 		pi,
 		sessionFacts,
-		true,
+		options?.blockingOnly ?? true,
 		modifiedRanges,
 	);
 	sessionFacts.clearFileFactsFor(ctx.filePath);

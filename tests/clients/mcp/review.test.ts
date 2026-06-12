@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	analyzeFileFresh,
 	resolveRebuildScript,
+	summarizeScan,
 } from "../../../clients/mcp/review.js";
 
 describe("resolveRebuildScript", () => {
@@ -24,6 +25,41 @@ describe("resolveRebuildScript", () => {
 	it("selects build for an in-place dev layout", () => {
 		expect(resolveRebuildScript("/repo/mcp/server.js")).toBe("build");
 		expect(resolveRebuildScript("C:\\repo\\mcp\\server.js")).toBe("build");
+	});
+});
+
+describe("summarizeScan", () => {
+	it("dedupes by file:line:column:rule and aggregates by rule and file", () => {
+		const dupe = {
+			filePath: "/x/a.ts",
+			line: 1,
+			column: 2,
+			rule: "ts-path-traversal",
+			runner: "tree-sitter",
+		};
+		const { deduped, byRule, byFile } = summarizeScan([
+			dupe,
+			{ ...dupe }, // exact duplicate → dropped
+			{ filePath: "/x/a.ts", line: 5, rule: "deep-nesting" },
+			{ filePath: "/x/b.ts", line: 1, rule: "ts-path-traversal" },
+		]);
+
+		expect(deduped).toHaveLength(3);
+		expect(byRule).toEqual({ "ts-path-traversal": 2, "deep-nesting": 1 });
+		expect(byFile).toEqual({ "/x/a.ts": 2, "/x/b.ts": 1 });
+	});
+
+	it("falls back to runner/tool/unknown when no rule is present", () => {
+		const { byRule } = summarizeScan([
+			{ filePath: "/x/a.ts", line: 1, runner: "fact-rules" },
+			{ filePath: "/x/a.ts", line: 2, tool: "tree-sitter" },
+			{ filePath: "/x/a.ts", line: 3 },
+		]);
+		expect(byRule).toEqual({
+			"fact-rules": 1,
+			"tree-sitter": 1,
+			unknown: 1,
+		});
 	});
 });
 

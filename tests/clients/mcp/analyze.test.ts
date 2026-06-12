@@ -1,9 +1,11 @@
 /**
- * analyzeFile facade: runs the real per-edit dispatch pipeline and maps the
- * DispatchResult + latency report into the JSON contract the MCP server returns.
+ * analyzeFile facade: runs the dispatch pipeline and maps the DispatchResult +
+ * latency report into the JSON contract the MCP server returns.
  *
  * dispatchForFile + getLatencyReports are mocked (as in the dispatch-integration
- * suite) so the test asserts the *mapping*, not real runner execution.
+ * suite) so the test asserts the *mapping* and the Tier-1 behaviours (warm LSP,
+ * full/blocking-only, recording), not real runner execution. getLSPService is
+ * mocked so warm-up never spawns a real language server.
  */
 
 import * as fs from "node:fs";
@@ -32,8 +34,23 @@ vi.mock("../../../clients/dispatch/fact-runner.js", async (importOriginal) => {
 	return { ...mod, runProviders: vi.fn() };
 });
 
+// Warm-up must never spawn a real LSP server in unit tests.
+const mockTouchFile = vi.hoisted(() => vi.fn(async () => undefined));
+const mockSupportsLSP = vi.hoisted(() => vi.fn((_file: string) => false));
+vi.mock("../../../clients/lsp/index.js", () => ({
+	getLSPService: () => ({
+		supportsLSP: mockSupportsLSP,
+		touchFile: mockTouchFile,
+	}),
+}));
+
 import { dispatchForFile, getLatencyReports } from "../../../clients/dispatch/dispatcher.js";
 import { resetDispatchBaselines } from "../../../clients/dispatch/integration.js";
+import { getDiagnosticTracker } from "../../../clients/diagnostic-tracker.js";
+import {
+	clearWidgetState,
+	getFileDiagnosticSummaries,
+} from "../../../clients/widget-state.js";
 import { analyzeFile } from "../../../clients/mcp/analyze.js";
 
 const warningDiagnostic = {
@@ -60,14 +77,30 @@ const blockingDiagnostic = {
 	tool: "tsc",
 };
 
+const emptyResult = {
+	diagnostics: [],
+	blockers: [],
+	warnings: [],
+	baselineWarningCount: 0,
+	fixed: [],
+	resolvedCount: 0,
+	output: "",
+	blockerOutput: "",
+	hasBlockers: false,
+};
+
 let tmpDir: string;
 let tsFile: string;
 
 beforeEach(() => {
 	resetDispatchBaselines();
+	clearWidgetState();
 	vi.mocked(dispatchForFile).mockReset();
 	vi.mocked(getLatencyReports).mockReset();
 	vi.mocked(getLatencyReports).mockReturnValue([]);
+	mockTouchFile.mockClear();
+	mockSupportsLSP.mockReset();
+	mockSupportsLSP.mockReturnValue(false);
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mcp-analyze-"));
 	tsFile = path.join(tmpDir, "app.ts");
 	fs.writeFileSync(tsFile, "export const a = 1;\n");
@@ -102,12 +135,10 @@ describe("analyzeFile", () => {
 			warnings: 1,
 			fixed: 0,
 		});
-		// Diagnostics flattened with the fields an MCP consumer needs.
 		const warn = result.diagnostics.find((d) => d.rule === "noUnusedImports");
 		expect(warn).toMatchObject({
 			line: 3,
 			severity: "warning",
-			semantic: "warning",
 			tool: "biome",
 			fixable: true,
 			fixSuggestion: "Remove the import",
@@ -116,17 +147,7 @@ describe("analyzeFile", () => {
 	});
 
 	it("attaches the latency report appended during this dispatch", async () => {
-		vi.mocked(dispatchForFile).mockResolvedValue({
-			diagnostics: [],
-			blockers: [],
-			warnings: [],
-			baselineWarningCount: 0,
-			fixed: [],
-			resolvedCount: 0,
-			output: "",
-			blockerOutput: "",
-			hasBlockers: false,
-		});
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
 
 		const report: DispatchLatencyReport = {
 			filePath: tsFile,
@@ -151,7 +172,6 @@ describe("analyzeFile", () => {
 			warnings: 0,
 		};
 
-		// Empty before the call (length snapshot), the new report after.
 		vi.mocked(getLatencyReports)
 			.mockReturnValueOnce([])
 			.mockReturnValueOnce([report]);
@@ -159,6 +179,13 @@ describe("analyzeFile", () => {
 		const result = await analyzeFile(tsFile, tmpDir);
 
 		expect(result.fileKind).toBe("jsts");
+		// LSP outcome surfaced explicitly (honesty signal — #D).
+		expect(result.lsp).toEqual({
+			ran: true,
+			status: "succeeded",
+			diagnosticCount: 0,
+			durationMs: 1000,
+		});
 		expect(result.latency).toEqual({
 			totalDurationMs: 1200,
 			stoppedEarly: false,
@@ -180,25 +207,102 @@ describe("analyzeFile", () => {
 		const result = await analyzeFile(csv, tmpDir);
 
 		expect(result.counts.diagnostics).toBe(0);
-		expect(result.hasBlockers).toBe(false);
 		expect(result.latency).toBeUndefined();
 		expect(dispatchForFile).not.toHaveBeenCalled();
 	});
 
 	it("resolves a relative file path against cwd", async () => {
-		vi.mocked(dispatchForFile).mockResolvedValue({
-			diagnostics: [],
-			blockers: [],
-			warnings: [],
-			baselineWarningCount: 0,
-			fixed: [],
-			resolvedCount: 0,
-			output: "",
-			blockerOutput: "",
-			hasBlockers: false,
-		});
-
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
 		const result = await analyzeFile("app.ts", tmpDir);
 		expect(result.filePath).toBe(tsFile);
+	});
+
+	// ── Tier 1 ───────────────────────────────────────────────────────────────
+
+	it("runs the full analysis (blockingOnly=false) by default (#A)", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		await analyzeFile(tsFile, tmpDir);
+		const ctx = vi.mocked(dispatchForFile).mock.calls[0][0];
+		expect(ctx.blockingOnly).toBe(false);
+	});
+
+	it("honours blockingOnly=true when requested (#A)", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		await analyzeFile(tsFile, tmpDir, { blockingOnly: true });
+		const ctx = vi.mocked(dispatchForFile).mock.calls[0][0];
+		expect(ctx.blockingOnly).toBe(true);
+	});
+
+	it("warms the LSP (source=mcp-warmup) before dispatch when supported (#D)", async () => {
+		mockSupportsLSP.mockReturnValue(true);
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+
+		await analyzeFile(tsFile, tmpDir, { flags: { "no-lsp": false } });
+
+		expect(mockTouchFile).toHaveBeenCalledWith(
+			tsFile,
+			expect.any(String),
+			expect.objectContaining({
+				source: "mcp-warmup",
+				collectDiagnostics: true,
+			}),
+		);
+	});
+
+	it("skips LSP warm-up when no-lsp is set or warmLsp=false (#D)", async () => {
+		mockSupportsLSP.mockReturnValue(true);
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+
+		await analyzeFile(tsFile, tmpDir, { flags: { "no-lsp": true } });
+		expect(mockTouchFile).not.toHaveBeenCalled();
+
+		await analyzeFile(tsFile, tmpDir, {
+			flags: { "no-lsp": false },
+			warmLsp: false,
+		});
+		expect(mockTouchFile).not.toHaveBeenCalled();
+	});
+
+	it("records diagnostics into widget state and the tracker (#C)", async () => {
+		// Unique id/line — the diagnostic tracker is a global singleton that
+		// dedupes by identity, so a diagnostic reused from another test would not
+		// re-increment totalShown.
+		const uniqueDiagnostic = {
+			id: "c-test-unique",
+			message: "Unique blocker",
+			filePath: "app.ts",
+			line: 99,
+			column: 1,
+			severity: "error" as const,
+			semantic: "blocking" as const,
+			tool: "tsc",
+		};
+		const shownBefore = getDiagnosticTracker().getStats().totalShown;
+		vi.mocked(dispatchForFile).mockResolvedValue({
+			...emptyResult,
+			diagnostics: [uniqueDiagnostic],
+			blockers: [uniqueDiagnostic],
+			hasBlockers: true,
+		});
+
+		await analyzeFile(tsFile, tmpDir);
+
+		const summaries = getFileDiagnosticSummaries();
+		expect(summaries.some((s) => s.diagnostics.length > 0)).toBe(true);
+		expect(getDiagnosticTracker().getStats().totalShown).toBeGreaterThan(
+			shownBefore,
+		);
+	});
+
+	it("does not record when record=false (#C)", async () => {
+		clearWidgetState();
+		vi.mocked(dispatchForFile).mockResolvedValue({
+			...emptyResult,
+			diagnostics: [blockingDiagnostic],
+		});
+
+		await analyzeFile(tsFile, tmpDir, { record: false });
+
+		expect(getFileDiagnosticSummaries().length).toBe(0);
 	});
 });

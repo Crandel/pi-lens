@@ -121,3 +121,41 @@ export async function runRebuild(
 		output: output.slice(-2000),
 	};
 }
+
+/** Minimal shape needed to dedupe/aggregate project-scan diagnostics. */
+export type ScanDiagnostic = {
+	filePath: string;
+	line?: number;
+	column?: number;
+	rule?: string;
+	runner?: string;
+	tool?: string;
+};
+
+/**
+ * Dedupe project-scan diagnostics (the cheap scanners can emit the same
+ * file:line:rule twice) and aggregate counts by rule and file — so the
+ * `pilens_project_scan` tool returns a compact, scannable summary instead of
+ * dumping ~100 raw objects into the agent's context.
+ */
+export function summarizeScan(diagnostics: readonly ScanDiagnostic[]): {
+	deduped: ScanDiagnostic[];
+	byRule: Record<string, number>;
+	byFile: Record<string, number>;
+} {
+	const seen = new Set<string>();
+	const deduped: ScanDiagnostic[] = [];
+	const byRule: Record<string, number> = {};
+	const byFile: Record<string, number> = {};
+	for (const diagnostic of diagnostics) {
+		const ruleId =
+			diagnostic.rule ?? diagnostic.runner ?? diagnostic.tool ?? "unknown";
+		const key = `${diagnostic.filePath}|${diagnostic.line ?? "?"}|${diagnostic.column ?? "?"}|${ruleId}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		deduped.push(diagnostic);
+		byRule[ruleId] = (byRule[ruleId] ?? 0) + 1;
+		byFile[diagnostic.filePath] = (byFile[diagnostic.filePath] ?? 0) + 1;
+	}
+	return { deduped, byRule, byFile };
+}

@@ -28,6 +28,7 @@ import {
 	analyzeFileFresh,
 	resolveRebuildScript,
 	runRebuild,
+	summarizeScan,
 } from "../clients/mcp/review.js";
 import { getDiagnosticTracker } from "../clients/diagnostic-tracker.js";
 import { getLatencyReports } from "../clients/dispatch/integration.js";
@@ -239,11 +240,18 @@ function formatAnalyze(
 	cwd: string,
 	mode: "warm" | "fresh",
 ): { content: { type: "text"; text: string }[] } {
+	// Surface the LSP outcome so a cold/indexing server's "0" is never silently
+	// read as "clean" — a known limit on large projects (warm mode / re-run once
+	// the persistent server has indexed gives complete LSP coverage).
+	const lspNote = result.lsp
+		? ` · lsp ${result.lsp.diagnosticCount} (${result.lsp.status}, ${result.lsp.durationMs}ms)`
+		: "";
 	const summary =
 		`${path.relative(cwd, result.filePath) || result.filePath} [${mode}] — ` +
 		`${result.counts.blockers} blocking, ${result.counts.warnings} warning(s), ` +
 		`${result.counts.diagnostics} total` +
 		(result.latency ? ` · ${result.latency.totalDurationMs}ms` : "") +
+		lspNote +
 		(result.counts.fixed > 0 ? ` · ${result.counts.fixed} auto-fixed` : "");
 	return toolText(summary, result);
 }
@@ -307,13 +315,28 @@ async function callTool(
 				? Math.max(1, Math.floor(args.maxFiles))
 				: undefined;
 		const snapshot = await scanProjectDiagnostics({ cwd, tier: "cheap", maxFiles });
-		const summary =
+		const { deduped, byRule, byFile } = summarizeScan(snapshot.diagnostics);
+		const topRules = Object.entries(byRule).sort((a, b) => b[1] - a[1]);
+		const topFiles = Object.entries(byFile)
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, 15)
+			.map(([file, count]) => ({ file: path.relative(cwd, file), count }));
+		const summaryLines = [
 			`Scanned ${snapshot.filesScanned} file(s) [${snapshot.runners.join(", ")}] → ` +
-			`${snapshot.diagnostics.length} diagnostic(s).`;
-		return toolText(summary, {
+				`${deduped.length} unique diagnostic(s)` +
+				(snapshot.diagnostics.length !== deduped.length
+					? ` (${snapshot.diagnostics.length} raw, ${snapshot.diagnostics.length - deduped.length} duplicate)`
+					: ""),
+			...topRules.slice(0, 12).map(([rule, count]) => `  ${count}× ${rule}`),
+		];
+		return toolText(summaryLines.join("\n"), {
 			filesScanned: snapshot.filesScanned,
 			runners: snapshot.runners,
-			diagnostics: snapshot.diagnostics.slice(0, 100),
+			uniqueDiagnostics: deduped.length,
+			rawDiagnostics: snapshot.diagnostics.length,
+			byRule,
+			topFiles,
+			sample: deduped.slice(0, 40),
 		});
 	}
 
