@@ -352,6 +352,26 @@ function findByKind(node: any, kind: string, currentDepth: number): unknown[] {
 }
 
 /**
+ * Match a rule using the hand-rolled interpreter (the legacy path). Supports a
+ * subset of ast-grep conditions; see {@link nodeMatchesCondition}. Used when the
+ * native-rule-engine flag is off, or as a fallback if napi rejects a rule.
+ */
+function legacyRuleMatches(rootNode: any, rule: YamlRule): unknown[] {
+	if (isStructuredRule(rule) && rule.rule) {
+		return executeStructuredRule(rootNode, rule.rule, []);
+	}
+	const pattern = rule.rule?.pattern || rule.rule?.kind;
+	if (pattern) {
+		try {
+			return rootNode.findAll(pattern);
+		} catch {
+			if (rule.rule?.kind) return findByKind(rootNode, rule.rule.kind, 0);
+		}
+	}
+	return [];
+}
+
+/**
  * Get all nodes with depth limit to prevent stack overflow
  */
 function getAllNodes(node: any, currentDepth: number): unknown[] {
@@ -434,6 +454,13 @@ const astGrepNapiRunner: RunnerDefinition = {
 		const seenRuleIds = new Set<string>();
 		const suppressLinterOverlap =
 			ctx.kind === "jsts" && hasEslintConfig(ctx.cwd);
+		// #206: opt-in — delegate rule matching to napi's native relational engine
+		// (full grammar incl. field/inside/follows/precedes/stopBy/nthChild) instead
+		// of the hand-rolled subset interpreter. Off by default pending a measured
+		// rollout (re-enables rules currently skipped for unsupported conditions).
+		const useNativeRuleEngine = Boolean(
+			ctx.pi.getFlag("ast-grep-native-rules"),
+		);
 
 		const ruleDirs = [
 			path.join(process.cwd(), "rules", "ast-grep-rules", "rules"),
@@ -467,10 +494,11 @@ const astGrepNapiRunner: RunnerDefinition = {
 				// Skip rules already handled by tree-sitter runner (priority 14)
 				if (TREE_SITTER_OVERLAP.has(rule.id)) continue;
 
-				// Skip rules using conditions we can't execute (inside, follows,
-				// precedes, stopBy, field, nthChild, constraints). Running these
-				// with only partial condition evaluation causes false positives.
-				if (hasUnsupportedConditions(rule)) continue;
+				// Skip rules using conditions the hand-rolled interpreter can't
+				// execute (inside, follows, precedes, stopBy, field, nthChild) —
+				// partial evaluation causes false positives. The native engine
+				// supports them, so the skip only applies on the legacy path.
+				if (!useNativeRuleEngine && hasUnsupportedConditions(rule)) continue;
 
 				// Skip rules whose top-level pattern is overly broad ($NAME, $X, etc.)
 				// without additional structural constraints to narrow matches.
@@ -497,19 +525,17 @@ const astGrepNapiRunner: RunnerDefinition = {
 				try {
 					let matches: unknown[] = [];
 
-					if (isStructuredRule(rule) && rule.rule) {
-						matches = executeStructuredRule(rootNode, rule.rule, []);
-					} else if (rule.rule?.pattern || rule.rule?.kind) {
-						const pattern = rule.rule.pattern || rule.rule.kind;
-						if (pattern) {
-							try {
-								matches = rootNode.findAll(pattern);
-							} catch {
-								if (rule.rule.kind) {
-									matches = findByKind(rootNode, rule.rule.kind, 0);
-								}
-							}
+					if (useNativeRuleEngine && rule.rule) {
+						// napi's native engine handles the full rule object (pattern,
+						// kind, and every relational/field condition); fall back to the
+						// legacy interpreter only if napi rejects the rule shape.
+						try {
+							matches = rootNode.findAll({ rule: rule.rule } as never);
+						} catch {
+							matches = legacyRuleMatches(rootNode, rule);
 						}
+					} else {
+						matches = legacyRuleMatches(rootNode, rule);
 					}
 
 					const limitedMatches = matches.slice(0, MAX_MATCHES_PER_RULE);
