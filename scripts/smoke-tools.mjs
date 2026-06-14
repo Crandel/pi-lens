@@ -89,6 +89,46 @@ const FIXTURES = [
 		tools: ["shellcheck", "shfmt"],
 		expectDiagnostic: true,
 	},
+	{
+		lang: "css",
+		dir: "tests/fixtures/tool-smoke/css",
+		file: "bad.css",
+		targets: ["stylelint"],
+		tools: ["stylelint"],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "html",
+		dir: "tests/fixtures/tool-smoke/html",
+		file: "bad.html",
+		targets: ["htmlhint"],
+		tools: ["htmlhint"],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "toml",
+		dir: "tests/fixtures/tool-smoke/toml",
+		file: "bad.toml",
+		targets: ["taplo"],
+		tools: ["taplo"],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "sql",
+		dir: "tests/fixtures/tool-smoke/sql",
+		file: "bad.sql",
+		targets: ["sqlfluff"],
+		tools: ["sqlfluff"],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "dockerfile",
+		dir: "tests/fixtures/tool-smoke/dockerfile",
+		file: "Dockerfile",
+		targets: ["hadolint"],
+		tools: ["hadolint"],
+		expectDiagnostic: true,
+	},
 ];
 
 /**
@@ -131,6 +171,34 @@ const LSP_FIXTURES = [
 		file: "bad.sh",
 		serverHint: "bash-language-server",
 		tools: ["bash-language-server"],
+	},
+	{
+		lang: "css",
+		dir: "tests/fixtures/tool-smoke/css",
+		file: "bad.css",
+		serverHint: "vscode-css-language-server",
+		tools: ["vscode-css-languageserver"],
+	},
+	{
+		lang: "html",
+		dir: "tests/fixtures/tool-smoke/html",
+		file: "bad.html",
+		serverHint: "vscode-html-language-server",
+		tools: ["vscode-html-languageserver-bin"],
+	},
+	{
+		lang: "dockerfile",
+		dir: "tests/fixtures/tool-smoke/dockerfile",
+		file: "Dockerfile",
+		serverHint: "docker-langserver",
+		tools: ["dockerfile-language-server-nodejs"],
+	},
+	{
+		lang: "toml",
+		dir: "tests/fixtures/tool-smoke/toml",
+		file: "bad.toml",
+		serverHint: "taplo",
+		tools: ["taplo"],
 	},
 ];
 
