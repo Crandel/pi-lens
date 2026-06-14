@@ -91,7 +91,7 @@ export function splitIdentifier(identifier: string): string[] {
 		if (!chunk) continue;
 		const spaced = chunk
 			.replace(/([a-z0-9])([A-Z])/g, "$1 $2") // camelCase → camel Case
-			.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2") // HTTPServer → HTTP Server
+			.replace(/[A-Z](?=[A-Z][a-z])/g, "$& ") // HTTPServer → HTTP Server (linear; lookahead avoids super-linear backtracking, S5852)
 			.replace(/([A-Za-z])([0-9])/g, "$1 $2") // retry2 → retry 2
 			.replace(/([0-9])([A-Za-z])/g, "$1 $2"); // 2fa → 2 fa
 		for (const sub of spaced.split(/\s+/)) {
