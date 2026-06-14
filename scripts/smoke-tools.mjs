@@ -511,11 +511,17 @@ async function main() {
 				blockingOnly: false,
 			});
 			if (verbose) {
-				console.error(
-					`[${fixture.lang}] executed runners: ${
-						runners.map((r) => `${r.runnerId}:${r.result.status}`).join(", ") || "(none)"
-					}`,
-				);
+				const desc = runners
+					.map((r) => {
+						const { status, failureKind, failureMessage } = r.result;
+						const why =
+							status === "failed" && failureKind
+								? `(${failureKind}: ${(failureMessage ?? "").slice(0, 100)})`
+								: "";
+						return `${r.runnerId}:${status}${why}`;
+					})
+					.join(", ");
+				console.error(`[${fixture.lang}] executed runners: ${desc || "(none)"}`);
 			}
 			for (const target of fixture.targets) {
 				const outcome = runners.find((r) => r.runnerId === target);
