@@ -54,7 +54,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/python",
 		file: "bad.py",
 		targets: ["ruff-lint"],
-		tools: ["ruff"],
+		tools: ["ruff", "pyright"],
 		expectDiagnostic: true,
 	},
 	{
@@ -62,7 +62,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/yaml",
 		file: "bad.yaml",
 		targets: ["yamllint"],
-		tools: ["yamllint"],
+		tools: ["yamllint", "yaml-language-server"],
 		expectDiagnostic: true,
 	},
 	{
@@ -70,7 +70,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/javascript",
 		file: "bad.js",
 		targets: ["oxlint"],
-		tools: ["oxlint"],
+		tools: ["oxlint", "typescript-language-server"],
 		expectDiagnostic: true,
 	},
 	{
@@ -86,7 +86,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/shell",
 		file: "bad.sh",
 		targets: ["shellcheck", "shfmt"],
-		tools: ["shellcheck", "shfmt"],
+		tools: ["shellcheck", "shfmt", "bash-language-server"],
 		expectDiagnostic: true,
 	},
 	{
@@ -94,7 +94,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/css",
 		file: "bad.css",
 		targets: ["stylelint"],
-		tools: ["stylelint"],
+		tools: ["stylelint", "vscode-css-languageserver"],
 		expectDiagnostic: true,
 	},
 	{
@@ -102,7 +102,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/html",
 		file: "bad.html",
 		targets: ["htmlhint"],
-		tools: ["htmlhint"],
+		tools: ["htmlhint", "vscode-html-languageserver-bin"],
 		expectDiagnostic: true,
 	},
 	{
@@ -126,7 +126,15 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/dockerfile",
 		file: "Dockerfile",
 		targets: ["hadolint"],
-		tools: ["hadolint"],
+		tools: ["hadolint", "dockerfile-language-server-nodejs"],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "terraform",
+		dir: "tests/fixtures/tool-smoke/terraform",
+		file: "bad.tf",
+		targets: ["tflint"],
+		tools: ["tflint", "terraform-ls"],
 		expectDiagnostic: true,
 	},
 ];
@@ -199,6 +207,34 @@ const LSP_FIXTURES = [
 		file: "bad.toml",
 		serverHint: "taplo",
 		tools: ["taplo"],
+	},
+	{
+		lang: "terraform",
+		dir: "tests/fixtures/tool-smoke/terraform",
+		file: "bad.tf",
+		serverHint: "terraform-ls",
+		tools: ["terraform-ls"],
+	},
+	{
+		lang: "prisma",
+		dir: "tests/fixtures/tool-smoke/prisma",
+		file: "schema.prisma",
+		serverHint: "@prisma/language-server",
+		tools: ["@prisma/language-server"],
+	},
+	{
+		lang: "php",
+		dir: "tests/fixtures/tool-smoke/php",
+		file: "bad.php",
+		serverHint: "intelephense",
+		tools: ["intelephense"],
+	},
+	{
+		lang: "rust",
+		dir: "tests/fixtures/tool-smoke/rust",
+		file: "bad.rs",
+		serverHint: "rust-analyzer",
+		tools: ["rust-analyzer"],
 	},
 ];
 

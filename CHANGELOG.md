@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **Tool-smoke harness language expansion + LSP-install gap fix (refs #209)** — the dispatch tool-smoke fixtures now also install each kind's LSP server (not just the linter), so the lsp runner no longer spuriously `server_error`s for want of an uninstalled server. Added fixtures: `terraform` (tflint tool + terraform-ls LSP, both standalone), and LSP-handshake fixtures for `prisma` (@prisma/language-server — replies with 2 diagnostics), `php` (intelephense), and `rust` (rust-analyzer — handshakes only when a cargo toolchain is present, ⚠ otherwise). Confirms the fallback→all fix end-to-end: terraform runs `lsp + tflint` together.
+
 - **LSP handshake layer in the tool-smoke harness (refs #209)** — `scripts/smoke-tools.mjs --lsp` drives the **same production entry the lsp runner uses** (`LSPService.touchFile`, with a generous cold-spawn budget) for each LSP fixture, so a pass means the real server installed, spawned, completed the JSON-RPC initialize handshake, and replied — not a hand-rolled handshake (the trap that false-failed typescript in the dropped smoke-lsp). Verified end-to-end for typescript-language-server, pyright, yaml-language-server, vscode-json-language-server, and bash-language-server (all handshook; yaml/json returned diagnostics). Shares the harness's startup temp-sweep and tears down spawned servers via `LSPService.shutdown()`.
 
 ### Fixed
