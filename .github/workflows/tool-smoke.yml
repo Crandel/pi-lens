@@ -37,6 +37,34 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Toolchain-gated languages. go/rust(rustup)/pwsh/.NET ship on ubuntu-latest;
+      # these set up the rest. All best-effort: a setup failure must NOT red the
+      # nightly (the harness already treats an unavailable tool as ⚠, not a
+      # failure), so each is continue-on-error.
+      - uses: actions/setup-java@v4
+        continue-on-error: true
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: ruby/setup-ruby@v1
+        continue-on-error: true
+        with:
+          ruby-version: '3.3'
+      - uses: dart-lang/setup-dart@v1
+        continue-on-error: true
+      - uses: shivammathur/setup-php@v2
+        continue-on-error: true
+        with:
+          php-version: '8.3'
+      - uses: mlugg/setup-zig@v2
+        continue-on-error: true
+      - uses: erlef/setup-beam@v1
+        continue-on-error: true
+        with:
+          otp-version: '27'
+          elixir-version: '1.18'
+          gleam-version: '1'
+
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 

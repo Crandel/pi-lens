@@ -172,6 +172,74 @@ const FIXTURES = [
 		tools: [],
 		expectDiagnostic: true,
 	},
+	{
+		lang: "zig",
+		dir: "tests/fixtures/tool-smoke/zig",
+		file: "bad.zig",
+		targets: ["zig-check"],
+		tools: [],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "java",
+		dir: "tests/fixtures/tool-smoke/java",
+		file: "Bad.java",
+		targets: ["javac"],
+		tools: [],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "dart",
+		dir: "tests/fixtures/tool-smoke/dart",
+		file: "bad.dart",
+		targets: ["dart-analyze"],
+		tools: [],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "php",
+		dir: "tests/fixtures/tool-smoke/php",
+		file: "syntax-error.php",
+		targets: ["php-lint"],
+		tools: [],
+		expectDiagnostic: true,
+	},
+	// rubocop (gem) and ktlint (github binary) are auto-installed by their own
+	// runner; listed in `tools` so --install prefetches them.
+	{
+		lang: "ruby",
+		dir: "tests/fixtures/tool-smoke/ruby",
+		file: "bad.rb",
+		targets: ["rubocop"],
+		tools: ["rubocop"],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "kotlin",
+		dir: "tests/fixtures/tool-smoke/kotlin",
+		file: "Bad.kt",
+		targets: ["ktlint"],
+		tools: ["ktlint"],
+		expectDiagnostic: true,
+	},
+	// `gleam check` compiles the whole project, so the fixture is a minimal
+	// gleam package (gleam.toml + src/), not a loose file.
+	{
+		lang: "gleam",
+		dir: "tests/fixtures/tool-smoke/gleam",
+		file: "src/smoke.gleam",
+		targets: ["gleam-check"],
+		tools: [],
+		expectDiagnostic: true,
+	},
+	{
+		lang: "elixir",
+		dir: "tests/fixtures/tool-smoke/elixir",
+		file: "bad.ex",
+		targets: ["elixir-check"],
+		tools: [],
+		expectDiagnostic: true,
+	},
 ];
 
 /**
