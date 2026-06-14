@@ -82,6 +82,10 @@ BUG_*.md
 *_GAPS.md
 
 # Dev log
+# Tool-smoke fixtures (#209) — real per-language projects with intentional
+# defects; must be tracked despite the global *.js / *.md / *.sh ignores above.
+!tests/fixtures/tool-smoke/**
+
 clients/dispatch/debug.log
 clients/lsp/.intelephense/
 AGENTS.md

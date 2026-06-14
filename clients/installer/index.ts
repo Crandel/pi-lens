@@ -111,7 +111,7 @@ interface GitHubAssetSpec {
 	hashiCorpReleaseProduct?: string;
 }
 
-interface ToolDefinition {
+export interface ToolDefinition {
 	id: string;
 	name: string;
 	checkCommand: string;
@@ -122,7 +122,7 @@ interface ToolDefinition {
 	github?: GitHubAssetSpec;
 }
 
-const TOOLS: ToolDefinition[] = [
+export const TOOLS: ToolDefinition[] = [
 	// Core LSP servers
 	{
 		id: "typescript-language-server",
@@ -2285,6 +2285,18 @@ export function isKnownToolId(toolId: string): boolean {
 	return TOOLS.some((tool) => tool.id === toolId);
 }
 
+/**
+ * GitHub-release tools that ship an asset for **every** supported
+ * platform/arch combo (linux/darwin/win32 × x64/arm64). This is the set the
+ * full asset-matrix test (tests/clients/installer/github-release.test.ts)
+ * iterates, so membership must stay in lockstep with the registry — the
+ * tool-registry-consistency test enforces that every `installStrategy: "github"`
+ * entry resolving all six combos appears here, and vice versa.
+ *
+ * `swiftlint` is deliberately absent: it has no Windows asset (macOS + Linux
+ * only), so it cannot satisfy the full matrix and is covered by the weaker
+ * "at least one platform" guard instead.
+ */
 export const GITHUB_TOOLS = [
 	"shellcheck",
 	"shfmt",
@@ -2295,6 +2307,10 @@ export const GITHUB_TOOLS = [
 	"tflint",
 	"terraform-ls",
 	"zls",
+	"hadolint",
+	"gitleaks",
+	"taplo",
+	"vale",
 ] as const;
 export type GitHubToolId = (typeof GITHUB_TOOLS)[number];
 
