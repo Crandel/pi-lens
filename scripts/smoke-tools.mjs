@@ -502,6 +502,51 @@ const FORMAT_FIXTURES = [
 		formatter: "csharpier",
 		tools: [],
 	},
+	{
+		lang: "terraform",
+		dir: "tests/fixtures/format-smoke/terraform",
+		file: "messy.tf",
+		formatter: "terraform",
+		tools: [],
+	},
+	{
+		lang: "fsharp",
+		dir: "tests/fixtures/format-smoke/fsharp",
+		file: "messy.fs",
+		formatter: "fantomas",
+		tools: [],
+	},
+	{
+		lang: "powershell",
+		dir: "tests/fixtures/format-smoke/powershell",
+		file: "messy.ps1",
+		formatter: "psscriptanalyzer-format",
+		tools: [],
+	},
+	{
+		// Config-gated alternates: black is selected over ruff via pyproject
+		// [tool.black]; standardrb over rubocop via .standard.yml; cmake-format
+		// needs a .cmake-format.yaml. Each fixture ships that config.
+		lang: "python-black",
+		dir: "tests/fixtures/format-smoke/python-black",
+		file: "messy.py",
+		formatter: "black",
+		tools: [],
+	},
+	{
+		lang: "ruby-standard",
+		dir: "tests/fixtures/format-smoke/ruby-standard",
+		file: "messy.rb",
+		formatter: "standardrb",
+		tools: [],
+	},
+	{
+		lang: "cmake",
+		dir: "tests/fixtures/format-smoke/cmake",
+		file: "messy.cmake",
+		formatter: "cmake-format",
+		tools: [],
+	},
 ];
 
 // Generous cold-spawn / handshake budgets — the harness is not on the hot path,
