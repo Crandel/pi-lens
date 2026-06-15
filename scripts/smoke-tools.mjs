@@ -685,6 +685,35 @@ const AUTOFIX_FIXTURES = [
 		tool: "eslint",
 		tools: [],
 	},
+	{
+		// golangci-lint is config-first (.golangci.yml); the gofmt fixer reformats.
+		lang: "go",
+		dir: "tests/fixtures/autofix-smoke/go",
+		file: "main.go",
+		tool: "golangci-lint",
+		tools: [],
+	},
+	{
+		// markdownlint is smart-default; --fix strips trailing whitespace (MD009).
+		lang: "markdown",
+		dir: "tests/fixtures/autofix-smoke/markdown",
+		file: "messy.md",
+		tool: "markdownlint",
+		tools: ["markdownlint"],
+	},
+	{
+		// oxlint is config-first (.oxlintrc.json); no-var --fix rewrites var->let.
+		lang: "js-oxlint",
+		dir: "tests/fixtures/autofix-smoke/js-oxlint",
+		file: "messy.js",
+		tool: "oxlint",
+		tools: ["oxlint"],
+	},
+	// NOTE: detekt --auto-correct (Kotlin) is wired into the autofix policy +
+	// pipeline (config-first, mirroring the detekt runner's invocation) and guarded
+	// by the policy-consistency test, but has no live fixture here: validating it
+	// needs the detekt CLI plus the detekt-formatting plugin, which isn't a simple
+	// install. Live-validation is deferred to a CI job with that toolchain.
 ];
 
 // Generous cold-spawn / handshake budgets — the harness is not on the hot path,
