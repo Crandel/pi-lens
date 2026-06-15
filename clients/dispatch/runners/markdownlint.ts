@@ -67,8 +67,11 @@ function parseMarkdownlintOutput(raw: string, filePath: string): Diagnostic[] {
 	const diagnostics: Diagnostic[] = [];
 	for (const line of raw.split(/\r?\n/)) {
 		if (!line.trim()) continue;
+		// Rule code is MD### followed by one or more slash-joined names. Use a
+		// single char class (`[\w/-]+`) rather than a nested quantifier
+		// (`(?:/[\w-]+)+`) so there's no super-linear backtracking (S5852).
 		const match = line.match(
-			/^.*?:(\d+)(?::(\d+))?\s+(?:error|warning)?\s*(MD\d+(?:\/[\w-]+)+)\s+(.+)$/,
+			/^.*?:(\d+)(?::(\d+))?\s+(?:error|warning)?\s*(MD\d+\/[\w/-]+)\s+(.+)$/,
 		);
 		if (!match) continue;
 		const [, lineNum, col, ruleCode, message] = match;
