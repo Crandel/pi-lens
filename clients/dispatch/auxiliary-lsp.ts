@@ -18,6 +18,7 @@
  */
 
 import type { LSPDiagnostic } from "../lsp/client.js";
+import { findLocalOpengrepConfig } from "../opengrep-config.js";
 import { classifyDefect } from "./diagnostic-taxonomy.js";
 import type { DefectClass, OutputSemantic } from "./types.js";
 
@@ -31,8 +32,13 @@ export interface AuxiliaryLspProfile {
 	/** Auxiliaries are default-on; this boolean flag turns one off. */
 	killSwitchFlag?: string;
 	enabledByDefault: boolean;
-	/** Severity → semantic. Most auxiliaries are advisory; only high-signal ones block. */
-	semantic: (d: LSPDiagnostic) => OutputSemantic;
+	/** Whether findings may block in this workspace (e.g. the repo supplies its
+	 *  own curated rules). When false, even ERROR-severity findings stay advisory.
+	 *  Computed once per dispatch by the lsp runner. Absent ⇒ never blocks. */
+	allowBlocking?: (cwd: string) => boolean;
+	/** Severity (+ whether blocking is allowed here) → semantic. Most auxiliaries
+	 *  are advisory; only high-signal ones block. */
+	semantic: (d: LSPDiagnostic, ctx: { blockingAllowed: boolean }) => OutputSemantic;
 	defectClass?: (d: LSPDiagnostic) => DefectClass | undefined;
 }
 
@@ -44,9 +50,15 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 		sourceMatch: /opengrep|semgrep/i,
 		killSwitchFlag: "no-opengrep",
 		enabledByDefault: true,
-		// Opengrep maps rule severity → LSP severity; ERROR-severity rules are the
-		// high-signal security findings, so they block — everything else advises.
-		semantic: (d) => (d.severity === 1 ? "blocking" : "warning"),
+		// The LSP diagnostic carries severity + rule id but NOT confidence (the
+		// CLI's metadata.confidence is stripped). Opengrep's login-free `auto`
+		// Community set is uniformly ERROR/LOW-confidence audit-tier, so blocking on
+		// it would be a firehose. We honor ERROR→blocking ONLY when the repo
+		// supplies its own curated rules (the author's deliberate severity); the
+		// auto set is advisory. Either way, findings surface via lens_diagnostics.
+		allowBlocking: (cwd) => Boolean(findLocalOpengrepConfig(cwd)),
+		semantic: (d, { blockingAllowed }) =>
+			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
 		defectClass: (d) =>
 			classifyDefect(String(d.code ?? ""), "opengrep", d.message ?? ""),
 	},

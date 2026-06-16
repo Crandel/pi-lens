@@ -42,11 +42,17 @@ describe("auxiliary profile source routing", () => {
 describe("opengrep semantic policy", () => {
 	const opengrep = AUXILIARY_LSP_PROFILES.find((p) => p.serverId === "opengrep");
 
-	it("ERROR-severity findings block; lower severities advise", () => {
+	it("blocks ERROR only where blocking is allowed (curated repo rules)", () => {
 		expect(opengrep).toBeDefined();
-		expect(opengrep?.semantic(diag({ severity: 1 }))).toBe("blocking");
-		expect(opengrep?.semantic(diag({ severity: 2 }))).toBe("warning");
-		expect(opengrep?.semantic(diag({ severity: 3 }))).toBe("warning");
+		// blocking allowed (repo has its own rules): ERROR → blocking, else warning.
+		expect(opengrep?.semantic(diag({ severity: 1 }), { blockingAllowed: true })).toBe("blocking");
+		expect(opengrep?.semantic(diag({ severity: 2 }), { blockingAllowed: true })).toBe("warning");
+	});
+
+	it("never blocks the auto Community set (no local rules) — advisory only", () => {
+		// blocking NOT allowed (auto): even ERROR stays a warning (surfaced in lens_diagnostics).
+		expect(opengrep?.semantic(diag({ severity: 1 }), { blockingAllowed: false })).toBe("warning");
+		expect(opengrep?.semantic(diag({ severity: 2 }), { blockingAllowed: false })).toBe("warning");
 	});
 
 	it("derives a defect class from the rule", () => {

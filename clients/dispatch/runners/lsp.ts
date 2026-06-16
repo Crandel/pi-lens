@@ -258,12 +258,19 @@ const lspRunner: RunnerDefinition = {
 		// convertLspDiagnostics maps validLspDiags 1:1, so re-tag any
 		// auxiliary-sourced diagnostics (opengrep emits source "Semgrep", …) with
 		// their tool id + semantic policy — language-server diagnostics keep "lsp".
+		// blockingAllowed is per-workspace (e.g. curated repo rules), computed once.
+		const blockingAllowedByProfile = new Map<unknown, boolean>();
 		for (let i = 0; i < diagnostics.length; i++) {
 			const profile = findAuxiliaryProfileForSource(validLspDiags[i]?.source);
 			if (!profile) continue;
+			let blockingAllowed = blockingAllowedByProfile.get(profile);
+			if (blockingAllowed === undefined) {
+				blockingAllowed = profile.allowBlocking?.(ctx.cwd) ?? false;
+				blockingAllowedByProfile.set(profile, blockingAllowed);
+			}
 			const d = diagnostics[i];
 			d.tool = profile.tool;
-			d.semantic = profile.semantic(validLspDiags[i]);
+			d.semantic = profile.semantic(validLspDiags[i], { blockingAllowed });
 			if (d.semantic !== "blocking" && d.severity === "error") {
 				d.severity = "warning";
 			}
