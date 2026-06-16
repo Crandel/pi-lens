@@ -16,7 +16,7 @@ import {
 	formatSlopScoreSummary,
 	type SlopScoreSummary,
 } from "../session-summary.js";
-import { resolveSemgrepConfig } from "../semgrep-config.js";
+import { resolveOpengrepConfig } from "../opengrep-config.js";
 import {
 	clearCoverageNoticeState,
 	clearLatencyReports,
@@ -302,7 +302,7 @@ export function getDispatchSlopScoreLine(): string {
 	return formatSlopScoreSummary(summary);
 }
 
-const SEMGREP_SUPPORTED_KINDS = new Set<FileKind>([
+const OPENGREP_SUPPORTED_KINDS = new Set<FileKind>([
 	"csharp",
 	"css",
 	"cxx",
@@ -356,24 +356,24 @@ function withSpotbugsGroup(
 	];
 }
 
-function withSemgrepGroup(
+function withOpengrepGroup(
 	kind: FileKind,
 	groups: RunnerGroup[],
 	ctx: ReturnType<typeof createDispatchContext>,
 ): RunnerGroup[] {
-	if (!SEMGREP_SUPPORTED_KINDS.has(kind)) return groups;
-	const config = resolveSemgrepConfig(ctx.cwd, {
-		enabled: Boolean(ctx.pi.getFlag("lens-semgrep")),
-		config: ctx.pi.getFlag("lens-semgrep-config"),
+	if (!OPENGREP_SUPPORTED_KINDS.has(kind)) return groups;
+	const config = resolveOpengrepConfig(ctx.cwd, {
+		enabled: Boolean(ctx.pi.getFlag("lens-opengrep")),
+		config: ctx.pi.getFlag("lens-opengrep-config"),
 	});
 	if (!config.enabled) return groups;
-	if (groups.some((group) => group.runnerIds.includes("semgrep")))
+	if (groups.some((group) => group.runnerIds.includes("opengrep")))
 		return groups;
 	return [
 		...groups,
 		{
 			mode: "all",
-			runnerIds: ["semgrep"],
+			runnerIds: ["opengrep"],
 			filterKinds: [kind],
 			semantic: "warning",
 		},
@@ -1310,7 +1310,7 @@ export async function dispatchLint(
 
 	const groups = withSpotbugsGroup(
 		kind,
-		withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
+		withOpengrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
 		ctx,
 	);
 	if (groups.length === 0) return "";
@@ -1362,7 +1362,7 @@ export async function dispatchLintWithResult(
 
 	const groups = withSpotbugsGroup(
 		kind,
-		withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
+		withOpengrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
 		ctx,
 	);
 	if (groups.length === 0) {
@@ -1441,7 +1441,7 @@ export async function dispatchLintDetailed(
 
 	const groups = withSpotbugsGroup(
 		kind,
-		withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
+		withOpengrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
 		ctx,
 	);
 	if (groups.length === 0) return { result: empty, runners: [] };

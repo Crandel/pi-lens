@@ -10,18 +10,21 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { resolveSemgrepConfig } from "../../semgrep-config.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import { resolveOpengrepConfig } from "../../opengrep-config.js";
+import {
+	createAvailabilityChecker,
+	resolveAvailableOrInstall,
+} from "./utils/runner-helpers.js";
 
-const semgrep = createAvailabilityChecker("semgrep", ".exe");
+const opengrep = createAvailabilityChecker("opengrep", ".exe");
 const MAX_DIAGNOSTICS = 50;
 
-interface SemgrepJsonOutput {
-	results?: SemgrepResult[];
+interface OpengrepJsonOutput {
+	results?: OpengrepResult[];
 	errors?: Array<{ message?: string; type?: string; level?: string }>;
 }
 
-interface SemgrepResult {
+interface OpengrepResult {
 	check_id?: string;
 	path?: string;
 	start?: { line?: number; col?: number };
@@ -93,8 +96,8 @@ function normalizeDefectClass(
 	return undefined;
 }
 
-function semgrepSemantic(
-	result: SemgrepResult,
+function opengrepSemantic(
+	result: OpengrepResult,
 	defectClass: DefectClass,
 ): OutputSemantic {
 	const metadata = result.extra?.metadata ?? {};
@@ -112,10 +115,7 @@ function semgrepSemantic(
 
 	const severity = String(result.extra?.severity ?? "").toUpperCase();
 	const confidence = String(
-		metadata.confidence ??
-			metadata.semgrep_confidence ??
-			piLens.confidence ??
-			"",
+		metadata.confidence ?? piLens.confidence ?? "",
 	).toLowerCase();
 	const highSignalSecurity =
 		defectClass === "injection" ||
@@ -130,21 +130,21 @@ function semgrepSemantic(
 }
 
 function mapSeverity(
-	semgrepSeverity: string | undefined,
+	opengrepSeverity: string | undefined,
 	semantic: OutputSemantic,
 ): Diagnostic["severity"] {
 	if (semantic === "blocking") return "error";
-	const severity = String(semgrepSeverity ?? "").toUpperCase();
+	const severity = String(opengrepSeverity ?? "").toUpperCase();
 	if (severity === "ERROR") return "error";
 	if (severity === "INFO") return "info";
 	return "warning";
 }
 
-function parseSemgrepJson(raw: string, ctx: DispatchContext): Diagnostic[] {
+export function parseOpengrepJson(raw: string, ctx: DispatchContext): Diagnostic[] {
 	if (!raw.trim()) return [];
-	let parsed: SemgrepJsonOutput;
+	let parsed: OpengrepJsonOutput;
 	try {
-		parsed = JSON.parse(raw) as SemgrepJsonOutput;
+		parsed = JSON.parse(raw) as OpengrepJsonOutput;
 	} catch {
 		return [];
 	}
@@ -154,7 +154,7 @@ function parseSemgrepJson(raw: string, ctx: DispatchContext): Diagnostic[] {
 
 	for (const [index, result] of results.entries()) {
 		if (diagnostics.length >= MAX_DIAGNOSTICS) break;
-		const rule = result.check_id || "semgrep";
+		const rule = result.check_id || "opengrep";
 		const message = result.extra?.message || rule;
 		const metadata = result.extra?.metadata ?? {};
 		const piLens = getPiLensMetadata(metadata);
@@ -162,8 +162,8 @@ function parseSemgrepJson(raw: string, ctx: DispatchContext): Diagnostic[] {
 			metadataString(metadata, piLens, "defect_class"),
 		);
 		const defectClass =
-			explicitDefect ?? classifyDefect(rule, "semgrep", message);
-		const semantic = semgrepSemantic(result, defectClass);
+			explicitDefect ?? classifyDefect(rule, "opengrep", message);
+		const semantic = opengrepSemantic(result, defectClass);
 		const filePath = result.path || ctx.filePath;
 		const line = result.start?.line ?? 1;
 		const column = result.start?.col ?? 1;
@@ -172,14 +172,14 @@ function parseSemgrepJson(raw: string, ctx: DispatchContext): Diagnostic[] {
 			(typeof result.extra?.fix === "string" ? result.extra.fix : undefined);
 
 		diagnostics.push({
-			id: `semgrep:${rule}:${path.basename(filePath)}:${line}:${column}:${index}`,
+			id: `opengrep:${rule}:${path.basename(filePath)}:${line}:${column}:${index}`,
 			message: `[${rule}] ${message}`,
 			filePath,
 			line,
 			column,
 			severity: mapSeverity(result.extra?.severity, semantic),
 			semantic,
-			tool: "semgrep",
+			tool: "opengrep",
 			rule,
 			defectClass,
 			fixable: Boolean(fixSuggestion || result.extra?.fix_regex),
@@ -193,8 +193,8 @@ function parseSemgrepJson(raw: string, ctx: DispatchContext): Diagnostic[] {
 	return diagnostics;
 }
 
-const semgrepRunner: RunnerDefinition = {
-	id: "semgrep",
+const opengrepRunner: RunnerDefinition = {
+	id: "opengrep",
 	appliesTo: [
 		"csharp",
 		"css",
@@ -221,35 +221,38 @@ const semgrepRunner: RunnerDefinition = {
 	enabledByDefault: false,
 
 	async when(ctx: DispatchContext): Promise<boolean> {
-		return resolveSemgrepConfig(ctx.cwd, {
-			enabled: Boolean(ctx.pi.getFlag("lens-semgrep")),
-			config: ctx.pi.getFlag("lens-semgrep-config"),
+		return resolveOpengrepConfig(ctx.cwd, {
+			enabled: Boolean(ctx.pi.getFlag("lens-opengrep")),
+			config: ctx.pi.getFlag("lens-opengrep-config"),
 		}).enabled;
 	},
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
-		const resolved = resolveSemgrepConfig(cwd, {
-			enabled: Boolean(ctx.pi.getFlag("lens-semgrep")),
-			config: ctx.pi.getFlag("lens-semgrep-config"),
+		const resolved = resolveOpengrepConfig(cwd, {
+			enabled: Boolean(ctx.pi.getFlag("lens-opengrep")),
+			config: ctx.pi.getFlag("lens-opengrep-config"),
 		});
 		if (!resolved.enabled) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		if (
-			!(await (semgrep.isAvailableAsync(cwd)))
-		) {
+		// Opengrep is auto-installable (single GitHub-release binary, no login or
+		// telemetry) — unlike Semgrep it installs on demand when elected (#111).
+		const cmd = await resolveAvailableOrInstall(opengrep, "opengrep", cwd);
+		if (!cmd) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
-		const cmd = semgrep.getCommand(cwd) ?? "semgrep";
-		const args = ["scan", "--json", "--metrics=off", "--timeout", "5"];
+
+		// NOTE: Opengrep has no `--metrics` flag (it never phones home), so unlike
+		// Semgrep we must NOT pass `--metrics=off` — it would error on the unknown flag.
+		const args = ["scan", "--json", "--timeout", "5"];
 		if (resolved.configArg) args.push("--config", resolved.configArg);
 		args.push(ctx.filePath);
 
 		const result = await safeSpawnAsync(cmd, args, { cwd, timeout: 20000 });
 		const raw = result.stdout || "";
-		const diagnostics = parseSemgrepJson(raw, ctx);
+		const diagnostics = parseOpengrepJson(raw, ctx);
 		if (diagnostics.length === 0) {
 			return {
 				status: result.error ? "failed" : "succeeded",
@@ -268,4 +271,4 @@ const semgrepRunner: RunnerDefinition = {
 	},
 };
 
-export default semgrepRunner;
+export default opengrepRunner;

@@ -87,13 +87,13 @@ import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
 import { isExternalOrVendorFile } from "./clients/path-utils.js";
 import { safeSpawnAsync, setAmbientAbortSignal } from "./clients/safe-spawn.js";
 import {
-	createStarterSemgrepConfig,
-	findLocalSemgrepConfig,
-	loadPiLensSemgrepConfig,
-	removePiLensSemgrepConfig,
-	resolveSemgrepConfig,
-	savePiLensSemgrepConfig,
-} from "./clients/semgrep-config.js";
+	createStarterOpengrepConfig,
+	findLocalOpengrepConfig,
+	loadPiLensOpengrepConfig,
+	removePiLensOpengrepConfig,
+	resolveOpengrepConfig,
+	savePiLensOpengrepConfig,
+} from "./clients/opengrep-config.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { handleBooboo } from "./commands/booboo.js";
 import { initI18n, t } from "./i18n.js";
@@ -490,16 +490,16 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
-	pi.registerFlag("lens-semgrep", {
+	pi.registerFlag("lens-opengrep", {
 		description:
-			"Enable Semgrep dispatch when a Semgrep config is available (or with --lens-semgrep-config)",
+			"Enable Opengrep dispatch when a Opengrep config is available (or with --lens-opengrep-config)",
 		type: "boolean",
 		default: false,
 	});
 
-	pi.registerFlag("lens-semgrep-config", {
+	pi.registerFlag("lens-opengrep-config", {
 		description:
-			"Semgrep config for dispatch: local path, auto, p/<pack>, or r/<rule>. Requires --lens-semgrep.",
+			"Opengrep config for dispatch: local path, auto, p/<pack>, or r/<rule>. Requires --lens-opengrep.",
 		type: "string",
 		default: "",
 	});
@@ -642,9 +642,9 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("lens-semgrep", {
+	pi.registerCommand("lens-opengrep", {
 		description:
-			"Manage Semgrep dispatch. Usage: /lens-semgrep status | enable [--config <auto|p/pack|path>] | disable | init",
+			"Manage Opengrep dispatch. Usage: /lens-opengrep status | enable [--config <auto|p/pack|path>] | disable | init",
 		handler: async (args, ctx) => {
 			const parts = normalizeCommandArgs(args);
 			const action = parts[0] ?? "status";
@@ -660,52 +660,52 @@ export default function (pi: ExtensionAPI) {
 
 			if (action === "enable") {
 				const config = readConfigArg();
-				const localConfig = findLocalSemgrepConfig(cwd);
+				const localConfig = findLocalOpengrepConfig(cwd);
 				if (!config && !localConfig) {
 					ctx.ui.notify(
 						[
-							"Semgrep dispatch not enabled yet: no local .semgrep.yml was found.",
-							"Use `/lens-semgrep init` to create a starter local config, or `/lens-semgrep enable --config auto` / `p/<pack>` if you want Semgrep registry/platform configuration.",
-							"pi-lens will not auto-install Semgrep; install it with pipx/uv/brew first and login only if your chosen Semgrep config requires it.",
+							"Opengrep dispatch not enabled yet: no local .opengrep.yml was found.",
+							"Use `/lens-opengrep init` to create a starter local config, or `/lens-opengrep enable --config auto` / `p/<pack>` to use registry rule packs.",
+							"pi-lens auto-installs Opengrep on demand (single binary, no login or token required).",
 						].join("\n"),
 						"warning",
 					);
 					return;
 				}
 
-				const savedPath = savePiLensSemgrepConfig(cwd, {
+				const savedPath = savePiLensOpengrepConfig(cwd, {
 					enabled: true,
 					...(config ? { config } : {}),
 				});
 				ctx.ui.notify(
-					`Semgrep dispatch enabled (${config ? `config: ${config}` : `local config: ${localConfig}`}). Saved ${savedPath}`,
+					`Opengrep dispatch enabled (${config ? `config: ${config}` : `local config: ${localConfig}`}). Saved ${savedPath}`,
 					"info",
 				);
 				return;
 			}
 
 			if (action === "disable") {
-				const savedPath = savePiLensSemgrepConfig(cwd, { enabled: false });
-				ctx.ui.notify(`Semgrep dispatch disabled. Saved ${savedPath}`, "info");
+				const savedPath = savePiLensOpengrepConfig(cwd, { enabled: false });
+				ctx.ui.notify(`Opengrep dispatch disabled. Saved ${savedPath}`, "info");
 				return;
 			}
 
 			if (action === "clear") {
-				const removed = removePiLensSemgrepConfig(cwd);
+				const removed = removePiLensOpengrepConfig(cwd);
 				ctx.ui.notify(
 					removed
-						? "Removed .pi-lens/semgrep.json; Semgrep now auto-enables only when local .semgrep.yml exists."
-						: "No .pi-lens/semgrep.json found.",
+						? "Removed .pi-lens/opengrep.json; Opengrep now auto-enables only when local .opengrep.yml exists."
+						: "No .pi-lens/opengrep.json found.",
 					"info",
 				);
 				return;
 			}
 
 			if (action === "init") {
-				const configPath = createStarterSemgrepConfig(cwd);
-				const savedPath = savePiLensSemgrepConfig(cwd, { enabled: true });
+				const configPath = createStarterOpengrepConfig(cwd);
+				const savedPath = savePiLensOpengrepConfig(cwd, { enabled: true });
 				ctx.ui.notify(
-					`Created starter Semgrep config at ${configPath} and enabled Semgrep dispatch (${savedPath}).`,
+					`Created starter Opengrep config at ${configPath} and enabled Opengrep dispatch (${savedPath}).`,
 					"info",
 				);
 				return;
@@ -713,25 +713,25 @@ export default function (pi: ExtensionAPI) {
 
 			if (action !== "status") {
 				ctx.ui.notify(
-					"Usage: /lens-semgrep status | enable [--config <auto|p/pack|path>] | disable | clear | init",
+					"Usage: /lens-opengrep status | enable [--config <auto|p/pack|path>] | disable | clear | init",
 					"warning",
 				);
 				return;
 			}
 
-			const localConfig = findLocalSemgrepConfig(cwd);
-			const piLensConfig = loadPiLensSemgrepConfig(cwd);
-			const resolved = resolveSemgrepConfig(cwd, {
-				enabled: Boolean(getLensFlag("lens-semgrep")),
-				config: getLensFlag("lens-semgrep-config"),
+			const localConfig = findLocalOpengrepConfig(cwd);
+			const piLensConfig = loadPiLensOpengrepConfig(cwd);
+			const resolved = resolveOpengrepConfig(cwd, {
+				enabled: Boolean(getLensFlag("lens-opengrep")),
+				config: getLensFlag("lens-opengrep-config"),
 			});
-			const version = await safeSpawnAsync("semgrep", ["--version"], {
+			const version = await safeSpawnAsync("opengrep", ["--version"], {
 				cwd,
 				timeout: 5000,
 			});
 			const lines = [
-				"🔎 SEMGREP DISPATCH",
-				`CLI: ${!version.error && version.status === 0 ? `installed (${(version.stdout || version.stderr).trim()})` : "not found on PATH"}`,
+				"🔎 OPENGREP DISPATCH",
+				`CLI: ${!version.error && version.status === 0 ? `installed (${(version.stdout || version.stderr).trim()})` : "not on PATH yet (auto-installs on first dispatch)"}`,
 				`Local config: ${localConfig ?? "none"}`,
 				`pi-lens config: ${piLensConfig ? JSON.stringify(piLensConfig) : "none"}`,
 				`Effective: ${resolved.enabled ? "enabled" : "disabled"}`,
@@ -740,7 +740,7 @@ export default function (pi: ExtensionAPI) {
 			if (resolved.reason) lines.push(`Reason: ${resolved.reason}`);
 			lines.push(
 				"",
-				"No auto-install. Token/login is only needed for Semgrep AppSec/Pro/managed configs; local .semgrep.yml scans do not require a token.",
+				"Auto-installed on demand from GitHub releases (single binary; no login or token required).",
 			);
 			ctx.ui.notify(lines.join("\n"), resolved.enabled ? "info" : "warning");
 		},

@@ -927,6 +927,10 @@ const TOOL_EXECUTION_POLICY = new Map<string, ToolExecutionPolicy>([
 	// descriptor + compiled .class files), auto-installed via the archive
 	// strategy when elected (#133).
 	["spotbugs", { gate: "config-first", autoInstall: true }],
+	// Opengrep is opt-in (lens-opengrep flag or a discovered rule file) and
+	// config-first, but auto-installable via the GitHub single-binary strategy
+	// once elected — no login/token required, unlike Semgrep (#111).
+	["opengrep", { gate: "config-first", autoInstall: true }],
 	["phpstan", { gate: "config-first", autoInstall: false }],
 	["eslint", { gate: "config-first", autoInstall: false }],
 	["prettier", { gate: "smart-default", autoInstall: true }],

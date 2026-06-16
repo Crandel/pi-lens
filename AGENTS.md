@@ -138,7 +138,7 @@ const cacheFile = path.join(getProjectDataDir(cwd), "cache", "my-file.json");
 - Otherwise, if `<cwd>/.pi-lens/` already exists → use it (legacy)
 - Default → `~/.pi-lens/projects/<project-slug>/`
 
-**Project-scoped** (must use `getProjectDataDir`): caches, snapshots, indexes, worklogs, change-log, code-quality-warnings, actionable-warning-state, review-graph, semgrep config, install-choices.
+**Project-scoped** (must use `getProjectDataDir`): caches, snapshots, indexes, worklogs, change-log, code-quality-warnings, actionable-warning-state, review-graph, opengrep config, install-choices.
 
 **Machine-global** (intentionally hardcoded to `~/.pi-lens/`): latency.log, cascade.log, tree-sitter.log, sessionstart.log, read-guard.log, actionable-warnings.log, tools/, bin/, intelephense/, logs/. These are shared across all projects.
 
@@ -317,7 +317,7 @@ Every dispatch warning passes through one of two recorders in `clients/pipeline.
 A runner that wraps a tool with an auto-fix capability **must** propagate `fixable: true` or `fixSuggestion: "<rule-specific guidance>"` per diagnostic — otherwise everything it produces silently goes to code-quality and never reaches the actionable advisory. Severity-`error` diagnostics route to blockers instead, regardless of fixability.
 
 Patterns by tool capability:
-- **Tool exposes per-diagnostic fix metadata** (biome, eslint, ruff, rubocop, shellcheck, semgrep, oxlint via `--format json` + `help`, ast-grep, tree-sitter via `has_fix`): read it directly, set `fixable: !!fix` or `fixSuggestion: help`.
+- **Tool exposes per-diagnostic fix metadata** (biome, eslint, ruff, rubocop, shellcheck, opengrep, oxlint via `--format json` + `help`, ast-grep, tree-sitter via `has_fix`): read it directly, set `fixable: !!fix` or `fixSuggestion: help`.
 - **Tool has `--fix` but no per-warning fix flag** (stylelint, markdownlint): static allowlist of rule IDs documented as deterministically fixable. False positives are worse than false negatives — keep the list conservative.
 - **Tool has no auto-fix** (cpp-check, phpstan, javac, pyright, mypy, go-vet, actionlint, yamllint, etc.): hard-code `fixable: false`. The diagnostic correctly lands in code-quality.
 

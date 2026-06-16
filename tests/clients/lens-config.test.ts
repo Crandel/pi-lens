@@ -130,7 +130,7 @@ describe("global pi-lens config", () => {
 		expect(
 			resolvePiLensFlag("lens-actionable-warning-all", false, config),
 		).toBe(false);
-		expect(resolvePiLensFlag("lens-semgrep-config", "p/ci", config)).toBe(
+		expect(resolvePiLensFlag("lens-opengrep-config", "p/ci", config)).toBe(
 			"p/ci",
 		);
 	});

@@ -3,13 +3,13 @@ import * as path from "node:path";
 import { getProjectDataDir } from "./file-utils.js";
 import { walkUpDirs } from "./path-utils.js";
 
-export interface PiLensSemgrepConfig {
+export interface PiLensOpengrepConfig {
 	enabled?: boolean;
-	/** Semgrep config: local path, auto, p/<pack>, r/<rule>, or omitted for local auto-discovery. */
+	/** Opengrep config: local path, auto, p/<pack>, r/<rule>, or omitted for local auto-discovery. */
 	config?: string;
 }
 
-export interface ResolvedSemgrepConfig {
+export interface ResolvedOpengrepConfig {
 	enabled: boolean;
 	/** Value to pass after --config. */
 	configArg?: string;
@@ -17,16 +17,24 @@ export interface ResolvedSemgrepConfig {
 	reason?: string;
 }
 
-export const LOCAL_SEMGREP_CONFIG_NAMES = [
+// Opengrep is a fork of Semgrep and natively consumes the same rule format, so
+// we discover both `.opengrep.*` (preferred) and the de-facto `.semgrep.*` rule
+// files an existing repo may already carry. These are third-party rule files,
+// not pi-lens's own configuration surface (which is opengrep-only).
+export const LOCAL_OPENGREP_CONFIG_NAMES = [
+	".opengrep.yml",
+	".opengrep.yaml",
+	"opengrep.yml",
+	"opengrep.yaml",
 	".semgrep.yml",
 	".semgrep.yaml",
 	"semgrep.yml",
 	"semgrep.yaml",
 ] as const;
 
-export function findLocalSemgrepConfig(startDir: string): string | undefined {
+export function findLocalOpengrepConfig(startDir: string): string | undefined {
 	for (const dir of walkUpDirs(startDir || process.cwd())) {
-		for (const name of LOCAL_SEMGREP_CONFIG_NAMES) {
+		for (const name of LOCAL_OPENGREP_CONFIG_NAMES) {
 			const candidate = path.join(dir, name);
 			if (fs.existsSync(candidate)) return candidate;
 		}
@@ -34,28 +42,31 @@ export function findLocalSemgrepConfig(startDir: string): string | undefined {
 	return undefined;
 }
 
-export function findPiLensSemgrepConfigPath(
+export function findPiLensOpengrepConfigPath(
 	startDir: string,
 ): string | undefined {
 	// Check the configured data dir for the project first (respects PILENS_DATA_DIR)
-	const dataCandidate = path.join(getProjectDataDir(startDir), "semgrep.json");
+	const dataCandidate = path.join(getProjectDataDir(startDir), "opengrep.json");
 	if (fs.existsSync(dataCandidate)) return dataCandidate;
 	// Fall back to legacy walk-up search for backwards compatibility
 	for (const dir of walkUpDirs(startDir || process.cwd())) {
-		const candidate = path.join(dir, ".pi-lens", "semgrep.json");
+		const candidate = path.join(dir, ".pi-lens", "opengrep.json");
 		if (fs.existsSync(candidate)) return candidate;
 	}
 	return undefined;
 }
 
-export function getPiLensSemgrepConfigPath(cwd: string): string {
-	return path.join(getProjectDataDir(path.resolve(cwd || process.cwd())), "semgrep.json");
+export function getPiLensOpengrepConfigPath(cwd: string): string {
+	return path.join(
+		getProjectDataDir(path.resolve(cwd || process.cwd())),
+		"opengrep.json",
+	);
 }
 
-export function loadPiLensSemgrepConfig(
+export function loadPiLensOpengrepConfig(
 	startDir: string,
-): PiLensSemgrepConfig | undefined {
-	const configPath = findPiLensSemgrepConfigPath(startDir);
+): PiLensOpengrepConfig | undefined {
+	const configPath = findPiLensOpengrepConfigPath(startDir);
 	if (!configPath) return undefined;
 	try {
 		const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8")) as unknown;
@@ -70,11 +81,11 @@ export function loadPiLensSemgrepConfig(
 	}
 }
 
-export function savePiLensSemgrepConfig(
+export function savePiLensOpengrepConfig(
 	cwd: string,
-	config: PiLensSemgrepConfig,
+	config: PiLensOpengrepConfig,
 ): string {
-	const configPath = getPiLensSemgrepConfigPath(cwd);
+	const configPath = getPiLensOpengrepConfigPath(cwd);
 	fs.mkdirSync(path.dirname(configPath), { recursive: true });
 	fs.writeFileSync(
 		`${configPath}.tmp`,
@@ -84,8 +95,8 @@ export function savePiLensSemgrepConfig(
 	return configPath;
 }
 
-export function removePiLensSemgrepConfig(cwd: string): boolean {
-	const configPath = getPiLensSemgrepConfigPath(cwd);
+export function removePiLensOpengrepConfig(cwd: string): boolean {
+	const configPath = getPiLensOpengrepConfigPath(cwd);
 	if (!fs.existsSync(configPath)) return false;
 	fs.unlinkSync(configPath);
 	return true;
@@ -97,7 +108,7 @@ function isRegistryOrAutoConfig(config: string): boolean {
 	);
 }
 
-export function normalizeSemgrepConfigArg(
+export function normalizeOpengrepConfigArg(
 	config: string | undefined,
 	cwd: string,
 ): string | undefined {
@@ -108,12 +119,12 @@ export function normalizeSemgrepConfigArg(
 	return path.isAbsolute(trimmed) ? trimmed : path.resolve(cwd, trimmed);
 }
 
-export function resolveSemgrepConfig(
+export function resolveOpengrepConfig(
 	cwd: string,
 	flags?: { enabled?: boolean; config?: string | boolean | undefined },
-): ResolvedSemgrepConfig {
-	const localConfig = findLocalSemgrepConfig(cwd);
-	const persisted = loadPiLensSemgrepConfig(cwd);
+): ResolvedOpengrepConfig {
+	const localConfig = findLocalOpengrepConfig(cwd);
+	const persisted = loadPiLensOpengrepConfig(cwd);
 	const flagConfig =
 		typeof flags?.config === "string" && flags.config.trim()
 			? flags.config.trim()
@@ -123,18 +134,18 @@ export function resolveSemgrepConfig(
 		return {
 			enabled: false,
 			source: "disabled",
-			reason: "disabled in .pi-lens/semgrep.json",
+			reason: "disabled in .pi-lens/opengrep.json",
 		};
 	}
 
 	if (flags?.enabled) {
-		const configArg = normalizeSemgrepConfigArg(flagConfig ?? localConfig, cwd);
+		const configArg = normalizeOpengrepConfigArg(flagConfig ?? localConfig, cwd);
 		if (!configArg) {
 			return {
 				enabled: false,
 				source: "disabled",
 				reason:
-					"--lens-semgrep was set but no Semgrep config was found; pass --lens-semgrep-config auto|p/<pack>|<path> or create .semgrep.yml",
+					"--lens-opengrep was set but no Opengrep config was found; pass --lens-opengrep-config auto|p/<pack>|<path> or create .opengrep.yml",
 			};
 		}
 		return {
@@ -145,7 +156,7 @@ export function resolveSemgrepConfig(
 	}
 
 	if (persisted?.enabled) {
-		const configArg = normalizeSemgrepConfigArg(
+		const configArg = normalizeOpengrepConfigArg(
 			persisted.config ?? localConfig,
 			cwd,
 		);
@@ -154,7 +165,7 @@ export function resolveSemgrepConfig(
 				enabled: false,
 				source: "disabled",
 				reason:
-					"Semgrep is enabled in .pi-lens/semgrep.json but no config is set or discovered",
+					"Opengrep is enabled in .pi-lens/opengrep.json but no config is set or discovered",
 			};
 		}
 		return {
@@ -175,14 +186,14 @@ export function resolveSemgrepConfig(
 	return {
 		enabled: false,
 		source: "disabled",
-		reason: "no local semgrep config and semgrep not explicitly enabled",
+		reason: "no local opengrep config and opengrep not explicitly enabled",
 	};
 }
 
-export function createStarterSemgrepConfig(cwd: string): string {
+export function createStarterOpengrepConfig(cwd: string): string {
 	const configPath = path.join(
 		path.resolve(cwd || process.cwd()),
-		".semgrep.yml",
+		".opengrep.yml",
 	);
 	if (fs.existsSync(configPath)) return configPath;
 	const contents = `rules:

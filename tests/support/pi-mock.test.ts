@@ -5,10 +5,10 @@ describe("createPiMock", () => {
 	it("records flags and exposes defaults via getFlag", () => {
 		const pi = createPiMock();
 		pi.registerFlag("no-lens", { type: "boolean", default: false });
-		pi.registerFlag("lens-semgrep-config", { type: "string" });
+		pi.registerFlag("lens-opengrep-config", { type: "string" });
 		expect(pi.flags.has("no-lens")).toBe(true);
 		expect(pi.getFlag("no-lens")).toBe(false); // seeded from default
-		expect(pi.getFlag("lens-semgrep-config")).toBeUndefined();
+		expect(pi.getFlag("lens-opengrep-config")).toBeUndefined();
 	});
 
 	it("setFlag overrides getFlag (and pre-set wins over default)", () => {

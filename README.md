@@ -33,7 +33,7 @@ On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (check
 3. **Auto-fix** — safe autofixes from 6 tools (Biome `check --write`, Ruff `check --fix`, ESLint `--fix`, stylelint `--fix`, sqlfluff `fix`, RuboCop `-a`) applied before analysis
 4. **Edit autopatch** — before an `edit` tool call lands, pi-lens silently corrects two classes of `oldText` mismatch: leading tab/space indentation (when the corrected text matches exactly one location) and trailing whitespace stripped by formatters. Both corrections also retarget `newText` so the replacement matches the file's whitespace style
 5. **LSP file sync** — opens/updates the file in active language servers
-5. **Dispatch lint** — parallel runner groups: LSP diagnostics, tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, experimental Semgrep security scans, similarity detection
+5. **Dispatch lint** — parallel runner groups: LSP diagnostics, tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, experimental Opengrep security scans, similarity detection
 6. **Cascade diagnostics** — review-graph impact cascade showing which other files were affected and how diagnostics propagated
 
 Results are inline and actionable:
@@ -188,25 +188,24 @@ Pattern-based structural rules in `rules/ast-grep-rules/` across JS, TS, and Pyt
 
 **Bring your own rules:** drop YAML rule files into `rules/ast-grep-rules/rules/<id>.yml` in your project — pi-lens merges them with the built-ins; same `id` as a built-in overrides it. The supported subset of ast-grep's rule schema (the NAPI runner does not support `inside` / `follows` / `precedes` / `stopBy` / `field` / `nthChild` / `constraints` — use a tree-sitter rule when you need relational context) is documented in [`docs/custom-rules.md`](docs/custom-rules.md), with a `rules/ast-grep-rules/rule-schema.json` JSON Schema for editor autocomplete.
 
-### Semgrep CLI Integration (Experimental)
+### Opengrep CLI Integration (Experimental)
 
-pi-lens can run the locally installed `semgrep` CLI as an optional dispatch runner for security-focused findings. Semgrep diagnostics are normalized into the same pi-lens `Diagnostic` model as LSP, tree-sitter, ast-grep, and linters: high-signal security findings can become blocking, while other findings remain warnings for `/lens-booboo`/history.
+pi-lens can run the [Opengrep](https://github.com/opengrep/opengrep) CLI (an open, login-free fork of Semgrep) as an optional dispatch runner for security-focused findings. Opengrep diagnostics are normalized into the same pi-lens `Diagnostic` model as LSP, tree-sitter, ast-grep, and linters: high-signal security findings can become blocking, while other findings remain warnings for `/lens-booboo`/history.
 
 Activation is intentionally gated:
 
-- pi-lens **does not auto-install Semgrep**.
-- A local `.semgrep.yml`, `.semgrep.yaml`, `semgrep.yml`, or `semgrep.yaml` enables the runner when the `semgrep` CLI is available.
-- Without a local config, Semgrep stays skipped unless explicitly configured with `--lens-semgrep --lens-semgrep-config <auto|p/pack|path>` or `/lens-semgrep enable --config <auto|p/pack|path>`.
-- Local `.semgrep.yml` scans do not require a Semgrep token. Semgrep AppSec/Pro/managed configurations may require `semgrep login` or `SEMGREP_APP_TOKEN`.
-- pi-lens passes `--metrics=off` for dispatch scans.
+- pi-lens **auto-installs Opengrep on demand** — a single GitHub-release binary, with **no login, token, or telemetry** required.
+- A local `.opengrep.yml`/`.opengrep.yaml` (or a legacy `.semgrep.yml`/`.semgrep.yaml`, whose rule format Opengrep consumes natively) enables the runner.
+- Without a local config, Opengrep stays skipped unless explicitly configured with `--lens-opengrep --lens-opengrep-config <auto|p/pack|path>` or `/lens-opengrep enable --config <auto|p/pack|path>`.
+- Registry rule packs (`auto`, `p/<pack>`, `r/<rule>`) are fetched by Opengrep itself; no account is needed for the open rule registry.
 
 Commands:
 
-- `/lens-semgrep status` — show CLI availability, discovered local config, persisted pi-lens config, and effective dispatch state
-- `/lens-semgrep init` — create a starter `.semgrep.yml` with a blocking `eval(...)` rule and enable Semgrep dispatch
-- `/lens-semgrep enable [--config <auto|p/pack|path>]` — persist Semgrep dispatch activation in `.pi-lens/semgrep.json`
-- `/lens-semgrep disable` — persistently disable Semgrep dispatch for this project
-- `/lens-semgrep clear` — remove `.pi-lens/semgrep.json` and return to local-config auto-discovery
+- `/lens-opengrep status` — show CLI availability, discovered local config, persisted pi-lens config, and effective dispatch state
+- `/lens-opengrep init` — create a starter `.opengrep.yml` with a blocking `eval(...)` rule and enable Opengrep dispatch
+- `/lens-opengrep enable [--config <auto|p/pack|path>]` — persist Opengrep dispatch activation in `.pi-lens/opengrep.json`
+- `/lens-opengrep disable` — persistently disable Opengrep dispatch for this project
+- `/lens-opengrep clear` — remove `.pi-lens/opengrep.json` and return to local-config auto-discovery
 
 Local rules can opt into pi-lens blocking semantics with metadata:
 
@@ -234,8 +233,8 @@ pi --no-autofix           # Skip auto-fix (Biome, Ruff, ESLint, stylelint, sqlfl
 pi --no-tests             # Skip test runner
 pi --no-delta             # Disable delta mode (show all diagnostics, not just new ones)
 pi --lens-guard           # Block git commit/push when unresolved blockers exist (experimental)
-pi --lens-semgrep         # Enable Semgrep dispatch when a local/configured Semgrep config exists
-pi --lens-semgrep-config p/ci  # Explicit Semgrep config for dispatch (requires --lens-semgrep)
+pi --lens-opengrep        # Enable Opengrep dispatch when a local/configured Opengrep config exists
+pi --lens-opengrep-config p/ci # Explicit Opengrep config for dispatch (requires --lens-opengrep)
 ```
 
 ## Global Config
@@ -305,7 +304,7 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 - `/lens-allow-edit <path>` — override the read-before-edit guard for a single edit
 - `/lens-tools` — tool installation status: globally installed, auto-installed, or npx fallback
 - `/lens-tdi` — Technical Debt Index (TDI) and project health trend
-- `/lens-semgrep` — manage experimental Semgrep dispatch (`status`, `init`, `enable`, `disable`, `clear`)
+- `/lens-opengrep` — manage experimental Opengrep dispatch (`status`, `init`, `enable`, `disable`, `clear`)
 
 ## Language Coverage
 
@@ -402,7 +401,7 @@ Auto-install behavior depends on gate type:
 | `vscode-html-languageserver-bin`    | HTML LSP                         | Yes            | Language-default                   |
 | `svelte-language-server`            | Svelte LSP                       | Yes            | Flow-gated                         |
 | `@vue/language-server`              | Vue LSP                          | Yes            | Flow-gated                         |
-| `semgrep`                           | Experimental security dispatch   | Manual         | Local config / explicit opt-in     |
+| `opengrep`                          | Experimental security dispatch   | Auto-install   | Local config / explicit opt-in     |
 | `psscriptanalyzer`                  | PowerShell linting               | Manual         | —                                  |
 
 Additional language servers (gopls, ruby-lsp, solargraph, etc.) are auto-detected from PATH or installed via native package managers (`go install`, `gem install`) when their language is detected.

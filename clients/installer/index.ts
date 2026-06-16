@@ -347,6 +347,30 @@ export const TOOLS: ToolDefinition[] = [
 		},
 	},
 	{
+		// Opengrep: a single standalone binary per platform on GitHub releases —
+		// no login, no telemetry (the reason for switching off Semgrep, #111).
+		id: "opengrep",
+		name: "Opengrep",
+		checkCommand: "opengrep",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "opengrep",
+		github: {
+			repo: "opengrep/opengrep",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64"
+						? "opengrep_manylinux_aarch64"
+						: "opengrep_manylinux_x86";
+				if (platform === "darwin")
+					return arch === "arm64" ? "opengrep_osx_arm64" : "opengrep_osx_x86";
+				// One x86 Windows build; runs on arm64 Windows via emulation.
+				if (platform === "win32") return "opengrep_windows_x86.exe";
+				return undefined;
+			},
+		},
+	},
+	{
 		id: "vscode-css-languageserver",
 		name: "VSCode CSS Language Server",
 		checkCommand: "vscode-css-language-server",
@@ -2652,6 +2676,7 @@ export const GITHUB_TOOLS = [
 	"gitleaks",
 	"taplo",
 	"vale",
+	"opengrep",
 ] as const;
 export type GitHubToolId = (typeof GITHUB_TOOLS)[number];
 

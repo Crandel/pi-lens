@@ -33,7 +33,7 @@ describe("createMcpHost", () => {
 	});
 
 	it("passes a string override through unchanged", () => {
-		const host = createMcpHost({ "lens-semgrep-config": "p/security" });
-		expect(host.getFlag("lens-semgrep-config")).toBe("p/security");
+		const host = createMcpHost({ "lens-opengrep-config": "p/security" });
+		expect(host.getFlag("lens-opengrep-config")).toBe("p/security");
 	});
 });

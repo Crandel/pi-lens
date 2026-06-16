@@ -24,9 +24,9 @@ import { registerDefaultRunners } from "../../../clients/dispatch/runners/index.
 
 // Runners reachable by a path the static plans don't capture.
 const DYNAMIC_OR_EXEMPT = new Set<string>([
-	// Injected at dispatch time by withSemgrepGroup when --lens-semgrep or a
-	// project semgrep config enables it — never in the static plan.
-	"semgrep",
+	// Injected at dispatch time by withOpengrepGroup when --lens-opengrep or a
+	// project opengrep config enables it — never in the static plan.
+	"opengrep",
 	// Injected by withSpotbugsGroup when --lens-spotbugs + a Java build descriptor
 	// + compiled .class dir are present — never in the static plan (#133).
 	"spotbugs",
