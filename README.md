@@ -33,7 +33,7 @@ On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (check
 3. **Auto-fix** — safe autofixes from 6 tools (Biome `check --write`, Ruff `check --fix`, ESLint `--fix`, stylelint `--fix`, sqlfluff `fix`, RuboCop `-a`) applied before analysis
 4. **Edit autopatch** — before an `edit` tool call lands, pi-lens silently corrects two classes of `oldText` mismatch: leading tab/space indentation (when the corrected text matches exactly one location) and trailing whitespace stripped by formatters. Both corrections also retarget `newText` so the replacement matches the file's whitespace style
 5. **LSP file sync** — opens/updates the file in active language servers
-5. **Dispatch lint** — parallel runner groups: LSP diagnostics, tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, experimental Opengrep security scans, similarity detection
+5. **Dispatch lint** — parallel runner groups: LSP diagnostics (incl. the Opengrep auxiliary security scanner), tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, similarity detection
 6. **Cascade diagnostics** — review-graph impact cascade showing which other files were affected and how diagnostics propagated
 
 Results are inline and actionable:
@@ -78,7 +78,7 @@ pi install git:github.com/apmantza/pi-lens
 
 ### LSP Support
 
-pi-lens includes **37 language server definitions**. LSP is **enabled by default** (`--lsp` or no flag). Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server is not installed, pi-lens offers an interactive install prompt.
+pi-lens includes **38 language server definitions** (including Opengrep, a cross-cutting *auxiliary* security scanner that attaches alongside the file's language server — see below). LSP is **enabled by default** (`--lsp` or no flag). Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server is not installed, pi-lens offers an interactive install prompt.
 
 **LSP Idle Management:** LSP servers shut down after 240 seconds of inactivity (no files modified) to free resources. The timer resets when you resume editing, preventing cold-start penalties during active development.
 
@@ -188,16 +188,14 @@ Pattern-based structural rules in `rules/ast-grep-rules/` across JS, TS, and Pyt
 
 **Bring your own rules:** drop YAML rule files into `rules/ast-grep-rules/rules/<id>.yml` in your project — pi-lens merges them with the built-ins; same `id` as a built-in overrides it. The supported subset of ast-grep's rule schema (the NAPI runner does not support `inside` / `follows` / `precedes` / `stopBy` / `field` / `nthChild` / `constraints` — use a tree-sitter rule when you need relational context) is documented in [`docs/custom-rules.md`](docs/custom-rules.md), with a `rules/ast-grep-rules/rule-schema.json` JSON Schema for editor autocomplete.
 
-### Opengrep CLI Integration (Experimental)
+### Opengrep Security Scanner (Auxiliary LSP, Experimental)
 
-pi-lens can run the [Opengrep](https://github.com/opengrep/opengrep) CLI (an open, login-free fork of Semgrep) as an optional dispatch runner for security-focused findings. Opengrep diagnostics are normalized into the same pi-lens `Diagnostic` model as LSP, tree-sitter, ast-grep, and linters: high-signal security findings can become blocking, while other findings remain warnings for `/lens-booboo`/history.
+[Opengrep](https://github.com/opengrep/opengrep) (an open, login-free fork of Semgrep) runs as a pi-lens **auxiliary diagnostic LSP** — a cross-cutting, diagnostic-only language server that attaches *alongside* the file's normal language server (TypeScript, Python, …) and contributes findings on the same on-write diagnostics path. Running it as a warm LSP server compiles its ruleset **once per session** rather than on every file, so per-file scans cost ~1–2s (vs ~8s for a cold CLI invocation per file). High-signal security findings become blocking; the rest are advisory.
 
-Activation is seamless and stays off until you opt in — there is no command and no persisted config to manage. Opengrep dispatch turns on when **either**:
+- **On by default** (it's a registered LSP server) when the `opengrep` binary is available; pi-lens **auto-installs it on demand** — a single GitHub-release binary, **no login, token, or telemetry**. Disable with `--no-opengrep`.
+- **Rules:** a repo `.opengrep.yml`/`.opengrep.yaml` (or a legacy `.semgrep.yml`/`.semgrep.yaml`, whose format Opengrep consumes natively) is used if present; otherwise it falls back to Opengrep's login-free `auto` Community ruleset.
 
-- **the repo carries a rule file** — `.opengrep.yml`/`.opengrep.yaml` (or a legacy `.semgrep.yml`/`.semgrep.yaml`, whose rule format Opengrep consumes natively). The rule file *is* the opt-in signal; or
-- **you pass `--lens-opengrep`** — self-sufficient: with no local rule file it defaults to `--config auto`, Opengrep's login-free Community ruleset. Override with `--lens-opengrep-config <auto|p/pack|path>` (passing a config implies `--lens-opengrep`).
-
-In all cases pi-lens **auto-installs Opengrep on demand** — a single GitHub-release binary, with **no login, token, or telemetry** required. Registry rule packs (`auto`, `p/<pack>`, `r/<rule>`) are fetched by Opengrep itself; no account is needed.
+This is the first adopter of pi-lens's **auxiliary-LSP capability** (`role:"auxiliary"` servers + `clients/dispatch/auxiliary-lsp.ts`) — the same path future cross-cutting scanners (spelling, secrets, …) plug into by registration.
 
 Local rules can opt into pi-lens blocking semantics with metadata:
 
@@ -225,8 +223,7 @@ pi --no-autofix           # Skip auto-fix (Biome, Ruff, ESLint, stylelint, sqlfl
 pi --no-tests             # Skip test runner
 pi --no-delta             # Disable delta mode (show all diagnostics, not just new ones)
 pi --lens-guard           # Block git commit/push when unresolved blockers exist (experimental)
-pi --lens-opengrep        # Enable Opengrep dispatch when a local/configured Opengrep config exists
-pi --lens-opengrep-config p/ci # Explicit Opengrep config for dispatch (requires --lens-opengrep)
+pi --no-opengrep          # Disable the Opengrep security scanner (default-on auxiliary LSP)
 ```
 
 ## Global Config

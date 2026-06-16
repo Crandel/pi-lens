@@ -23,6 +23,10 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { convertLspDiagnostics } from "../utils/lsp-diagnostics.js";
+import {
+	enabledAuxiliaryLspServerIds,
+	findAuxiliaryProfileForSource,
+} from "../auxiliary-lsp.js";
 import { readFileContent } from "./utils.js";
 
 const LSP_MAX_FILE_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
@@ -138,11 +142,18 @@ const lspRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
+		// Cross-cutting auxiliary scanners (opengrep, …) attach alongside the
+		// primary language server when enabled — collected on the with-auxiliary
+		// path so their warm diagnostics merge into this same result.
+		const auxiliaryServerIds = enabledAuxiliaryLspServerIds((f) =>
+			ctx.pi.getFlag(f),
+		);
 		try {
 			const touched = await lspService.touchFile(ctx.filePath, content, {
 				diagnostics: "document",
 				collectDiagnostics: true,
-				clientScope: "primary",
+				clientScope: auxiliaryServerIds.length > 0 ? "with-auxiliary" : "primary",
+				auxiliaryServerIds,
 				maxClientWaitMs: LSP_SPAWN_BUDGET_MS,
 				maxDiagnosticsWaitMs: LSP_DIAGNOSTICS_WAIT_MS,
 				source: "dispatch-lsp-runner",
@@ -243,6 +254,22 @@ const lspRunner: RunnerDefinition = {
 			diagnosticPath,
 			{ fixSuggestionByIndex },
 		);
+
+		// convertLspDiagnostics maps validLspDiags 1:1, so re-tag any
+		// auxiliary-sourced diagnostics (opengrep emits source "Semgrep", …) with
+		// their tool id + semantic policy — language-server diagnostics keep "lsp".
+		for (let i = 0; i < diagnostics.length; i++) {
+			const profile = findAuxiliaryProfileForSource(validLspDiags[i]?.source);
+			if (!profile) continue;
+			const d = diagnostics[i];
+			d.tool = profile.tool;
+			d.semantic = profile.semantic(validLspDiags[i]);
+			if (d.semantic !== "blocking" && d.severity === "error") {
+				d.severity = "warning";
+			}
+			const defectClass = profile.defectClass?.(validLspDiags[i]);
+			if (defectClass) d.defectClass = defectClass;
+		}
 
 		const hasErrors = diagnostics.some((d) => d.semantic === "blocking");
 		const resultSemantic = hasErrors

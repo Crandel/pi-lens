@@ -18,8 +18,7 @@ const EXPECTED_FLAGS = [
 	"no-tests",
 	"no-delta",
 	"lens-guard",
-	"lens-opengrep",
-	"lens-opengrep-config",
+	"no-opengrep",
 	"no-read-guard",
 	"no-lens-context",
 ];

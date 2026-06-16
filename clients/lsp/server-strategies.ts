@@ -23,6 +23,11 @@ export interface DiagnosticStrategy {
 	/** Whether this server benefits from a second pull after an empty fast first
 	 *  pull. TypeScript: no (rely on push). rust-analyzer: yes (incremental). */
 	expectSemanticSecondPush: boolean;
+	/** Re-sync a re-edited document with didClose+didOpen instead of didChange.
+	 *  Default false (language servers re-analyze on didChange). True for scanners
+	 *  that only re-scan on a fresh open — e.g. opengrep ignores didChange, so an
+	 *  incremental sync silently yields zero findings on every edit-after-first. */
+	reopenOnResync?: boolean;
 }
 
 export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
@@ -64,6 +69,20 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			debounceMs: 200,
 			aggregateWaitMs: 2000,
 			expectSemanticSecondPush: false,
+		},
+		// Opengrep security scanner (cross-language LSP). It pushes an EMPTY result
+		// during the one-time rule-load window at startup, then the real scan after
+		// `semgrep/rulesRefreshed` — so never seed the first push. Push-only (no pull
+		// diagnostics). Warm per-file scan ~1.3s; the first touch in a session may
+		// also pay rule-load (~3.7s) — hence the generous aggregate budget.
+		opengrep: {
+			seedFirstPush: false,
+			pullRetryBudgetMs: 0,
+			debounceMs: 250,
+			aggregateWaitMs: 6000,
+			expectSemanticSecondPush: false,
+			// Opengrep re-scans only on a fresh didOpen — didChange is a no-op for it.
+			reopenOnResync: true,
 		},
 	};
 

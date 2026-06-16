@@ -169,12 +169,18 @@ function mergeLspDiagnostics(
 }
 
 export type LSPDiagnosticsMode = "none" | "document" | "full";
-export type LSPTouchClientScope = "primary" | "all";
+export type LSPTouchClientScope = "primary" | "all" | "with-auxiliary";
 
 export interface LSPTouchFileOptions {
 	diagnostics?: LSPDiagnosticsMode;
 	source?: string;
 	clientScope?: LSPTouchClientScope;
+	/**
+	 * For clientScope "with-auxiliary": the auxiliary server ids (e.g. "opengrep")
+	 * to attach alongside the primary. The caller (lsp runner) computes which are
+	 * enabled (it owns flag access); the service just spawns + collects them.
+	 */
+	auxiliaryServerIds?: readonly string[];
 	/** Budget for waiting on the LSP client to spawn / become ready. */
 	maxClientWaitMs?: number;
 	/**
@@ -293,7 +299,7 @@ export class LSPService {
 	>();
 	private readonly recentTouches = new Map<
 		string,
-		{ fingerprint: string; touchedAt: number; clientScope: "primary" | "all" }
+		{ fingerprint: string; touchedAt: number; clientScope: LSPTouchClientScope }
 	>();
 	/** True after shutdown() has been called; blocks new operations */
 	private isDestroyed = false;
@@ -328,7 +334,7 @@ export class LSPService {
 	private shouldSkipTouch(
 		filePath: string,
 		content: string,
-		clientScope: "primary" | "all",
+		clientScope: LSPTouchClientScope,
 		waitForDiagnostics: boolean,
 	): boolean {
 		if (waitForDiagnostics) return false;
@@ -351,7 +357,7 @@ export class LSPService {
 	private shouldSkipNotify(
 		filePath: string,
 		content: string,
-		clientScope: "primary" | "all",
+		clientScope: LSPTouchClientScope,
 	): boolean {
 		if (TOUCH_DEBOUNCE_MS <= 0) return false;
 		const key = `${normalizeMapKey(filePath)}:${clientScope}`;
@@ -365,7 +371,7 @@ export class LSPService {
 	private markTouched(
 		filePath: string,
 		content: string,
-		clientScope: "primary" | "all",
+		clientScope: LSPTouchClientScope,
 	): void {
 		const key = `${normalizeMapKey(filePath)}:${clientScope}`;
 		const now = Date.now();
@@ -424,7 +430,11 @@ export class LSPService {
 		hardCapMs?: number,
 	): Promise<SpawnedServer | undefined> {
 		if (this.checkDestroyed()) return undefined;
-		const servers = getServersForFileWithConfig(filePath);
+		// Primary selection considers language servers only — auxiliary servers
+		// (opengrep, …) attach alongside the primary and are never chosen as it.
+		const servers = getServersForFileWithConfig(filePath).filter(
+			(s) => s.role !== "auxiliary",
+		);
 		const serverWaitOverrideMs = servers.reduce(
 			(max, server) => Math.max(max, server.clientWaitTimeoutMs ?? 0),
 			0,
@@ -543,6 +553,26 @@ export class LSPService {
 			),
 			serverCountAttempted,
 		};
+	}
+
+	/**
+	 * Spawn/get the AUXILIARY clients for a file (role:"auxiliary") restricted to
+	 * the enabled set. These attach alongside the primary on the with-auxiliary
+	 * diagnostics path (cross-cutting scanners like opengrep).
+	 */
+	async getAuxiliaryClientsForFile(
+		filePath: string,
+		enabledIds: ReadonlySet<string>,
+	): Promise<SpawnedServer[]> {
+		if (this.checkDestroyed() || enabledIds.size === 0) return [];
+		const servers = getServersForFileWithConfig(filePath).filter(
+			(s) => s.role === "auxiliary" && enabledIds.has(s.id),
+		);
+		if (servers.length === 0) return [];
+		const spawned = await Promise.all(
+			servers.map((server) => this.ensureClientForServer(filePath, server)),
+		);
+		return spawned.filter((entry): entry is SpawnedServer => Boolean(entry));
 	}
 
 	/**
@@ -856,6 +886,18 @@ export class LSPService {
 			const result = await this.getClientsForFile(filePath);
 			spawned = result.clients;
 			serverCountAttempted = result.serverCountAttempted;
+		} else if (clientScope === "with-auxiliary") {
+			// Primary language server + the enabled cross-cutting auxiliaries
+			// (opengrep, …). The aggregation layer merges/dedups their diagnostics.
+			const [entry, aux] = await Promise.all([
+				this.getClientForFile(filePath, options.maxClientWaitMs),
+				this.getAuxiliaryClientsForFile(
+					filePath,
+					new Set(options.auxiliaryServerIds ?? []),
+				),
+			]);
+			spawned = entry ? [entry, ...aux] : aux;
+			serverCountAttempted = spawned.length;
 		} else {
 			const entry = await this.getClientForFile(
 				filePath,
@@ -960,6 +1002,17 @@ export class LSPService {
 				).aggregateWaitMs;
 				const base = strategyWait > 0 ? strategyWait : (callerCap ?? modeFloor);
 				timeoutMs = callerCap !== undefined ? Math.min(callerCap, base) : base;
+			} else if (clientScope === "with-auxiliary") {
+				// Auxiliary scanners (opengrep, …) re-scan more slowly than the primary
+				// language server; honor the SLOWEST collected server's strategy budget
+				// so the cross-cutting scanner isn't cut off by the tighter primary cap.
+				// Resolves as soon as all servers publish, so fast files still finish
+				// early — this is just the deadline.
+				const maxStrategyWait = Math.max(
+					0,
+					...spawned.map((e) => getStrategy(e.client.serverId).aggregateWaitMs),
+				);
+				timeoutMs = Math.max(callerCap ?? modeFloor, maxStrategyWait);
 			} else {
 				timeoutMs = callerCap ?? modeFloor;
 			}

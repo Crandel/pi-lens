@@ -852,6 +852,22 @@ export async function handleNotifyOpen(
 		if (!preserveDiagnostics) {
 			clearDiagnosticsForPath(state, normalizedPath);
 		}
+		// Scanners that only re-scan on a fresh open (opengrep ignores didChange):
+		// close + reopen so the re-edit actually triggers a re-scan instead of
+		// silently publishing nothing.
+		if (getStrategy(state.serverId).reopenOnResync) {
+			await safeSendNotification(state.connection, "textDocument/didClose", {
+				textDocument: { uri },
+			});
+			state.openDocuments.delete(normalizedPath);
+			state.documentVersions.set(normalizedPath, 0);
+			if (!isClientAlive(state)) return;
+			await safeSendNotification(state.connection, "textDocument/didOpen", {
+				textDocument: { uri, languageId, version: 0, text: content },
+			});
+			state.openDocuments.add(normalizedPath);
+			return;
+		}
 		await safeSendNotification(state.connection, "textDocument/didChange", {
 			textDocument: { uri, version },
 			contentChanges: [{ text: content }],

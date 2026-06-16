@@ -482,18 +482,11 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
-	pi.registerFlag("lens-opengrep", {
+	pi.registerFlag("no-opengrep", {
 		description:
-			"Enable Opengrep security dispatch (auto-installs; uses repo rules if present, else the login-free 'auto' ruleset)",
+			"Disable the Opengrep security scanner (a default-on auxiliary LSP; auto-installs, uses repo rules if present else the login-free 'auto' ruleset)",
 		type: "boolean",
 		default: false,
-	});
-
-	pi.registerFlag("lens-opengrep-config", {
-		description:
-			"Override the Opengrep config: local path, auto, p/<pack>, or r/<rule> (implies --lens-opengrep).",
-		type: "string",
-		default: "",
 	});
 
 	pi.registerFlag("no-read-guard", {

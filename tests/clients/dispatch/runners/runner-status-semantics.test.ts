@@ -215,13 +215,16 @@ describe("runner status/semantic edge cases", () => {
 
 			const result = await runner.run(ctx(filePath, env.tmpDir) as never);
 			expect(result.status).toBe("succeeded");
+			// Bounded touch: primary language server + the enabled auxiliaries
+			// (opengrep is default-on) — NOT the unbounded "all"/aggregate path.
 			expect(touchFile).toHaveBeenCalledWith(
 				filePath,
 				"const x = 1;\n",
 				expect.objectContaining({
 					diagnostics: "document",
 					collectDiagnostics: true,
-					clientScope: "primary",
+					clientScope: "with-auxiliary",
+					auxiliaryServerIds: expect.arrayContaining(["opengrep"]),
 					maxClientWaitMs: expect.any(Number),
 					source: "dispatch-lsp-runner",
 				}),

@@ -15,6 +15,7 @@ import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { KIND_EXTENSIONS } from "../file-kinds.js";
 import { ensureTool, getToolEnvironment } from "../installer/index.js";
+import { resolveOpengrepConfig } from "../opengrep-config.js";
 import { logLatency } from "../latency-logger.js";
 import { isCommandAvailableAsync, safeSpawnAsync } from "../safe-spawn.js";
 import { type LSPProcess, launchLSP } from "./launch.js";
@@ -33,6 +34,14 @@ export interface LSPServerInfo {
 	name: string;
 	extensions: readonly string[];
 	root: RootFunction;
+	/**
+	 * "language" (default) = the file's primary language server (one is chosen per
+	 * file). "auxiliary" = a cross-cutting, diagnostic-only server (security,
+	 * spelling, …) that attaches across many languages and runs ALONGSIDE the
+	 * primary — never selected as primary, collected only on the with-auxiliary
+	 * diagnostics path. See clients/dispatch/auxiliary-lsp.ts.
+	 */
+	role?: "language" | "auxiliary";
 	/** Simple command name whose absence disables spawn attempts briefly across roots. */
 	availabilityKey?: string;
 	/**
@@ -2016,6 +2025,70 @@ export const CssServer: LSPServerInfo = {
 
 // --- Registry ---
 
+// Opengrep — a cross-language security scanner that speaks LSP. Unlike the
+// per-language servers it attaches to MANY file kinds (the aggregation layer
+// merges its diagnostics with the file's real language server). Running it as a
+// warm LSP server compiles the ruleset once per session instead of paying it on
+// every file (the ~8s CLI-per-file cost #111), bringing per-file scans to ~1.3s.
+// Rules load via `initializationOptions.scan.configuration` (a local rule file
+// if the repo has one, else Opengrep's login-free `auto` set).
+const OPENGREP_KINDS = [
+	"csharp", "css", "cxx", "dart", "docker", "go", "html", "java", "json",
+	"jsts", "kotlin", "lua", "php", "python", "ruby", "rust", "shell", "swift",
+	"terraform", "yaml",
+] as const;
+const OPENGREP_EXTENSIONS: readonly string[] = Array.from(
+	new Set(
+		OPENGREP_KINDS.flatMap(
+			(k) => (KIND_EXTENSIONS as Record<string, readonly string[]>)[k] ?? [],
+		),
+	),
+);
+
+function opengrepInitialization(root: string): Record<string, unknown> {
+	// As an always-on LSP server, enablement is structural (the server is
+	// registered); resolveOpengrepConfig here only chooses WHICH rules — a local
+	// rule file if present, otherwise `auto`.
+	const resolved = resolveOpengrepConfig(root, { enabled: true });
+	return {
+		scan: {
+			configuration: [resolved.configArg ?? "auto"],
+			onlyGitDirty: false,
+			jobs: 16,
+		},
+		metrics: { enabled: false },
+		doHover: false,
+	};
+}
+
+export const OpengrepServer: LSPServerInfo = {
+	id: "opengrep",
+	name: "Opengrep Security Scanner",
+	role: "auxiliary",
+	extensions: OPENGREP_EXTENSIONS,
+	// Stable per-repo root so ONE warm server serves the whole project (a
+	// per-directory root would spawn a fresh server — and re-pay rule load —
+	// for every folder).
+	root: RootWithFallback(NearestRoot([".git"]), async () => process.cwd()),
+	availabilityKey: "opengrep",
+	// Rule compilation can take a few seconds on the first scan of a session.
+	initializeTimeoutMs: 15000,
+	async spawn(root, options) {
+		const launched = await resolveAndLaunch(
+			{
+				candidates: ["opengrep"],
+				args: ["lsp", "--experimental"],
+				cwd: root,
+				managedToolId: "opengrep",
+			},
+			options?.allowInstall,
+		);
+		if (!launched) return undefined;
+		return { ...launched, initialization: opengrepInitialization(root) };
+	},
+	autoInstall: async () => Boolean(await ensureTool("opengrep")),
+};
+
 export const LSP_SERVERS: LSPServerInfo[] = [
 	TypeScriptServer,
 	DenoServer,
@@ -2055,6 +2128,8 @@ export const LSP_SERVERS: LSPServerInfo[] = [
 	SvelteServer,
 	ESLintServer,
 	CssServer,
+	// Auxiliary (cross-cutting, diagnostic-only) servers go last — never primary.
+	OpengrepServer,
 ];
 
 /**

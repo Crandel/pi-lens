@@ -16,7 +16,6 @@ import {
 	formatSlopScoreSummary,
 	type SlopScoreSummary,
 } from "../session-summary.js";
-import { resolveOpengrepConfig } from "../opengrep-config.js";
 import {
 	clearCoverageNoticeState,
 	clearLatencyReports,
@@ -302,29 +301,6 @@ export function getDispatchSlopScoreLine(): string {
 	return formatSlopScoreSummary(summary);
 }
 
-const OPENGREP_SUPPORTED_KINDS = new Set<FileKind>([
-	"csharp",
-	"css",
-	"cxx",
-	"dart",
-	"docker",
-	"go",
-	"html",
-	"java",
-	"json",
-	"jsts",
-	"kotlin",
-	"lua",
-	"php",
-	"python",
-	"ruby",
-	"rust",
-	"shell",
-	"swift",
-	"terraform",
-	"yaml",
-]);
-
 // SpotBugs analyzes JVM bytecode, so it applies to java + kotlin. Opt-in
 // (lens-spotbugs flag) and only when a Java build descriptor + compiled .class
 // dir exist — the runner itself mtime-caches so it doesn't re-run per keystroke. #133
@@ -356,29 +332,6 @@ function withSpotbugsGroup(
 	];
 }
 
-function withOpengrepGroup(
-	kind: FileKind,
-	groups: RunnerGroup[],
-	ctx: ReturnType<typeof createDispatchContext>,
-): RunnerGroup[] {
-	if (!OPENGREP_SUPPORTED_KINDS.has(kind)) return groups;
-	const config = resolveOpengrepConfig(ctx.cwd, {
-		enabled: Boolean(ctx.pi.getFlag("lens-opengrep")),
-		config: ctx.pi.getFlag("lens-opengrep-config"),
-	});
-	if (!config.enabled) return groups;
-	if (groups.some((group) => group.runnerIds.includes("opengrep")))
-		return groups;
-	return [
-		...groups,
-		{
-			mode: "all",
-			runnerIds: ["opengrep"],
-			filterKinds: [kind],
-			semantic: "warning",
-		},
-	];
-}
 
 function withPrimaryPolicyGroup(
 	kind: keyof typeof TOOL_PLANS,
@@ -1310,7 +1263,7 @@ export async function dispatchLint(
 
 	const groups = withSpotbugsGroup(
 		kind,
-		withOpengrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
+		getDispatchGroupsForKind(kind, pi),
 		ctx,
 	);
 	if (groups.length === 0) return "";
@@ -1362,7 +1315,7 @@ export async function dispatchLintWithResult(
 
 	const groups = withSpotbugsGroup(
 		kind,
-		withOpengrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
+		getDispatchGroupsForKind(kind, pi),
 		ctx,
 	);
 	if (groups.length === 0) {
@@ -1441,7 +1394,7 @@ export async function dispatchLintDetailed(
 
 	const groups = withSpotbugsGroup(
 		kind,
-		withOpengrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
+		getDispatchGroupsForKind(kind, pi),
 		ctx,
 	);
 	if (groups.length === 0) return { result: empty, runners: [] };
