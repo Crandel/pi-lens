@@ -1724,7 +1724,7 @@ async function installGitHubTool(
 				gunzip.on("error", reject);
 				gunzip.end(assetBuffer);
 			});
-			await fs.writeFile(destPath, decompressed, { mode: 0o755 });
+			await fs.writeFile(destPath, decompressed, { mode: 0o750 });
 		} else if (assetName.endsWith(".tar.gz") || assetName.endsWith(".tar.xz")) {
 			// Write archive to temp file, extract with system tar
 			const tmpArchive = path.join(GITHUB_BIN_DIR, `_tmp_${assetName}`);
@@ -1805,7 +1805,7 @@ async function installGitHubTool(
 			if (!isWindows) await fs.chmod(destPath, 0o750);
 		} else {
 			// Bare binary (e.g. shfmt_*_linux_amd64)
-			await fs.writeFile(destPath, assetBuffer, { mode: 0o755 });
+			await fs.writeFile(destPath, assetBuffer, { mode: 0o750 });
 		}
 	} catch (err) {
 		logSessionStart(
@@ -1828,7 +1828,7 @@ async function installGitHubTool(
 		try {
 			const extraBuffer = await httpsGet(extraAsset.browser_download_url);
 			await fs.writeFile(path.join(GITHUB_BIN_DIR, extraName), extraBuffer, {
-				mode: 0o755,
+				mode: 0o750,
 			});
 			logSessionStart(
 				`github-install ${tool.id}: installed extra asset ${extraName} (${extraBuffer.length} bytes)`,
@@ -1941,7 +1941,7 @@ async function installMavenTool(
 			await fs.writeFile(
 				launcherPath,
 				`#!/bin/sh\nexec java -jar "$(dirname "$0")/${tool.id}.jar" "$@"\n`,
-				{ mode: 0o755 },
+				{ mode: 0o750 },
 			);
 		}
 		logSessionStart(
@@ -2010,9 +2010,17 @@ async function installArchiveTool(
 			extractName,
 			"--strip-components=1",
 		];
+		// Resolve `tar` to an absolute path on Windows (System32\tar.exe is the
+		// bsdtar shipped with Windows 10+) so extraction can't be hijacked via a
+		// writable PATH entry — same hardening as the taskkill spawn. On POSIX `tar`
+		// is a trusted coreutil whose absolute path varies by distro, so it stays
+		// bare (consistent with every other tool spawn).
+		const tarBin = isWindows
+			? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\tar.exe`
+			: "tar";
 		const extracted = await new Promise<{ ok: boolean; stderr: string }>(
 			(resolve) => {
-				const proc = spawn("tar", tarArgs, {
+				const proc = spawn(tarBin, tarArgs, {
 					cwd: TOOLS_DIR,
 					stdio: ["ignore", "ignore", "pipe"],
 				});
@@ -2053,7 +2061,7 @@ async function installArchiveTool(
 			);
 			return undefined;
 		}
-		if (!isWindows) await fs.chmod(resolvedInner, 0o755).catch(() => {});
+		if (!isWindows) await fs.chmod(resolvedInner, 0o750).catch(() => {});
 
 		// Thin shim in the managed bin so discovery (findGitHubToolPath) resolves
 		// it like any other managed tool. `call`/`exec` preserves the real
@@ -2067,7 +2075,7 @@ async function installArchiveTool(
 			await fs.writeFile(
 				shimPath,
 				`#!/bin/sh\nexec "${resolvedInner}" "$@"\n`,
-				{ mode: 0o755 },
+				{ mode: 0o750 },
 			);
 		}
 		logSessionStart(
