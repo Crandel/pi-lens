@@ -77,5 +77,14 @@ jobs:
       - name: LSP handshake layer (install + spawn + initialize each server)
         run: node scripts/smoke-tools.mjs --lsp --install --verbose
 
+      # Diagnostic-mode matrix (#240): spawn each server and record its
+      # advertised mode (pull vs push) — the first cut of the affirmative-clean
+      # -signal classification (docs/lsp-capability-matrix.md). Best-effort: the
+      # script always exits 0 and a server whose toolchain is absent reports
+      # "unavailable", so this never reds the nightly.
+      - name: LSP capability matrix (characterize diagnostic mode per server)
+        continue-on-error: true
+        run: node scripts/characterize-lsp.mjs --install
+
       - name: Format layer (select + reformat through the real formatter pipeline)
         run: node scripts/smoke-tools.mjs --format --install --verbose

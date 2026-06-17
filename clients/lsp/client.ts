@@ -27,6 +27,12 @@ import type { LSPProcess } from "./launch.js";
 import { normalizeMapKey, uriToPath } from "./path-utils.js";
 import { getStrategy } from "./server-strategies.js";
 
+// Opt-in publishDiagnostics trace (PILENS_PUB_DEBUG=1) — read once, negligible
+// hot-path cost. Surfaces each server's publish behavior (version + count) to
+// diagnose the clean-file affirmative-signal question (#240): which servers
+// publish an empty-with-version set on a clean scan vs go silent.
+const PUB_DEBUG = Boolean(process.env.PILENS_PUB_DEBUG);
+
 // --- Types ---
 
 export interface LSPDiagnostic {
@@ -655,6 +661,11 @@ function setupIncomingHandlers(
 			const normalizedPath = normalizeMapKey(filePath);
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
 			const docVersion = params.version;
+			if (PUB_DEBUG) {
+				console.error(
+					`[lsp-pub] server=${state.serverId} pubVersion=${docVersion} docVersion=${state.documentVersions?.get(normalizedPath)} diags=${newDiags.length}`,
+				);
+			}
 			const strategy = getStrategy(state.serverId);
 			// Record the document version these diagnostics were computed against
 			// (when the server reports it) so waitForDiagnostics can reject results

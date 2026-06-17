@@ -357,6 +357,35 @@ const LSP_FIXTURES = [
 		serverHint: "rust-analyzer",
 		tools: ["rust-analyzer"],
 	},
+	// Capability-matrix fixtures (#240): one fixture per remaining registered
+	// server so `characterize-lsp.mjs` can record each server's diagnostic mode
+	// (pull vs push). The mode comes from the server's advertised capabilities at
+	// `initialize` — it is content-independent — so for languages that ALREADY
+	// have a tool-layer fixture we reuse that file (the deliberately-dirty
+	// `bad.*` source the tool layer asserts on) rather than adding a colliding
+	// clean duplicate (two `func main`, two `.csproj` would break compilation).
+	// New languages (no prior fixture) get a minimal clean source + root marker.
+	// Servers needing a toolchain report "unavailable" where it's absent; the
+	// fixture stays durable so a provisioned CI run completes the matrix.
+	{ lang: "go", dir: "tests/fixtures/tool-smoke/go", file: "bad.go", serverHint: "gopls", tools: ["gopls"] },
+	{ lang: "ruby", dir: "tests/fixtures/tool-smoke/ruby", file: "bad.rb", serverHint: "ruby-lsp", tools: ["ruby-lsp"] },
+	{ lang: "csharp", dir: "tests/fixtures/tool-smoke/csharp", file: "Program.cs", serverHint: "csharp-ls", tools: ["csharp-ls"] },
+	{ lang: "fsharp", dir: "tests/fixtures/tool-smoke/fsharp", file: "Program.fs", serverHint: "fsautocomplete", tools: ["fsautocomplete"] },
+	{ lang: "java", dir: "tests/fixtures/tool-smoke/java", file: "Bad.java", serverHint: "jdtls", tools: ["jdtls"] },
+	{ lang: "kotlin", dir: "tests/fixtures/tool-smoke/kotlin", file: "Bad.kt", serverHint: "kotlin-language-server", tools: ["kotlin-language-server"] },
+	{ lang: "swift", dir: "tests/fixtures/tool-smoke/swift", file: "main.swift", serverHint: "sourcekit-lsp", tools: ["sourcekit-lsp"] },
+	{ lang: "dart", dir: "tests/fixtures/tool-smoke/dart", file: "bad.dart", serverHint: "dart language-server", tools: ["dart"] },
+	{ lang: "lua", dir: "tests/fixtures/tool-smoke/lua", file: "main.lua", serverHint: "lua-language-server", tools: ["lua-language-server"] },
+	{ lang: "cpp", dir: "tests/fixtures/tool-smoke/cpp", file: "main.cpp", serverHint: "clangd", tools: ["clangd"] },
+	{ lang: "zig", dir: "tests/fixtures/tool-smoke/zig", file: "bad.zig", serverHint: "zls", tools: ["zls"] },
+	{ lang: "haskell", dir: "tests/fixtures/tool-smoke/haskell", file: "Main.hs", serverHint: "haskell-language-server", tools: ["haskell-language-server"] },
+	{ lang: "elixir", dir: "tests/fixtures/tool-smoke/elixir", file: "bad.ex", serverHint: "elixir-ls", tools: ["elixir-ls"] },
+	{ lang: "gleam", dir: "tests/fixtures/tool-smoke/gleam", file: "src/smoke.gleam", serverHint: "gleam lsp", tools: ["gleam"] },
+	{ lang: "ocaml", dir: "tests/fixtures/tool-smoke/ocaml", file: "main.ml", serverHint: "ocamllsp", tools: ["ocaml-lsp-server"] },
+	{ lang: "clojure", dir: "tests/fixtures/tool-smoke/clojure", file: "main.clj", serverHint: "clojure-lsp", tools: ["clojure-lsp"] },
+	{ lang: "nix", dir: "tests/fixtures/tool-smoke/nix", file: "flake.nix", serverHint: "nixd", tools: ["nixd"] },
+	{ lang: "vue", dir: "tests/fixtures/tool-smoke/vue", file: "App.vue", serverHint: "@vue/language-server", tools: ["@vue/language-server"] },
+	{ lang: "svelte", dir: "tests/fixtures/tool-smoke/svelte", file: "App.svelte", serverHint: "svelte-language-server", tools: ["svelte-language-server"] },
 	// Auxiliary LSP (cross-cutting, diagnostic-only) — attaches alongside the
 	// primary language server. `auxiliaryServerIds` switches the touch to the
 	// with-auxiliary scope; `auxiliarySourceMatch` asserts the auxiliary actually

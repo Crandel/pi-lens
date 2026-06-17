@@ -60,6 +60,7 @@ migrate-*.js
 !docs/WRITING_NEW_AST_GREP_RULES.md
 !docs/custom-rules.md
 !docs/lsp-latency-benchmark.md
+!docs/lsp-capability-matrix.md
 !skills/**/*.md
 
 # Local-only docs (not in git or npm)
