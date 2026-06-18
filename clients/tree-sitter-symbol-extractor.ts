@@ -466,6 +466,14 @@ const SYMBOL_QUERIES: Record<string, { defs: string; refs: string }> = {
 	},
 };
 
+// The tsx grammar (downloaded as tree-sitter-tsx.wasm) shares TypeScript's node
+// types — function_declaration, arrow_function, class_declaration,
+// method_definition, interface_declaration, type_alias_declaration — so the
+// TypeScript queries apply unchanged. Registering it lets .tsx/.jsx parse with
+// the JSX-aware grammar instead of erroring under the plain TS grammar, matching
+// symbol-extraction coverage to the grammar set we actually ship.
+SYMBOL_QUERIES.tsx = SYMBOL_QUERIES.typescript;
+
 export interface ExtractedSymbols {
 	symbols: Symbol[];
 	refs: SymbolRef[];
@@ -559,7 +567,12 @@ export class TreeSitterSymbolExtractor {
 		let name: string | undefined;
 		let kind: SymbolKind | undefined;
 		let params: string | undefined;
-		let defNode: { startPosition: { row: number; column: number } } | undefined;
+		let defNode:
+			| {
+					startPosition: { row: number; column: number };
+					endPosition: { row: number; column: number };
+			  }
+			| undefined;
 
 		if (captures.funcName) {
 			name = captures.funcName.text;
@@ -612,6 +625,7 @@ export class TreeSitterSymbolExtractor {
 			kind,
 			filePath,
 			line: defNode.startPosition.row + 1,
+			endLine: defNode.endPosition.row + 1,
 			column: defNode.startPosition.column + 1,
 			signature,
 			isExported,

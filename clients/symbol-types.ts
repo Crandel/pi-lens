@@ -18,6 +18,9 @@ export interface Symbol {
 	kind: SymbolKind;
 	filePath: string;
 	line: number;
+	/** 1-based last line of the definition (inclusive). Drives module-report
+	 * read ranges and the read-guard's `enclosingSymbol` coverage. */
+	endLine?: number;
 	column: number;
 	signature?: string; // For functions: "(a: T, b: U) => R"
 	isExported: boolean;

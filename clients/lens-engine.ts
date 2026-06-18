@@ -61,6 +61,16 @@ export {
 	type SessionStartOutcome,
 	type TurnEndOutcome,
 } from "./mcp/session.js";
+export {
+	moduleReport,
+	type ModuleReport,
+	type ModuleReportDepth,
+	type ModuleReportOptions,
+	type ModuleSymbolEntry,
+	readSymbol,
+	type ReadSymbolResult,
+	type RecommendedRead,
+} from "./module-report.js";
 
 // --- Query wrappers (own the remaining internal reach-ins) -------------------
 
