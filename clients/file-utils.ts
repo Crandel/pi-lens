@@ -7,6 +7,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { minimatch } from "minimatch";
 import { normalizeFilePath } from "./path-utils.js";
+import {
+	findPiLensProjectConfig,
+	loadPiLensProjectConfig,
+} from "./project-lens-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 /**
@@ -341,7 +345,12 @@ export function createProjectIgnoreMatcher(
 
 const projectIgnoreMatcherCache = new Map<
 	string,
-	{ gitignoreMtimeMs: number; matcher: ProjectIgnoreMatcher }
+	{
+		gitignoreMtimeMs: number;
+		lensConfigPath: string | undefined;
+		lensConfigMtimeMs: number;
+		matcher: ProjectIgnoreMatcher;
+	}
 >();
 
 function gitignoreMtimeMs(rootDir: string): number {
@@ -352,15 +361,47 @@ function gitignoreMtimeMs(rootDir: string): number {
 	}
 }
 
+/**
+ * The project config file found by the same upward walk as the loader. Cache
+ * invalidation must track the actual file found, not only a file directly under
+ * the git root: nested worktrees/submodules can legitimately inherit a
+ * `.pi-lens.json` from a parent directory.
+ */
+function lensConfigInfo(rootDir: string): {
+	path: string | undefined;
+	mtimeMs: number;
+} {
+	const info = findPiLensProjectConfig(rootDir);
+	return info
+		? { path: info.path, mtimeMs: info.mtimeMs }
+		: { path: undefined, mtimeMs: -1 };
+}
+
 export function getProjectIgnoreMatcher(rootDir: string): ProjectIgnoreMatcher {
 	const resolvedRoot = resolveGitIgnoreRoot(rootDir);
 	const gitignoreMtime = gitignoreMtimeMs(resolvedRoot);
+	const lensConfig = lensConfigInfo(resolvedRoot);
 	const cached = projectIgnoreMatcherCache.get(resolvedRoot);
-	if (cached?.gitignoreMtimeMs === gitignoreMtime) return cached.matcher;
+	if (
+		cached?.gitignoreMtimeMs === gitignoreMtime &&
+		cached?.lensConfigPath === lensConfig.path &&
+		cached?.lensConfigMtimeMs === lensConfig.mtimeMs
+	) {
+		return cached.matcher;
+	}
 
-	const matcher = createProjectIgnoreMatcher(resolvedRoot);
+	// Load the project config fresh on cache miss. The loader is itself
+	// mtime-cached, so the cost here is one stat + one map lookup when the
+	// config hasn't changed since the last call — and a full parse when it has.
+	const projectConfig = loadPiLensProjectConfig(resolvedRoot);
+	const matcher = createProjectIgnoreMatcher(
+		resolvedRoot,
+		projectConfig.ignore,
+	);
 	projectIgnoreMatcherCache.set(resolvedRoot, {
 		gitignoreMtimeMs: gitignoreMtime,
+		lensConfigPath: lensConfig.path,
+		lensConfigMtimeMs: lensConfig.mtimeMs,
 		matcher,
 	});
 	return matcher;

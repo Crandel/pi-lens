@@ -2,7 +2,21 @@ import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
 import type { FunctionSummary } from "../facts/function-facts.js";
 
-const FAN_OUT_THRESHOLD = 20;
+// Threshold is mutable so a project's `.pi-lens.json` can override it via
+// `rules["high-fan-out"].threshold`. Default matches the historical hardcoded
+// value so behavior is unchanged for projects without a config.
+export const DEFAULT_HIGH_FAN_OUT_THRESHOLD = 20;
+let fanOutThreshold = DEFAULT_HIGH_FAN_OUT_THRESHOLD;
+
+/** Override threshold from a project's `.pi-lens.json`. Idempotent. */
+export function setHighFanOutThreshold(n: number): void {
+	if (Number.isFinite(n) && n > 0) fanOutThreshold = n;
+}
+
+/** Test helper: restore compile-time default. */
+export function resetHighFanOutThreshold(): void {
+	fanOutThreshold = DEFAULT_HIGH_FAN_OUT_THRESHOLD;
+}
 
 export const highFanOutRule: FactRule = {
 	id: "high-fan-out",
@@ -12,7 +26,10 @@ export const highFanOutRule: FactRule = {
 	},
 	evaluate(ctx, store) {
 		const fns =
-			store.getFileFact<FunctionSummary[]>(ctx.filePath, "file.functionSummaries") ?? [];
+			store.getFileFact<FunctionSummary[]>(
+				ctx.filePath,
+				"file.functionSummaries",
+			) ?? [];
 
 		const diagnostics: Diagnostic[] = [];
 
@@ -30,12 +47,14 @@ export const highFanOutRule: FactRule = {
 					!lower.startsWith("number(") &&
 					!lower.startsWith("boolean(") &&
 					!lower.startsWith("error(") &&
-					c !== "resolve" && c !== "reject" &&
-					c !== "next" && c !== "done"
+					c !== "resolve" &&
+					c !== "reject" &&
+					c !== "next" &&
+					c !== "done"
 				);
 			});
 
-			if (meaningful.length < FAN_OUT_THRESHOLD) continue;
+			if (meaningful.length < fanOutThreshold) continue;
 
 			diagnostics.push({
 				id: `high-fan-out:${ctx.filePath}:${f.line}`,
