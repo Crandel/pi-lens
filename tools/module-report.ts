@@ -12,17 +12,7 @@
 
 import * as path from "node:path";
 import { Type } from "typebox";
-import {
-	moduleReport,
-	type ModuleReportDepth,
-	readSymbol,
-} from "../clients/module-report.js";
-
-const VALID_DEPTHS: readonly ModuleReportDepth[] = [
-	"outline",
-	"standard",
-	"deep",
-];
+import { moduleReport, readSymbol } from "../clients/module-report.js";
 
 function resolveFile(filePath: string, cwd: string | undefined): string {
 	return path.isAbsolute(filePath)
@@ -36,7 +26,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 		label: "Module Report",
 		description:
 			"Structured, navigable overview of a source module — a token-efficient substitute for reading the whole file. Returns each symbol's name/kind/signature/line-range with ready-to-use `read` arguments, plus who-uses-this, risk flags, and ranked recommendedReads. Prefer this before a full read; then use read_symbol (or read) for the exact body you need.\n" +
-			"depth: outline (single-file structure, fastest, no graph) | standard (default — adds cross-file who-uses-this and flags) | deep (reserved).\n" +
+			"Single mode: tree-sitter outline + review-graph who-uses-this + bounded live-LSP enrichment (exact references/implementations for exported symbols, time-boxed; degrades to graph-only when no LSP server is available). `semantic.source` reports whether LSP data was used.\n" +
 			"Returns JSON. An outline shows shape, not bodies — it does NOT count as having read a symbol's body for editing; use read_symbol for that.",
 		promptSnippet:
 			"Use module_report to understand a file's API/structure before reading it in full",
@@ -44,12 +34,6 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 			filePath: Type.String({
 				description: "Absolute or workspace-relative path to the source file.",
 			}),
-			depth: Type.Optional(
-				Type.String({
-					description:
-						"outline | standard (default) | deep. standard adds cross-file who-uses-this from the review graph.",
-				}),
-			),
 			maxRefsPerSymbol: Type.Optional(
 				Type.Number({
 					description: "Cap on who-uses-this entries per symbol (default 10).",
@@ -58,7 +42,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 		}),
 		async execute(
 			_toolCallId: string,
-			params: { filePath: string; depth?: string; maxRefsPerSymbol?: number },
+			params: { filePath: string; maxRefsPerSymbol?: number },
 			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
@@ -67,13 +51,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 			// the review graph at the project root so cross-file who-uses-this is whole.
 			const absFile = resolveFile(params.filePath, ctx.cwd);
 			const cwd = getProjectRoot() || ctx.cwd || ".";
-			const depth: ModuleReportDepth = VALID_DEPTHS.includes(
-				params.depth as ModuleReportDepth,
-			)
-				? (params.depth as ModuleReportDepth)
-				: "standard";
 			const report = await moduleReport(absFile, cwd, {
-				depth,
 				maxRefsPerSymbol: params.maxRefsPerSymbol,
 			});
 			return {

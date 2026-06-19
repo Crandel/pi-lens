@@ -1,9 +1,27 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+	_resetModuleReportConfigForTests,
 	moduleReport,
 	readSymbol,
 } from "../../clients/module-report.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+
+// These tests exercise the tree-sitter + review-graph tiers. Disable the live-LSP
+// tier (budget 0) so they never spawn a real language server — the bounded-LSP
+// behavior has its own mocked suite in module-report-lsp.test.ts.
+const prevBudget = process.env.PI_LENS_MODULE_REPORT_LSP_BUDGET_MS;
+beforeAll(() => {
+	process.env.PI_LENS_MODULE_REPORT_LSP_BUDGET_MS = "0";
+	_resetModuleReportConfigForTests();
+});
+afterAll(() => {
+	if (prevBudget === undefined) {
+		delete process.env.PI_LENS_MODULE_REPORT_LSP_BUDGET_MS;
+	} else {
+		process.env.PI_LENS_MODULE_REPORT_LSP_BUDGET_MS = prevBudget;
+	}
+	_resetModuleReportConfigForTests();
+});
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -16,7 +34,7 @@ function makeEnv(prefix = "pi-lens-modreport-") {
 	return env;
 }
 
-describe("moduleReport — outline depth (single-file, no graph)", () => {
+describe("moduleReport — outline + structure", () => {
 	it("extracts a TypeScript outline with signatures, line ranges, and read args", async () => {
 		const env = makeEnv();
 		const file = createTempFile(
@@ -33,11 +51,11 @@ describe("moduleReport — outline depth (single-file, no graph)", () => {
 			].join("\n"),
 		);
 
-		const report = await moduleReport(file, env.tmpDir, { depth: "outline" });
+		const report = await moduleReport(file, env.tmpDir);
 
 		expect(report.available).toBe(true);
 		expect(report.language).toBe("jsts");
-		expect(report.staleness).toBe("snapshot-only"); // outline = no cross-file graph
+		expect(report.staleness).toBe("fresh");
 
 		const add = report.api.find((e) => e.name === "add");
 		expect(add).toBeDefined();
@@ -68,7 +86,7 @@ describe("moduleReport — outline depth (single-file, no graph)", () => {
 			),
 		);
 
-		const report = await moduleReport(file, env.tmpDir, { depth: "outline" });
+		const report = await moduleReport(file, env.tmpDir);
 
 		expect(report.available).toBe(true);
 		expect(report.language).toBe("python");
@@ -89,7 +107,7 @@ describe("moduleReport — outline depth (single-file, no graph)", () => {
 			].join("\n"),
 		);
 
-		const report = await moduleReport(file, env.tmpDir, { depth: "outline" });
+		const report = await moduleReport(file, env.tmpDir);
 
 		expect(report.available).toBe(true);
 		expect(report.api.some((e) => e.name === "Widget")).toBe(true);
@@ -98,7 +116,7 @@ describe("moduleReport — outline depth (single-file, no graph)", () => {
 	it("returns available:false for a non-symbol-bearing file (json)", async () => {
 		const env = makeEnv();
 		const file = createTempFile(env.tmpDir, "data.json", '{"a": 1}\n');
-		const report = await moduleReport(file, env.tmpDir, { depth: "outline" });
+		const report = await moduleReport(file, env.tmpDir);
 		expect(report.available).toBe(false);
 		expect(report.staleness).toBe("unavailable");
 		expect(report.api).toHaveLength(0);
@@ -106,15 +124,13 @@ describe("moduleReport — outline depth (single-file, no graph)", () => {
 
 	it("returns an unavailable report for a missing file", async () => {
 		const env = makeEnv();
-		const report = await moduleReport("nope.ts", env.tmpDir, {
-			depth: "outline",
-		});
+		const report = await moduleReport("nope.ts", env.tmpDir);
 		expect(report.available).toBe(false);
 		expect(report.staleness).toBe("unavailable");
 	});
 });
 
-describe("moduleReport — standard depth (graph who-uses-this)", () => {
+describe("moduleReport — review-graph who-uses-this", () => {
 	it("resolves cross-file callers from the review graph", async () => {
 		const env = makeEnv();
 		createTempFile(
@@ -133,9 +149,7 @@ describe("moduleReport — standard depth (graph who-uses-this)", () => {
 			].join("\n"),
 		);
 
-		const report = await moduleReport("a.ts", env.tmpDir, {
-			depth: "standard",
-		});
+		const report = await moduleReport("a.ts", env.tmpDir);
 
 		expect(report.available).toBe(true);
 		expect(report.staleness).toBe("fresh");
@@ -155,9 +169,7 @@ describe("moduleReport — standard depth (graph who-uses-this)", () => {
 		);
 		createTempFile(env.tmpDir, "helper.py", "def h():\n    return 1\n");
 
-		const report = await moduleReport("app.py", env.tmpDir, {
-			depth: "standard",
-		});
+		const report = await moduleReport("app.py", env.tmpDir);
 
 		expect(report.available).toBe(true);
 		// External package imports come through the new tree-sitter import edges.
@@ -166,20 +178,16 @@ describe("moduleReport — standard depth (graph who-uses-this)", () => {
 		expect(report.summary.imports).toBeGreaterThan(0);
 	});
 
-	it("imports stay empty at outline depth (no graph) — but symbols still extract", async () => {
+	it("LSP disabled (budget 0) → semantic.source is none, AST who-uses-this stands", async () => {
 		const env = makeEnv();
 		createTempFile(
 			env.tmpDir,
-			"app.py",
-			"import os\n\ndef go():\n    return os.getcwd()\n",
+			"a.ts",
+			"export function foo(x: number): number {\n  return x + 1;\n}\n",
 		);
-		const report = await moduleReport("app.py", env.tmpDir, {
-			depth: "outline",
-		});
-		expect(report.imports.external).toHaveLength(0);
-		expect([...report.api, ...report.internal].some((e) => e.name === "go")).toBe(
-			true,
-		);
+		const report = await moduleReport("a.ts", env.tmpDir);
+		expect(report.semantic.source).toBe("none");
+		expect(report.semantic.implementations).toBe(false);
 	});
 });
 

@@ -408,10 +408,12 @@ const TOOLS = [
 			"substitute for reading the whole file. Returns each symbol's " +
 			"name/kind/signature/line-range with ready-to-use `read` args, plus " +
 			"who-uses-this, risk flags, and ranked recommendedReads. Prefer this before " +
-			"a full read; then use pilens_read_symbol for the exact body. depth: outline " +
-			"(single-file structure, fastest, no graph) | standard (default — adds " +
-			"cross-file who-uses-this from the review graph) | deep (reserved). An " +
-			"outline shows shape, not bodies.",
+			"a full read; then use pilens_read_symbol for the exact body. Single mode: " +
+			"tree-sitter outline + review-graph who-uses-this + bounded live-LSP " +
+			"enrichment (exact references/implementations for exported symbols, " +
+			"time-boxed, degrades to graph-only when no LSP server is available). " +
+			"`semantic.source` reports whether LSP data was used. An outline shows " +
+			"shape, not bodies.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -420,11 +422,6 @@ const TOOLS = [
 					description: "File to report on (absolute or relative to cwd).",
 				},
 				cwd: { type: "string" },
-				depth: {
-					type: "string",
-					enum: ["outline", "standard", "deep"],
-					description: "Default standard.",
-				},
 				maxRefsPerSymbol: {
 					type: "number",
 					description: "Cap who-uses-this entries per symbol (default 10).",
@@ -735,16 +732,12 @@ async function callTool(
 		const file = typeof args.file === "string" ? args.file : "";
 		if (!file.trim()) return { ...toolText("Provide a `file`."), isError: true };
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
-		const depth =
-			args.depth === "outline" || args.depth === "deep"
-				? args.depth
-				: "standard";
 		const maxRefsPerSymbol =
 			typeof args.maxRefsPerSymbol === "number" &&
 			Number.isFinite(args.maxRefsPerSymbol)
 				? Math.max(1, Math.floor(args.maxRefsPerSymbol))
 				: undefined;
-		const report = await moduleReport(file, cwd, { depth, maxRefsPerSymbol });
+		const report = await moduleReport(file, cwd, { maxRefsPerSymbol });
 		if (!report.available) {
 			return {
 				...toolText(

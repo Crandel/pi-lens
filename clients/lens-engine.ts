@@ -64,7 +64,6 @@ export {
 export {
 	moduleReport,
 	type ModuleReport,
-	type ModuleReportDepth,
 	type ModuleReportOptions,
 	type ModuleSymbolEntry,
 	readSymbol,

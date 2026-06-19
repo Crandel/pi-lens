@@ -165,7 +165,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		const target = path.join(repoRoot, "clients", "module-report.ts");
 		const res = await harness.request(30, "tools/call", {
 			name: "pilens_module_report",
-			arguments: { file: target, depth: "outline" },
+			arguments: { file: target },
 		});
 		const result = res.result as {
 			content: { type: string; text: string }[];
