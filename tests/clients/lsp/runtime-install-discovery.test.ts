@@ -22,6 +22,7 @@ import {
 	FSharpServer,
 	goBinCandidates,
 	GoServer,
+	JavaServer,
 	RustServer,
 } from "../../../clients/lsp/server.ts";
 
@@ -43,7 +44,8 @@ describe("canonical-bin candidates (#241)", () => {
 		const c = goBinCandidates("gopls");
 		expect(c[0]).toBe("gopls"); // PATH stays authoritative
 		expect(c).toContain(sep("/custom", "gopath", "bin", "gopls"));
-		if (isWin) expect(c).toContain(sep("/custom", "gopath", "bin", "gopls.exe"));
+		if (isWin)
+			expect(c).toContain(sep("/custom", "gopath", "bin", "gopls.exe"));
 	});
 
 	it("goBinCandidates: defaults to ~/go/bin when GOPATH unset", () => {
@@ -97,7 +99,9 @@ describe("runtime-install / discovery server wiring (#241)", () => {
 		const tried = triedCommands();
 		expect(tried).toContain("rust-analyzer");
 		expect(
-			tried.some((cmd) => cmd === sep(os.homedir(), ".cargo", "bin", "rust-analyzer")),
+			tried.some(
+				(cmd) => cmd === sep(os.homedir(), ".cargo", "bin", "rust-analyzer"),
+			),
 		).toBe(true);
 	});
 
@@ -108,9 +112,34 @@ describe("runtime-install / discovery server wiring (#241)", () => {
 		await FSharpServer.spawn(sep("/tmp", "proj"), { allowInstall: false });
 		const tried = triedCommands();
 		// dotnetToolCandidates: managed bin dir, ~/.dotnet/tools, bare command.
-		expect(tried.some((cmd) => cmd.endsWith(sep(".dotnet", "tools", "fsautocomplete")))).toBe(
-			true,
-		);
+		expect(
+			tried.some((cmd) =>
+				cmd.endsWith(sep(".dotnet", "tools", "fsautocomplete")),
+			),
+		).toBe(true);
 		expect(tried).toContain("fsautocomplete");
+	});
+
+	it("JavaServer passes Lombok javaagent through official jdtls --jvm-arg", async () => {
+		const tmp = await import("node:fs").then((fs) =>
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-jdtls-lombok-")),
+		);
+		try {
+			const fs = await import("node:fs");
+			fs.writeFileSync(
+				path.join(tmp, "lombok.config"),
+				"config.stopBubbling = true\n",
+			);
+			fs.mkdirSync(path.join(tmp, ".lombok"));
+			const jar = path.join(tmp, ".lombok", "lombok.jar");
+			fs.writeFileSync(jar, "jar");
+			await JavaServer.spawn(tmp, { allowInstall: false });
+			expect(launchLSP.mock.calls[0]?.[1]).toContain(
+				`--jvm-arg=-javaagent:${jar}`,
+			);
+		} finally {
+			const fs = await import("node:fs");
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
 	});
 });

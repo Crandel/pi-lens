@@ -95,7 +95,7 @@ pi-lens includes **38 language server definitions** (including two cross-cutting
 - **`capabilities`** — shows which operations are supported by the active LSP server(s) for a file, read directly from the cached `initialize` response (no round-trip).
 - **Symbol column resolution** — passing `symbol: "myFunc"` instead of an exact `character` position resolves the correct column automatically. Use `symbol: "foo#2"` for the second occurrence of `foo` on the line.
 
-LSP servers for: TypeScript, Deno, Python (pyright/basedpyright + jedi), Go, Rust, Ruby (ruby-lsp + solargraph), PHP, C# (omnisharp), F#, Java, Kotlin, Swift, Dart, Lua, C/C++, Zig, Haskell, Elixir, Gleam, OCaml, Clojure, Terraform, Nix, Bash, Docker, YAML, JSON, HTML, TOML, Prisma, Vue, Svelte, CSS.
+LSP servers for: TypeScript, Deno, Python (pyright/basedpyright + jedi), Go, Rust, Ruby (ruby-lsp + solargraph), PHP, C# (omnisharp), F#, Java (JDT LS, with Lombok javaagent support when a Lombok jar is available), Kotlin, Swift, Dart, Lua, C/C++, Zig, Haskell, Elixir, Gleam, OCaml, Clojure, Terraform, Nix, Bash, Docker, YAML, JSON, HTML, TOML, Prisma, Vue, Svelte, CSS.
 
 ### Formatters
 
@@ -368,6 +368,7 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | C#                    | ✓   | lsp, dotnet-build                                                                                              | csharpier               |
 | F#                    | ✓   | lsp                                                                                                            | fantomas                |
 | Java                  | ✓   | lsp, javac                                                                                                     | google-java-format      |
+| Java + Lombok         | ✓   | JDT LS launched with `-javaagent:<lombok.jar>` when Lombok is detected and a jar is found (`PI_LENS_LOMBOK_JAR` / `LOMBOK_JAR`, project `.lombok/lombok.jar`, or Maven/Gradle cache) | google-java-format      |
 | Kotlin                | ✓   | lsp, ktlint, detekt                                                                                            | ktlint                  |
 | Swift                 | ✓   | lsp, swiftlint                                                                                                 | swiftformat             |
 | Dart                  | ✓   | lsp, dart-analyze                                                                                              | dart format             |

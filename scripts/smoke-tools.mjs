@@ -35,12 +35,14 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
+const LOMBOK_DOWNLOAD_URL = "https://projectlombok.org/downloads/lombok.jar";
 
 /**
  * One minimal real project per language. `targets` are the runner ids whose
@@ -367,25 +369,149 @@ const LSP_FIXTURES = [
 	// New languages (no prior fixture) get a minimal clean source + root marker.
 	// Servers needing a toolchain report "unavailable" where it's absent; the
 	// fixture stays durable so a provisioned CI run completes the matrix.
-	{ lang: "go", dir: "tests/fixtures/tool-smoke/go", file: "bad.go", serverHint: "gopls", tools: ["gopls"] },
-	{ lang: "ruby", dir: "tests/fixtures/tool-smoke/ruby", file: "bad.rb", serverHint: "ruby-lsp", tools: ["ruby-lsp"] },
-	{ lang: "csharp", dir: "tests/fixtures/tool-smoke/csharp", file: "Program.cs", serverHint: "csharp-ls", tools: ["csharp-ls"] },
-	{ lang: "fsharp", dir: "tests/fixtures/tool-smoke/fsharp", file: "Program.fs", serverHint: "fsautocomplete", tools: ["fsautocomplete"] },
-	{ lang: "java", dir: "tests/fixtures/tool-smoke/java", file: "Bad.java", serverHint: "jdtls", tools: ["jdtls"] },
-	{ lang: "kotlin", dir: "tests/fixtures/tool-smoke/kotlin", file: "Bad.kt", serverHint: "kotlin-language-server", tools: ["kotlin-language-server"] },
-	{ lang: "swift", dir: "tests/fixtures/tool-smoke/swift", file: "main.swift", serverHint: "sourcekit-lsp", tools: ["sourcekit-lsp"] },
-	{ lang: "dart", dir: "tests/fixtures/tool-smoke/dart", file: "bad.dart", serverHint: "dart language-server", tools: ["dart"] },
-	{ lang: "lua", dir: "tests/fixtures/tool-smoke/lua", file: "main.lua", serverHint: "lua-language-server", tools: ["lua-language-server"] },
-	{ lang: "cpp", dir: "tests/fixtures/tool-smoke/cpp", file: "main.cpp", serverHint: "clangd", tools: ["clangd"] },
-	{ lang: "zig", dir: "tests/fixtures/tool-smoke/zig", file: "bad.zig", serverHint: "zls", tools: ["zls"] },
-	{ lang: "haskell", dir: "tests/fixtures/tool-smoke/haskell", file: "Main.hs", serverHint: "haskell-language-server", tools: ["haskell-language-server"] },
-	{ lang: "elixir", dir: "tests/fixtures/tool-smoke/elixir", file: "bad.ex", serverHint: "elixir-ls", tools: ["elixir-ls"] },
-	{ lang: "gleam", dir: "tests/fixtures/tool-smoke/gleam", file: "src/smoke.gleam", serverHint: "gleam lsp", tools: ["gleam"] },
-	{ lang: "ocaml", dir: "tests/fixtures/tool-smoke/ocaml", file: "main.ml", serverHint: "ocamllsp", tools: ["ocaml-lsp-server"] },
-	{ lang: "clojure", dir: "tests/fixtures/tool-smoke/clojure", file: "main.clj", serverHint: "clojure-lsp", tools: ["clojure-lsp"] },
-	{ lang: "nix", dir: "tests/fixtures/tool-smoke/nix", file: "flake.nix", serverHint: "nixd", tools: ["nixd"] },
-	{ lang: "vue", dir: "tests/fixtures/tool-smoke/vue", file: "App.vue", serverHint: "@vue/language-server", tools: ["@vue/language-server"] },
-	{ lang: "svelte", dir: "tests/fixtures/tool-smoke/svelte", file: "App.svelte", serverHint: "svelte-language-server", tools: ["svelte-language-server"] },
+	{
+		lang: "go",
+		dir: "tests/fixtures/tool-smoke/go",
+		file: "bad.go",
+		serverHint: "gopls",
+		tools: ["gopls"],
+	},
+	{
+		lang: "ruby",
+		dir: "tests/fixtures/tool-smoke/ruby",
+		file: "bad.rb",
+		serverHint: "ruby-lsp",
+		tools: ["ruby-lsp"],
+	},
+	{
+		lang: "csharp",
+		dir: "tests/fixtures/tool-smoke/csharp",
+		file: "Program.cs",
+		serverHint: "csharp-ls",
+		tools: ["csharp-ls"],
+	},
+	{
+		lang: "fsharp",
+		dir: "tests/fixtures/tool-smoke/fsharp",
+		file: "Program.fs",
+		serverHint: "fsautocomplete",
+		tools: ["fsautocomplete"],
+	},
+	{
+		lang: "java",
+		dir: "tests/fixtures/tool-smoke/java",
+		file: "Bad.java",
+		serverHint: "jdtls",
+		tools: ["jdtls"],
+	},
+	{
+		lang: "java-lombok",
+		dir: "tests/fixtures/tool-smoke/java-lombok",
+		file: "src/main/java/App.java",
+		serverHint: "jdtls + lombok javaagent",
+		tools: ["jdtls"],
+		lombokJar: true,
+		expectNoMessageMatch:
+			"getName|undefined|cannot be resolved|cannot find symbol",
+	},
+	{
+		lang: "kotlin",
+		dir: "tests/fixtures/tool-smoke/kotlin",
+		file: "Bad.kt",
+		serverHint: "kotlin-language-server",
+		tools: ["kotlin-language-server"],
+	},
+	{
+		lang: "swift",
+		dir: "tests/fixtures/tool-smoke/swift",
+		file: "main.swift",
+		serverHint: "sourcekit-lsp",
+		tools: ["sourcekit-lsp"],
+	},
+	{
+		lang: "dart",
+		dir: "tests/fixtures/tool-smoke/dart",
+		file: "bad.dart",
+		serverHint: "dart language-server",
+		tools: ["dart"],
+	},
+	{
+		lang: "lua",
+		dir: "tests/fixtures/tool-smoke/lua",
+		file: "main.lua",
+		serverHint: "lua-language-server",
+		tools: ["lua-language-server"],
+	},
+	{
+		lang: "cpp",
+		dir: "tests/fixtures/tool-smoke/cpp",
+		file: "main.cpp",
+		serverHint: "clangd",
+		tools: ["clangd"],
+	},
+	{
+		lang: "zig",
+		dir: "tests/fixtures/tool-smoke/zig",
+		file: "bad.zig",
+		serverHint: "zls",
+		tools: ["zls"],
+	},
+	{
+		lang: "haskell",
+		dir: "tests/fixtures/tool-smoke/haskell",
+		file: "Main.hs",
+		serverHint: "haskell-language-server",
+		tools: ["haskell-language-server"],
+	},
+	{
+		lang: "elixir",
+		dir: "tests/fixtures/tool-smoke/elixir",
+		file: "bad.ex",
+		serverHint: "elixir-ls",
+		tools: ["elixir-ls"],
+	},
+	{
+		lang: "gleam",
+		dir: "tests/fixtures/tool-smoke/gleam",
+		file: "src/smoke.gleam",
+		serverHint: "gleam lsp",
+		tools: ["gleam"],
+	},
+	{
+		lang: "ocaml",
+		dir: "tests/fixtures/tool-smoke/ocaml",
+		file: "main.ml",
+		serverHint: "ocamllsp",
+		tools: ["ocaml-lsp-server"],
+	},
+	{
+		lang: "clojure",
+		dir: "tests/fixtures/tool-smoke/clojure",
+		file: "main.clj",
+		serverHint: "clojure-lsp",
+		tools: ["clojure-lsp"],
+	},
+	{
+		lang: "nix",
+		dir: "tests/fixtures/tool-smoke/nix",
+		file: "flake.nix",
+		serverHint: "nixd",
+		tools: ["nixd"],
+	},
+	{
+		lang: "vue",
+		dir: "tests/fixtures/tool-smoke/vue",
+		file: "App.vue",
+		serverHint: "@vue/language-server",
+		tools: ["@vue/language-server"],
+	},
+	{
+		lang: "svelte",
+		dir: "tests/fixtures/tool-smoke/svelte",
+		file: "App.svelte",
+		serverHint: "svelte-language-server",
+		tools: ["svelte-language-server"],
+	},
 	// Auxiliary LSP (cross-cutting, diagnostic-only) — attaches alongside the
 	// primary language server. `auxiliaryServerIds` switches the touch to the
 	// with-auxiliary scope; `auxiliarySourceMatch` asserts the auxiliary actually
@@ -882,7 +1008,12 @@ const TMP_PREFIX = "pi-lens-smoke-";
  */
 function safeRm(dir) {
 	try {
-		fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+		fs.rmSync(dir, {
+			recursive: true,
+			force: true,
+			maxRetries: 3,
+			retryDelay: 200,
+		});
 	} catch {
 		// leftover temp dir — swept on the next run (see sweepLeftovers)
 	}
@@ -921,10 +1052,54 @@ function copyDirToTemp(srcRel) {
 	return dest;
 }
 
+function downloadFile(url, dest) {
+	return new Promise((resolve, reject) => {
+		fs.mkdirSync(path.dirname(dest), { recursive: true });
+		const request = https.get(url, (response) => {
+			if (
+				response.statusCode >= 300 &&
+				response.statusCode < 400 &&
+				response.headers.location
+			) {
+				response.resume();
+				downloadFile(response.headers.location, dest).then(resolve, reject);
+				return;
+			}
+			if (response.statusCode !== 200) {
+				response.resume();
+				reject(new Error(`download failed ${response.statusCode}: ${url}`));
+				return;
+			}
+			const out = fs.createWriteStream(dest);
+			response.pipe(out);
+			out.on("finish", () => out.close(resolve));
+			out.on("error", reject);
+		});
+		request.on("error", reject);
+	});
+}
+
+async function ensureSmokeLombokJar(workspace, verbose) {
+	const cached = path.join(os.tmpdir(), "pi-lens-smoke-cache", "lombok.jar");
+	if (!fs.existsSync(cached) || fs.statSync(cached).size === 0) {
+		if (verbose)
+			console.error(`[java-lombok] downloading ${LOMBOK_DOWNLOAD_URL}`);
+		await downloadFile(LOMBOK_DOWNLOAD_URL, cached);
+	}
+	const dest = path.join(workspace, ".lombok", "lombok.jar");
+	fs.mkdirSync(path.dirname(dest), { recursive: true });
+	fs.copyFileSync(cached, dest);
+	return dest;
+}
+
 /** Classify one target runner's outcome against the Step-1 bar. */
 function classify(outcome) {
 	if (!outcome) {
-		return { state: "skip", detail: "not executed (filtered / when-skipped)", diags: 0 };
+		return {
+			state: "skip",
+			detail: "not executed (filtered / when-skipped)",
+			diags: 0,
+		};
 	}
 	const { status, failureKind, failureMessage, diagnostics } = outcome.result;
 	const diags = diagnostics.length;
@@ -936,7 +1111,11 @@ function classify(outcome) {
 		};
 	}
 	if (status === "skipped") {
-		return { state: "skip", detail: "runner skipped (tool/config unavailable)", diags };
+		return {
+			state: "skip",
+			detail: "runner skipped (tool/config unavailable)",
+			diags,
+		};
 	}
 	// succeeded, or failed with blocking_diagnostics → the tool ran and exited cleanly.
 	return {
@@ -951,7 +1130,9 @@ const ICON = { pass: "✓", fail: "✗", skip: "⚠" };
 function report(rows, title) {
 	const pad = (s, n) => String(s).padEnd(n);
 	console.log(`\nLive tool-smoke (#209) — ${title}\n`);
-	console.log(`${pad("", 2)} ${pad("LANG", 12)} ${pad("RUNNER/SERVER", 28)} ${pad("DIAG", 5)} DETAIL`);
+	console.log(
+		`${pad("", 2)} ${pad("LANG", 12)} ${pad("RUNNER/SERVER", 28)} ${pad("DIAG", 5)} DETAIL`,
+	);
 	for (const r of rows) {
 		console.log(
 			`${ICON[r.state]}  ${pad(r.lang, 12)} ${pad(r.runner, 28)} ${pad(r.diags, 5)} ${r.detail}`,
@@ -962,9 +1143,7 @@ function report(rows, title) {
 	console.log(
 		`\n${counts.pass} passed · ${counts.fail} failed · ${counts.skip} skipped (tool/config unavailable)`,
 	);
-	console.log(
-		"Legend: ✓ ok  ✗ failure  ⚠ unavailable (not a failure)\n",
-	);
+	console.log("Legend: ✓ ok  ✗ failure  ⚠ unavailable (not a failure)\n");
 	return counts.fail;
 }
 
@@ -976,16 +1155,30 @@ function report(rows, title) {
 async function runLspHandshake({ langs, install, verbose }) {
 	const lspEntry = path.join(repoRoot, "dist", "clients", "lsp", "index.js");
 	if (!fs.existsSync(lspEntry)) {
-		console.error(`dist build missing: ${lspEntry}\nRun \`npm run build:dist\` first.`);
+		console.error(
+			`dist build missing: ${lspEntry}\nRun \`npm run build:dist\` first.`,
+		);
 		process.exit(2);
 	}
 	const { getLSPService } = await import(pathToFileURL(lspEntry).href);
-	const configEntry = path.join(repoRoot, "dist", "clients", "lsp", "config.js");
+	const configEntry = path.join(
+		repoRoot,
+		"dist",
+		"clients",
+		"lsp",
+		"config.js",
+	);
 	const { initLSPConfig } = await import(pathToFileURL(configEntry).href);
 
 	let ensureTool;
 	if (install) {
-		const installerEntry = path.join(repoRoot, "dist", "clients", "installer", "index.js");
+		const installerEntry = path.join(
+			repoRoot,
+			"dist",
+			"clients",
+			"installer",
+			"index.js",
+		);
 		({ ensureTool } = await import(pathToFileURL(installerEntry).href));
 	}
 
@@ -1006,17 +1199,38 @@ async function runLspHandshake({ langs, install, verbose }) {
 				const resolved = await ensureTool(toolId);
 				if (!resolved) unavailableTools.add(toolId);
 				if (verbose) {
-					console.error(`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`);
+					console.error(
+						`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,
+					);
 				}
 			}
 		}
 		const workspace = copyDirToTemp(fx.dir);
 		const absFile = path.join(workspace, fx.file);
+		if (fx.lombokJar) {
+			try {
+				const jar = await ensureSmokeLombokJar(workspace, verbose);
+				if (verbose) console.error(`[${fx.lang}] lombok.jar → ${jar}`);
+			} catch (err) {
+				rows.push({
+					lang: fx.lang,
+					runner: fx.serverHint,
+					state: "skip",
+					detail: `lombok.jar unavailable: ${err?.message ?? err}`,
+					diags: 0,
+				});
+				safeRm(workspace);
+				continue;
+			}
+		}
 		// Some auxiliary servers (opengrep) root at the nearest .git — give the
 		// temp workspace one so the copied fixture is treated as in-workspace.
 		if (fx.gitInit) {
 			try {
-				execFileSync("git", ["init", "-q"], { cwd: workspace, stdio: "ignore" });
+				execFileSync("git", ["init", "-q"], {
+					cwd: workspace,
+					stdio: "ignore",
+				});
 			} catch {
 				// git unavailable — opengrep falls back to cwd; may not scan the temp file
 			}
@@ -1035,7 +1249,9 @@ async function runLspHandshake({ langs, install, verbose }) {
 			);
 			await initLSPConfig(workspace);
 			if (verbose) {
-				console.error(`[${fx.lang}] disabled [${fx.disableServers.join(",")}] via .pi-lens/lsp.json → expecting ${fx.expectServerId}`);
+				console.error(
+					`[${fx.lang}] disabled [${fx.disableServers.join(",")}] via .pi-lens/lsp.json → expecting ${fx.expectServerId}`,
+				);
 			}
 		}
 		try {
@@ -1112,7 +1328,10 @@ async function runLspHandshake({ langs, install, verbose }) {
 				if (!Array.isArray(touched)) {
 					// No client became ready — the alternate isn't installed (and
 					// --install wasn't passed or its install failed). Skip, don't fail.
-					push("skip", `${fx.expectServerId} unavailable (no client ready; pass --install or install ${(fx.tools ?? []).join(",")})`);
+					push(
+						"skip",
+						`${fx.expectServerId} unavailable (no client ready; pass --install or install ${(fx.tools ?? []).join(",")})`,
+					);
 					continue;
 				}
 				const list = touched;
@@ -1120,11 +1339,11 @@ async function runLspHandshake({ langs, install, verbose }) {
 				const re = fx.expectSourceMatch
 					? new RegExp(fx.expectSourceMatch, "i")
 					: null;
-				const matched = re
-					? list.filter((d) => re.test(d.source || ""))
-					: list;
+				const matched = re ? list.filter((d) => re.test(d.source || "")) : list;
 				if (verbose) {
-					console.error(`[${fx.lang}] alternate sources=${JSON.stringify(sources)} matched=${matched.length}/${list.length}`);
+					console.error(
+						`[${fx.lang}] alternate sources=${JSON.stringify(sources)} matched=${matched.length}/${list.length}`,
+					);
 				}
 				push(
 					matched.length > 0 ? "pass" : "fail",
@@ -1140,6 +1359,18 @@ async function runLspHandshake({ langs, install, verbose }) {
 			if (threw) {
 				push("fail", `handshake/server error: ${threw}`, diags);
 			} else if (Array.isArray(touched)) {
+				if (fx.expectNoMessageMatch) {
+					const re = new RegExp(fx.expectNoMessageMatch, "i");
+					const matched = touched.filter((d) => re.test(d.message || ""));
+					push(
+						matched.length === 0 ? "pass" : "fail",
+						matched.length === 0
+							? `handshook — Lombok-generated symbols resolved (${diags} diagnostic${diags === 1 ? "" : "s"})`
+							: `Lombok unresolved diagnostic(s): ${matched.map((d) => d.message).join("; ")}`,
+						diags,
+					);
+					continue;
+				}
 				push(
 					"pass",
 					`handshook — server replied${diags ? ` (${diags} diagnostic${diags === 1 ? "" : "s"})` : ""}`,
@@ -1180,7 +1411,9 @@ async function runLspHandshake({ langs, install, verbose }) {
 async function runFormatSmoke({ langs, install, verbose }) {
 	const fmtEntry = path.join(repoRoot, "dist", "clients", "format-service.js");
 	if (!fs.existsSync(fmtEntry)) {
-		console.error(`dist build missing: ${fmtEntry}\nRun \`npm run build:dist\` first.`);
+		console.error(
+			`dist build missing: ${fmtEntry}\nRun \`npm run build:dist\` first.`,
+		);
 		process.exit(2);
 	}
 	const { getFormatService } = await import(pathToFileURL(fmtEntry).href);
@@ -1188,7 +1421,13 @@ async function runFormatSmoke({ langs, install, verbose }) {
 
 	let ensureTool;
 	if (install) {
-		const installerEntry = path.join(repoRoot, "dist", "clients", "installer", "index.js");
+		const installerEntry = path.join(
+			repoRoot,
+			"dist",
+			"clients",
+			"installer",
+			"index.js",
+		);
 		({ ensureTool } = await import(pathToFileURL(installerEntry).href));
 	}
 
@@ -1206,14 +1445,22 @@ async function runFormatSmoke({ langs, install, verbose }) {
 			for (const toolId of fx.tools ?? []) {
 				const resolved = await ensureTool(toolId);
 				if (verbose) {
-					console.error(`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`);
+					console.error(
+						`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,
+					);
 				}
 			}
 		}
 		const workspace = copyDirToTemp(fx.dir);
 		const absFile = path.join(workspace, fx.file);
 		const push = (state, detail) =>
-			rows.push({ lang: fx.lang, runner: fx.formatter, state, detail, diags: 0 });
+			rows.push({
+				lang: fx.lang,
+				runner: fx.formatter,
+				state,
+				detail,
+				diags: 0,
+			});
 		try {
 			// Mirror runFormatPhase: establish the fileTime baseline (recordRead)
 			// before formatting so the external-modification guard doesn't skip.
@@ -1275,7 +1522,9 @@ async function runAutofixSmoke({ langs, install, verbose }) {
 	const ruffEntry = path.join(repoRoot, "dist", "clients", "ruff-client.js");
 	for (const e of [pipelineEntry, biomeEntry, ruffEntry]) {
 		if (!fs.existsSync(e)) {
-			console.error(`dist build missing: ${e}\nRun \`npm run build:dist\` first.`);
+			console.error(
+				`dist build missing: ${e}\nRun \`npm run build:dist\` first.`,
+			);
 			process.exit(2);
 		}
 	}
@@ -1285,7 +1534,13 @@ async function runAutofixSmoke({ langs, install, verbose }) {
 
 	let ensureTool;
 	if (install) {
-		const installerEntry = path.join(repoRoot, "dist", "clients", "installer", "index.js");
+		const installerEntry = path.join(
+			repoRoot,
+			"dist",
+			"clients",
+			"installer",
+			"index.js",
+		);
 		({ ensureTool } = await import(pathToFileURL(installerEntry).href));
 	}
 
@@ -1305,7 +1560,9 @@ async function runAutofixSmoke({ langs, install, verbose }) {
 			for (const toolId of fx.tools ?? []) {
 				const resolved = await ensureTool(toolId);
 				if (verbose) {
-					console.error(`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`);
+					console.error(
+						`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,
+					);
 				}
 			}
 		}
@@ -1344,9 +1601,15 @@ async function runAutofixSmoke({ langs, install, verbose }) {
 						: `no safe-autofix tool selected${result.skipReason ? ` (${result.skipReason})` : ""}`,
 				);
 			} else if (result.fixedCount > 0 && before !== after) {
-				push("pass", `${fx.tool} applied a safe fix (${result.autofixTools.join(",")})`);
+				push(
+					"pass",
+					`${fx.tool} applied a safe fix (${result.autofixTools.join(",")})`,
+				);
 			} else {
-				push("fail", `${fx.tool} attempted but applied no fix / file unchanged`);
+				push(
+					"fail",
+					`${fx.tool} attempted but applied no fix / file unchanged`,
+				);
 			}
 		} catch (err) {
 			push("fail", `error: ${err?.message ?? err}`);
@@ -1359,34 +1622,57 @@ async function runAutofixSmoke({ langs, install, verbose }) {
 }
 
 async function main() {
-	const { langs, step2, verbose, install, lsp, format, autofix } = parseArgs(process.argv.slice(2));
+	const { langs, step2, verbose, install, lsp, format, autofix } = parseArgs(
+		process.argv.slice(2),
+	);
 
 	// Clean leftovers from prior runs (their file locks are released now).
 	const swept = sweepLeftovers();
-	if (verbose && swept > 0) console.error(`swept ${swept} leftover temp workspace(s)`);
+	if (verbose && swept > 0)
+		console.error(`swept ${swept} leftover temp workspace(s)`);
 
 	if (lsp) {
-		process.exit((await runLspHandshake({ langs, install, verbose })) > 0 ? 1 : 0);
+		process.exit(
+			(await runLspHandshake({ langs, install, verbose })) > 0 ? 1 : 0,
+		);
 	}
 
 	if (format) {
-		process.exit((await runFormatSmoke({ langs, install, verbose })) > 0 ? 1 : 0);
+		process.exit(
+			(await runFormatSmoke({ langs, install, verbose })) > 0 ? 1 : 0,
+		);
 	}
 
 	if (autofix) {
-		process.exit((await runAutofixSmoke({ langs, install, verbose })) > 0 ? 1 : 0);
+		process.exit(
+			(await runAutofixSmoke({ langs, install, verbose })) > 0 ? 1 : 0,
+		);
 	}
 
-	const distEntry = path.join(repoRoot, "dist", "clients", "dispatch", "integration.js");
+	const distEntry = path.join(
+		repoRoot,
+		"dist",
+		"clients",
+		"dispatch",
+		"integration.js",
+	);
 	if (!fs.existsSync(distEntry)) {
-		console.error(`dist build missing: ${distEntry}\nRun \`npm run build:dist\` first.`);
+		console.error(
+			`dist build missing: ${distEntry}\nRun \`npm run build:dist\` first.`,
+		);
 		process.exit(2);
 	}
 	const { dispatchLintDetailed } = await import(pathToFileURL(distEntry).href);
 
 	let ensureTool;
 	if (install) {
-		const installerEntry = path.join(repoRoot, "dist", "clients", "installer", "index.js");
+		const installerEntry = path.join(
+			repoRoot,
+			"dist",
+			"clients",
+			"installer",
+			"index.js",
+		);
 		({ ensureTool } = await import(pathToFileURL(installerEntry).href));
 	}
 
@@ -1430,7 +1716,9 @@ async function main() {
 						return `${r.runnerId}:${status}${why}`;
 					})
 					.join(", ");
-				console.error(`[${fixture.lang}] executed runners: ${desc || "(none)"}`);
+				console.error(
+					`[${fixture.lang}] executed runners: ${desc || "(none)"}`,
+				);
 			}
 			for (const target of fixture.targets) {
 				const outcome = runners.find((r) => r.runnerId === target);
@@ -1443,7 +1731,8 @@ async function main() {
 					verdict.diags === 0
 				) {
 					verdict.state = "fail";
-					verdict.detail = "ran clean but produced no diagnostic on known defect";
+					verdict.detail =
+						"ran clean but produced no diagnostic on known defect";
 				}
 				rows.push({ lang: fixture.lang, runner: target, ...verdict });
 			}

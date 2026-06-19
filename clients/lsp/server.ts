@@ -20,6 +20,7 @@ import { logLatency } from "../latency-logger.js";
 import { findLocalSgconfig, resolveBaselineSgconfig } from "../sgconfig.js";
 import { isCommandAvailableAsync, safeSpawnAsync } from "../safe-spawn.js";
 import { type LSPProcess, launchLSP } from "./launch.js";
+import { createLombokJdtlsArgs } from "./lombok.js";
 import { normalizeMapKey } from "./path-utils.js";
 
 // --- Types ---
@@ -882,8 +883,7 @@ export function goBinCandidates(tool: string): string[] {
 
 /** Rust: `$CARGO_HOME/bin` or `~/.cargo/bin` — cargo/rustup binaries + proxies. */
 export function cargoBinCandidates(tool: string): string[] {
-	const cargoHome =
-		process.env.CARGO_HOME || path.join(os.homedir(), ".cargo");
+	const cargoHome = process.env.CARGO_HOME || path.join(os.homedir(), ".cargo");
 	return [tool, ...binExeVariants(path.join(cargoHome, "bin"), tool)];
 }
 
@@ -1552,6 +1552,7 @@ export const JavaServer = createInteractiveServer({
 	),
 	language: "java",
 	command: () => process.env.JDTLS_PATH || "jdtls",
+	args: (root) => createLombokJdtlsArgs(root),
 });
 
 export const KotlinServer: LSPServerInfo = {
