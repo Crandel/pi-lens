@@ -1,0 +1,125 @@
+import { describe, expect, it } from "vitest";
+import {
+	createModuleReportTool,
+	createReadSymbolTool,
+} from "../../tools/module-report.js";
+import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
+
+type Recorded = {
+	filePath: string;
+	symbol: { name: string; kind: string; startLine: number; endLine: number };
+};
+
+describe("module_report tool", () => {
+	it("returns a navigable JSON report with per-symbol read args (outline)", async () => {
+		const env = setupTestEnvironment("pi-lens-modreport-tool-");
+		try {
+			const file = createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				"export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+			);
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const result = await tool.execute(
+				"1",
+				{ filePath: "sample.ts", depth: "outline" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBe(false);
+			const report = JSON.parse(String(result.content[0]?.text));
+			expect(report.available).toBe(true);
+			const add = report.api.find(
+				(e: { name: string }) => e.name === "add",
+			) as
+				| { name: string; startLine: number; endLine: number; read: unknown }
+				| undefined;
+			expect(add).toBeTruthy();
+			expect(add?.read).toEqual({
+				path: file,
+				offset: add?.startLine,
+				limit: (add?.endLine ?? 0) - (add?.startLine ?? 0) + 1,
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("reports isError for a non-symbol-bearing file", async () => {
+		const env = setupTestEnvironment("pi-lens-modreport-tool-");
+		try {
+			createTempFile(env.tmpDir, "data.json", "{}\n");
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const result = await tool.execute(
+				"1",
+				{ filePath: "data.json", depth: "outline" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("read_symbol tool", () => {
+	it("returns the symbol body and fires the read-guard tie-in with its range", async () => {
+		const env = setupTestEnvironment("pi-lens-readsym-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				"const noise = 1;\nexport function target(n: number): number {\n  return n * 2;\n}\n",
+			);
+			const recorded: Recorded[] = [];
+			const tool = createReadSymbolTool(
+				() => env.tmpDir,
+				(filePath, symbol) => recorded.push({ filePath, symbol }),
+			);
+			const result = await tool.execute(
+				"1",
+				{ filePath: "sample.ts", symbol: "target" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBeUndefined();
+			const text = String(result.content[0]?.text);
+			expect(text).toContain("export function target");
+			expect(text).not.toContain("const noise");
+			// Tie-in fired exactly once with the symbol's resolved range.
+			expect(recorded).toHaveLength(1);
+			expect(recorded[0].symbol.name).toBe("target");
+			expect(recorded[0].symbol.startLine).toBe(2);
+			expect(recorded[0].symbol.endLine).toBe(4);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does NOT record a guard read when the symbol is missing", async () => {
+		const env = setupTestEnvironment("pi-lens-readsym-tool-");
+		try {
+			createTempFile(env.tmpDir, "sample.ts", "export const x = 1;\n");
+			const recorded: Recorded[] = [];
+			const tool = createReadSymbolTool(
+				() => env.tmpDir,
+				(filePath, symbol) => recorded.push({ filePath, symbol }),
+			);
+			const result = await tool.execute(
+				"1",
+				{ filePath: "sample.ts", symbol: "ghost" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBe(true);
+			expect(recorded).toHaveLength(0);
+		} finally {
+			env.cleanup();
+		}
+	});
+});

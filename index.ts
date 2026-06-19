@@ -95,6 +95,10 @@ import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
 import { createLspDiagnosticsTool } from "./tools/lsp-diagnostics.js";
 import { createLspNavigationTool } from "./tools/lsp-navigation.js";
+import {
+	createModuleReportTool,
+	createReadSymbolTool,
+} from "./tools/module-report.js";
 import { logLatency } from "./clients/latency-logger.js";
 import {
 	markPiLensLoaded,
@@ -998,6 +1002,19 @@ export default function (pi: ExtensionAPI) {
 		),
 		createLspDiagnosticsTool(),
 		createLspNavigationTool((name) => getLensFlag(name)),
+		createModuleReportTool(() => runtime.projectRoot),
+		createReadSymbolTool(
+			() => runtime.projectRoot,
+			// Read-substitute tie-in (#245): a returned symbol body is a genuine read
+			// of that range, so record it as read-guard coverage for the symbol.
+			(filePath, symbol) =>
+				runtime.readGuard.recordSymbolRead(
+					filePath,
+					symbol,
+					runtime.turnIndex,
+					runtime.peekWriteIndex(),
+				),
+		),
 	]) {
 		try {
 			pi.registerTool(tool as any);

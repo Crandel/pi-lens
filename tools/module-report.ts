@@ -1,0 +1,172 @@
+/**
+ * module_report + read_symbol tool definitions (#245).
+ *
+ * Agent-facing surface for the structured read-substitute flow: module_report
+ * gives a navigable overview of a module (outline + signatures + who-uses-this +
+ * ready-to-use read args); read_symbol returns one symbol's verbatim body. The
+ * pair lets an agent understand and target a module without reading the whole
+ * file. read_symbol also wires the read-guard tie-in — a symbol body it returns
+ * is recorded as a genuine read of that range (module_report deliberately does
+ * not, since an outline is shape, not body).
+ */
+
+import * as path from "node:path";
+import { Type } from "typebox";
+import {
+	moduleReport,
+	type ModuleReportDepth,
+	readSymbol,
+} from "../clients/module-report.js";
+
+const VALID_DEPTHS: readonly ModuleReportDepth[] = [
+	"outline",
+	"standard",
+	"deep",
+];
+
+function resolveFile(filePath: string, cwd: string | undefined): string {
+	return path.isAbsolute(filePath)
+		? filePath
+		: path.resolve(cwd || ".", filePath);
+}
+
+export function createModuleReportTool(getProjectRoot: () => string) {
+	return {
+		name: "module_report" as const,
+		label: "Module Report",
+		description:
+			"Structured, navigable overview of a source module — a token-efficient substitute for reading the whole file. Returns each symbol's name/kind/signature/line-range with ready-to-use `read` arguments, plus who-uses-this, risk flags, and ranked recommendedReads. Prefer this before a full read; then use read_symbol (or read) for the exact body you need.\n" +
+			"depth: outline (single-file structure, fastest, no graph) | standard (default — adds cross-file who-uses-this and flags) | deep (reserved).\n" +
+			"Returns JSON. An outline shows shape, not bodies — it does NOT count as having read a symbol's body for editing; use read_symbol for that.",
+		promptSnippet:
+			"Use module_report to understand a file's API/structure before reading it in full",
+		parameters: Type.Object({
+			filePath: Type.String({
+				description: "Absolute or workspace-relative path to the source file.",
+			}),
+			depth: Type.Optional(
+				Type.String({
+					description:
+						"outline | standard (default) | deep. standard adds cross-file who-uses-this from the review graph.",
+				}),
+			),
+			maxRefsPerSymbol: Type.Optional(
+				Type.Number({
+					description: "Cap on who-uses-this entries per symbol (default 10).",
+				}),
+			),
+		}),
+		async execute(
+			_toolCallId: string,
+			params: { filePath: string; depth?: string; maxRefsPerSymbol?: number },
+			_signal: AbortSignal | undefined,
+			_onUpdate: unknown,
+			ctx: { cwd?: string },
+		) {
+			// Resolve the file against the agent's cwd (sibling-tool convention); build
+			// the review graph at the project root so cross-file who-uses-this is whole.
+			const absFile = resolveFile(params.filePath, ctx.cwd);
+			const cwd = getProjectRoot() || ctx.cwd || ".";
+			const depth: ModuleReportDepth = VALID_DEPTHS.includes(
+				params.depth as ModuleReportDepth,
+			)
+				? (params.depth as ModuleReportDepth)
+				: "standard";
+			const report = await moduleReport(absFile, cwd, {
+				depth,
+				maxRefsPerSymbol: params.maxRefsPerSymbol,
+			});
+			return {
+				content: [
+					{ type: "text" as const, text: JSON.stringify(report, null, 2) },
+				],
+				isError: !report.available,
+				details: {
+					available: report.available,
+					staleness: report.staleness,
+					symbols: report.summary.symbols,
+					exports: report.summary.exports,
+				},
+			};
+		},
+	};
+}
+
+export function createReadSymbolTool(
+	getProjectRoot: () => string,
+	recordSymbolRead: (
+		filePath: string,
+		symbol: { name: string; kind: string; startLine: number; endLine: number },
+	) => void,
+) {
+	return {
+		name: "read_symbol" as const,
+		label: "Read Symbol",
+		description:
+			"Return the verbatim source of a single named symbol (function/class/method/interface/type) in a file — a targeted, cheap alternative to reading the whole file. Pair with module_report: module_report finds the symbol, read_symbol shows its body. Unlike an outline, this delivers the actual lines, so it counts as having read that symbol for the read-before-edit guard.",
+		promptSnippet:
+			"Use read_symbol to read one symbol's body instead of the whole file",
+		parameters: Type.Object({
+			filePath: Type.String({
+				description: "Absolute or workspace-relative path to the source file.",
+			}),
+			symbol: Type.String({
+				description:
+					"Exact symbol name to read (e.g. a function, class, or type name).",
+			}),
+		}),
+		async execute(
+			_toolCallId: string,
+			params: { filePath: string; symbol: string },
+			_signal: AbortSignal | undefined,
+			_onUpdate: unknown,
+			ctx: { cwd?: string },
+		) {
+			const absFile = resolveFile(params.filePath, ctx.cwd);
+			const cwd = getProjectRoot() || ctx.cwd || ".";
+			const result = await readSymbol(absFile, params.symbol, cwd);
+			if (!result.found) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Symbol "${params.symbol}" not found in ${path.basename(absFile)}. Use module_report to list available symbols.`,
+						},
+					],
+					isError: true,
+					details: { found: false },
+				};
+			}
+			// Read-substitute tie-in (#245): a readSymbol body IS a real read of that
+			// range, so record it as read-guard coverage for the symbol.
+			if (
+				result.kind &&
+				typeof result.startLine === "number" &&
+				typeof result.endLine === "number"
+			) {
+				recordSymbolRead(result.path, {
+					name: result.name,
+					kind: result.kind,
+					startLine: result.startLine,
+					endLine: result.endLine,
+				});
+			}
+			const header = `${result.kind} ${result.name}  ${path.basename(result.path)}:${result.startLine}-${result.endLine}`;
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `${header}\n\n${result.source ?? ""}`,
+					},
+				],
+				details: {
+					found: true,
+					name: result.name,
+					kind: result.kind,
+					startLine: result.startLine,
+					endLine: result.endLine,
+				},
+			};
+		},
+	};
+}
