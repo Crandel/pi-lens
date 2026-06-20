@@ -56,7 +56,10 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 			});
 			return {
 				content: [
-					{ type: "text" as const, text: JSON.stringify(report, null, 2) },
+					// Compact JSON: omit indentation. Saves ~30% on the wire
+					// without changing the schema. Tests use JSON.parse so
+					// they are agnostic to whitespace.
+					{ type: "text" as const, text: JSON.stringify(report) },
 				],
 				isError: !report.available,
 				details: {

@@ -71,7 +71,8 @@ export interface ModuleSymbolEntry {
 	fanout?: number;
 	/** McCabe complexity (jsts graph path only). */
 	complexity?: number;
-	flags: string[];
+	/** Empty when the symbol has no risk flags; omitted from the wire entirely. */
+	flags?: string[];
 	usedBy?: ModuleSymbolUsedBy[];
 	/** Pre-computed read arguments — the agent's next call sits right here. */
 	read: { path: string; offset: number; limit: number };
@@ -324,7 +325,9 @@ function toEntry(
 		doc: sym.doc,
 		fanout: fanout && fanout > 0 ? fanout : undefined,
 		complexity,
-		flags,
+		// Empty flags array would waste ~3-5 tokens per entry on a 41-symbol
+			// outline (~200 tok total). Omit when there's nothing to report.
+			...(flags.length > 0 ? { flags } : {}),
 		usedBy: usedBy && usedBy.length > 0 ? usedBy : undefined,
 		read: readArgsFor(displayPath, startLine, endLine),
 	};
@@ -340,7 +343,7 @@ function rankRecommendedReads(
 			refs * 2 +
 			(entry.complexity ?? 0) +
 			(entry.exported ? 2 : 0) +
-			(entry.flags.includes("high complexity") ? 3 : 0);
+			(entry.flags?.includes("high complexity") ? 3 : 0);
 		return { entry, score, refs };
 	});
 	scored.sort((a, b) => b.score - a.score);
