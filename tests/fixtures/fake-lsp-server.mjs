@@ -58,6 +58,11 @@ function handle(raw) {
 			result: {
 				capabilities: {
 					textDocumentSync: { openClose: true, change: 1 },
+					// #269: only advertise a non-default position encoding when asked,
+					// so the bulk of the integration tests stay on the UTF-16 default.
+					...(process.env.FAKE_LSP_POSITION_ENCODING
+						? { positionEncoding: process.env.FAKE_LSP_POSITION_ENCODING }
+						: {}),
 					hoverProvider: true,
 					definitionProvider: true,
 					referencesProvider: true,
@@ -153,16 +158,19 @@ function handle(raw) {
 		return;
 	}
 
-	// Definition
+	// Definition. Echo the received position into the result range so a test can
+	// assert the exact on-the-wire offset the client sent (#269 encoding check).
 	if (data.method === "textDocument/definition") {
+		const ln = data.params?.position?.line ?? 1;
+		const ch = data.params?.position?.character ?? 6;
 		send({
 			jsonrpc: "2.0",
 			id: data.id,
 			result: {
 				uri: data.params?.textDocument?.uri ?? "file:///test.ts",
 				range: {
-					start: { line: 1, character: 6 },
-					end: { line: 1, character: 13 },
+					start: { line: ln, character: ch },
+					end: { line: ln, character: ch + 1 },
 				},
 			},
 		});

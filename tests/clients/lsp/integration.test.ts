@@ -224,3 +224,58 @@ describe("LSP Client Integration — cold start", () => {
 		expect(client.isAlive()).toBe(false);
 	});
 });
+
+describe("LSP Client Integration — UTF-8 position encoding (#269)", () => {
+	const prevEnv = process.env.FAKE_LSP_POSITION_ENCODING;
+	let proc: Awaited<ReturnType<typeof launchLSP>> | undefined;
+	let client: Awaited<ReturnType<typeof createLSPClient>> | undefined;
+	let tmpDir: string;
+	let filePath: string;
+	// 'value' begins at UTF-16 char 13 but UTF-8 byte 14 (é is 2 bytes).
+	const SRC = "const café = value;\n";
+
+	beforeEach(async () => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-posenc-"));
+		filePath = path.join(tmpDir, "a.ts");
+		fs.writeFileSync(filePath, SRC); // toWirePosition reads the line from disk
+		proc = await launchLSP(process.execPath, [FAKE_SERVER_PATH], {
+			cwd: process.cwd(),
+			env: { ...process.env, FAKE_LSP_POSITION_ENCODING: "utf-8" },
+		});
+		client = await createLSPClient({
+			serverId: "fake-utf8",
+			process: proc,
+			root: process.cwd(),
+		});
+	});
+
+	afterEach(async () => {
+		try {
+			if (client) await client.shutdown();
+		} catch {
+			/* ignore */
+		}
+		try {
+			if (proc) await stopLSP(proc);
+		} catch {
+			/* ignore */
+		}
+		client = undefined;
+		proc = undefined;
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+		if (prevEnv === undefined) delete process.env.FAKE_LSP_POSITION_ENCODING;
+		else process.env.FAKE_LSP_POSITION_ENCODING = prevEnv;
+	});
+
+	it("sends a UTF-8 byte offset (not the raw UTF-16 offset) when the server negotiates utf-8", async () => {
+		await client!.notify.open(filePath, SRC, "typescript");
+		// 'value' is at UTF-16 char 13; the fake echoes back the position it received.
+		const locations = await client!.definition(filePath, 0, 13);
+		expect(locations.length).toBeGreaterThanOrEqual(1);
+		const sentChar = locations[0].range.start.character;
+		// The é before the offset costs one extra UTF-8 byte, so 13 → 14.
+		expect(sentChar).toBe(Buffer.byteLength("const café = ", "utf8"));
+		expect(sentChar).toBe(14);
+		expect(sentChar).toBeGreaterThan(13);
+	});
+});
