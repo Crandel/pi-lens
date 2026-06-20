@@ -160,20 +160,29 @@ function handle(raw) {
 
 	// Definition. Echo the received position into the result range so a test can
 	// assert the exact on-the-wire offset the client sent (#269 encoding check).
+	// FAKE_LSP_DEFINITION_DELAY_MS delays the reply so a test can bump the
+	// document version mid-request and exercise the stale-drop path (#276).
 	if (data.method === "textDocument/definition") {
 		const ln = data.params?.position?.line ?? 1;
 		const ch = data.params?.position?.character ?? 6;
-		send({
-			jsonrpc: "2.0",
-			id: data.id,
-			result: {
-				uri: data.params?.textDocument?.uri ?? "file:///test.ts",
-				range: {
-					start: { line: ln, character: ch },
-					end: { line: ln, character: ch + 1 },
+		const reply = () =>
+			send({
+				jsonrpc: "2.0",
+				id: data.id,
+				result: {
+					uri: data.params?.textDocument?.uri ?? "file:///test.ts",
+					range: {
+						start: { line: ln, character: ch },
+						end: { line: ln, character: ch + 1 },
+					},
 				},
-			},
-		});
+			});
+		const delay = Number.parseInt(
+			process.env.FAKE_LSP_DEFINITION_DELAY_MS ?? "0",
+			10,
+		);
+		if (delay > 0) setTimeout(reply, delay);
+		else reply();
 		return;
 	}
 

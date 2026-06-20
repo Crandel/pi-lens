@@ -1168,13 +1168,31 @@ async function toWirePosition(
 	}
 }
 
+// #276: drop a navigation result whose document was edited while the request was
+// in flight. Mirrors the diagnostics-path staleness check (isVersionStale) which
+// compares the version computed-against to the latest didChange. Default on;
+// PI_LENS_LSP_NAV_STALE_DROP=0 disables it if it ever over-drops.
+function navStaleDropEnabled(): boolean {
+	return process.env.PI_LENS_LSP_NAV_STALE_DROP !== "0";
+}
+
 async function navRequest<T>(
 	state: LSPClientState,
 	method: string,
 	params: Record<string, unknown>,
+	// When provided, the request is dropped if the document's version advances
+	// (an edit landed) between send and response. Omit for non-single-file
+	// requests (workspaceSymbol, call-hierarchy follow-ups) that have no version.
+	staleCheckPath?: string,
 ): Promise<T | null | undefined> {
 	if (!isClientAlive(state)) return null;
-	return withTimeout(
+	const normalizedPath =
+		staleCheckPath !== undefined ? normalizeMapKey(staleCheckPath) : undefined;
+	const requestVersion =
+		normalizedPath !== undefined
+			? state.documentVersions.get(normalizedPath)
+			: undefined;
+	const result = (await withTimeout(
 		safeSendRequest<T>(state.connection, method, params),
 		NAV_REQUEST_TIMEOUT_MS,
 	).catch((err: unknown) => {
@@ -1182,7 +1200,20 @@ async function navRequest<T>(
 			return undefined;
 		}
 		throw err;
-	}) as Promise<T | undefined>;
+	})) as T | undefined;
+	// requestVersion === undefined (never opened, or version-less) → unaffected,
+	// matching the diagnostics path; the request timeout remains the backstop.
+	if (
+		normalizedPath !== undefined &&
+		requestVersion !== undefined &&
+		navStaleDropEnabled()
+	) {
+		const currentVersion = state.documentVersions.get(normalizedPath);
+		if (currentVersion !== undefined && currentVersion > requestVersion) {
+			return undefined;
+		}
+	}
+	return result;
 }
 
 async function resolveCodeActionBestEffort(
@@ -1599,6 +1630,7 @@ export async function createLSPClient(options: {
 					textDocument: { uri: pathToFileURL(filePath).href },
 					position: await toWirePosition(state, filePath, line, character),
 				},
+				filePath,
 			);
 			if (!result) return [];
 			return Array.isArray(result) ? result : [result];
@@ -1612,6 +1644,7 @@ export async function createLSPClient(options: {
 					textDocument: { uri: pathToFileURL(filePath).href },
 					position: await toWirePosition(state, filePath, line, character),
 				},
+				filePath,
 			);
 			if (!result) return [];
 			return Array.isArray(result) ? result : [result];
@@ -1625,6 +1658,7 @@ export async function createLSPClient(options: {
 					textDocument: { uri: pathToFileURL(filePath).href },
 					position: await toWirePosition(state, filePath, line, character),
 				},
+				filePath,
 			);
 			if (!result) return [];
 			return Array.isArray(result) ? result : [result];
@@ -1639,15 +1673,21 @@ export async function createLSPClient(options: {
 					position: await toWirePosition(state, filePath, line, character),
 					context: { includeDeclaration },
 				},
+				filePath,
 			);
 			return result ?? [];
 		},
 
 		async hover(filePath, line, character) {
-			const result = await navRequest<LSPHover>(state, "textDocument/hover", {
-				textDocument: { uri: pathToFileURL(filePath).href },
-				position: await toWirePosition(state, filePath, line, character),
-			});
+			const result = await navRequest<LSPHover>(
+				state,
+				"textDocument/hover",
+				{
+					textDocument: { uri: pathToFileURL(filePath).href },
+					position: await toWirePosition(state, filePath, line, character),
+				},
+				filePath,
+			);
 			return result ?? null;
 		},
 
@@ -1659,6 +1699,7 @@ export async function createLSPClient(options: {
 					textDocument: { uri: pathToFileURL(filePath).href },
 					position: await toWirePosition(state, filePath, line, character),
 				},
+				filePath,
 			);
 			return result ?? null;
 		},
@@ -1668,6 +1709,7 @@ export async function createLSPClient(options: {
 				state,
 				"textDocument/documentSymbol",
 				{ textDocument: { uri: pathToFileURL(filePath).href } },
+				filePath,
 			);
 			return result ?? [];
 		},
@@ -1721,6 +1763,7 @@ export async function createLSPClient(options: {
 					position: await toWirePosition(state, filePath, line, character),
 					newName,
 				},
+				filePath,
 			);
 			return result ?? null;
 		},
@@ -1761,6 +1804,7 @@ export async function createLSPClient(options: {
 					textDocument: { uri: pathToFileURL(filePath).href },
 					position: await toWirePosition(state, filePath, line, character),
 				},
+				filePath,
 			);
 			if (!result) return [];
 			return Array.isArray(result) ? result : [result];
@@ -1769,10 +1813,15 @@ export async function createLSPClient(options: {
 		async prepareCallHierarchy(filePath, line, character) {
 			const result = await navRequest<
 				LSPCallHierarchyItem | LSPCallHierarchyItem[]
-			>(state, "textDocument/prepareCallHierarchy", {
-				textDocument: { uri: pathToFileURL(filePath).href },
-				position: await toWirePosition(state, filePath, line, character),
-			});
+			>(
+				state,
+				"textDocument/prepareCallHierarchy",
+				{
+					textDocument: { uri: pathToFileURL(filePath).href },
+					position: await toWirePosition(state, filePath, line, character),
+				},
+				filePath,
+			);
 			if (!result) return [];
 			return Array.isArray(result) ? result : [result];
 		},

@@ -279,3 +279,80 @@ describe("LSP Client Integration — UTF-8 position encoding (#269)", () => {
 		expect(sentChar).toBeGreaterThan(13);
 	});
 });
+
+describe("LSP Client Integration — stale navigation drop (#276)", () => {
+	const prevDelay = process.env.FAKE_LSP_DEFINITION_DELAY_MS;
+	const prevFlag = process.env.PI_LENS_LSP_NAV_STALE_DROP;
+	let proc: Awaited<ReturnType<typeof launchLSP>> | undefined;
+	let client: Awaited<ReturnType<typeof createLSPClient>> | undefined;
+	let filePath: string;
+	// Let the in-flight request's version get captured before we bump it. The
+	// nav method yields at `await toWirePosition` before navRequest reads the
+	// version, so a change issued too eagerly would be seen as the request's own
+	// version. This gap (≪ the reply delay) makes the ordering deterministic.
+	const settle = () => new Promise((r) => setTimeout(r, 40));
+
+	beforeEach(async () => {
+		filePath = path.join(process.cwd(), "stale-nav.ts");
+		// The fake holds its definition reply for 300ms so we can land a
+		// notify.change (which bumps the client's documentVersions) mid-request.
+		proc = await launchLSP(process.execPath, [FAKE_SERVER_PATH], {
+			cwd: process.cwd(),
+			env: { ...process.env, FAKE_LSP_DEFINITION_DELAY_MS: "300" },
+		});
+		client = await createLSPClient({
+			serverId: "fake-stale",
+			process: proc,
+			root: process.cwd(),
+		});
+	});
+
+	afterEach(async () => {
+		try {
+			if (client) await client.shutdown();
+		} catch {
+			/* ignore */
+		}
+		try {
+			if (proc) await stopLSP(proc);
+		} catch {
+			/* ignore */
+		}
+		client = undefined;
+		proc = undefined;
+		if (prevDelay === undefined) delete process.env.FAKE_LSP_DEFINITION_DELAY_MS;
+		else process.env.FAKE_LSP_DEFINITION_DELAY_MS = prevDelay;
+		if (prevFlag === undefined) delete process.env.PI_LENS_LSP_NAV_STALE_DROP;
+		else process.env.PI_LENS_LSP_NAV_STALE_DROP = prevFlag;
+	});
+
+	it("drops a nav result when the document is edited mid-request", async () => {
+		await client!.notify.open(filePath, "const x = 1;", "typescript");
+		// Fire the (delayed) request, let it send, then bump the version before
+		// it replies.
+		const pending = client!.definition(filePath, 0, 6);
+		await settle();
+		await client!.notify.change(filePath, "const x = 2;\nconst y = 3;");
+		const locations = await pending;
+		// The in-flight result referred to the pre-edit document → dropped.
+		expect(locations).toEqual([]);
+	});
+
+	it("returns a nav result when the document is not edited mid-request", async () => {
+		await client!.notify.open(filePath, "const x = 1;", "typescript");
+		// Same delay, but no edit lands → result is returned unchanged.
+		const locations = await client!.definition(filePath, 0, 6);
+		expect(locations.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("returns the stale result when the drop is disabled via env", async () => {
+		process.env.PI_LENS_LSP_NAV_STALE_DROP = "0";
+		await client!.notify.open(filePath, "const x = 1;", "typescript");
+		const pending = client!.definition(filePath, 0, 6);
+		await settle();
+		await client!.notify.change(filePath, "const x = 2;\nconst y = 3;");
+		const locations = await pending;
+		// Kill-switch off → the (now-stale) result is still returned.
+		expect(locations.length).toBeGreaterThanOrEqual(1);
+	});
+});
