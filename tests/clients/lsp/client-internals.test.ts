@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MessageConnection } from "vscode-jsonrpc";
 import {
 	applyDynamicCapabilities,
+	CLIENT_CAPABILITIES,
 	clientShutdown,
 	clientWaitForDiagnostics,
 	handleNotifyChange,
@@ -21,6 +22,42 @@ import { normalizeMapKey } from "../../../clients/path-utils.js";
 
 const TEST_FILE = "/project/app.ts";
 const TEST_KEY = normalizeMapKey(TEST_FILE);
+
+describe("CLIENT_CAPABILITIES (#278 regression)", () => {
+	// PowerShell Editor Services (OmniSharp.Extensions.LanguageServer) NPEs during
+	// `initialize` when textDocument sub-capabilities it dereferences are absent —
+	// a partial object hangs the handshake. Keep the set COMPLETE so PSES (and any
+	// OmniSharp-based server) initializes.
+	it("advertises a complete, spec-compliant textDocument capability set", () => {
+		const td = CLIENT_CAPABILITIES.textDocument as Record<string, unknown>;
+		for (const key of [
+			"synchronization",
+			"completion",
+			"hover",
+			"signatureHelp",
+			"definition",
+			"typeDefinition",
+			"implementation",
+			"references",
+			"documentSymbol",
+			"codeAction",
+			"rename",
+			"publishDiagnostics",
+		]) {
+			expect(td[key], `textDocument.${key} present`).toBeTypeOf("object");
+		}
+		// The old NON-STANDARD shape that triggered the NPE must not return:
+		// didOpen/didChange are not TextDocumentSyncClientCapabilities fields.
+		const sync = td.synchronization as Record<string, unknown>;
+		expect(sync).not.toHaveProperty("didOpen");
+		expect(sync).not.toHaveProperty("didChange");
+		// Version-aware diagnostics (#240/#276) must stay advertised.
+		expect(
+			(CLIENT_CAPABILITIES.textDocument.publishDiagnostics as { versionSupport?: boolean })
+				.versionSupport,
+		).toBe(true);
+	});
+});
 
 function createMockConnection(): MessageConnection {
 	return {

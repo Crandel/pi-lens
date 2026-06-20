@@ -328,6 +328,53 @@ const INITIALIZE_TIMEOUT_MS = positiveIntFromEnv(
 	"PI_LENS_LSP_INIT_TIMEOUT_MS",
 	15_000,
 ); // 15s — npx downloads are handled by ensureTool, not here
+
+/**
+ * The client capabilities advertised in every `initialize`. The textDocument set
+ * is intentionally COMPLETE and spec-compliant: servers built on
+ * OmniSharp.Extensions.LanguageServer (PowerShell Editor Services, #278)
+ * dereference these sub-capabilities while handling `initialize` and throw a
+ * NullReferenceException when an expected one is absent, hanging the handshake. A
+ * partial textDocument object (the old `synchronization: {didOpen, didChange}` —
+ * not even valid TextDocumentSyncClientCapabilities fields) triggered exactly
+ * that. Declaring the full set is harmless to other servers (they act only on the
+ * requests we actually send), so this is the single, server-agnostic shape.
+ * Exported for the regression guard in client-internals tests.
+ */
+export const CLIENT_CAPABILITIES = {
+	general: { positionEncodings: ADVERTISED_POSITION_ENCODINGS },
+	window: { workDoneProgress: true },
+	workspace: {
+		workspaceFolders: true,
+		configuration: true,
+		didChangeWatchedFiles: { dynamicRegistration: true },
+	},
+	textDocument: {
+		synchronization: {
+			dynamicRegistration: false,
+			willSave: false,
+			willSaveWaitUntil: false,
+			didSave: true,
+		},
+		completion: {
+			dynamicRegistration: false,
+			completionItem: { snippetSupport: false },
+		},
+		hover: { dynamicRegistration: false },
+		signatureHelp: { dynamicRegistration: false },
+		definition: { dynamicRegistration: false },
+		typeDefinition: { dynamicRegistration: false },
+		implementation: { dynamicRegistration: false },
+		references: { dynamicRegistration: false },
+		documentSymbol: { dynamicRegistration: false },
+		codeAction: { dynamicRegistration: false },
+		rename: { dynamicRegistration: false },
+		publishDiagnostics: {
+			relatedInformation: true,
+			versionSupport: true,
+		},
+	},
+} as const;
 const NAV_REQUEST_TIMEOUT_MS = positiveIntFromEnv(
 	"PI_LENS_LSP_NAV_REQUEST_TIMEOUT_MS",
 	10_000,
@@ -1407,19 +1454,7 @@ export async function createLSPClient(options: {
 				workspaceFolders: [
 					{ name: "workspace", uri: pathToFileURL(root).href },
 				],
-				capabilities: {
-					general: { positionEncodings: ADVERTISED_POSITION_ENCODINGS },
-					window: { workDoneProgress: true },
-					workspace: {
-						workspaceFolders: true,
-						configuration: true,
-						didChangeWatchedFiles: { dynamicRegistration: true },
-					},
-					textDocument: {
-						synchronization: { didOpen: true, didChange: true },
-						publishDiagnostics: { versionSupport: true },
-					},
-				},
+				capabilities: CLIENT_CAPABILITIES,
 				initializationOptions: initialization,
 			}),
 			initializeTimeoutMs,

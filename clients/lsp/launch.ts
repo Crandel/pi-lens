@@ -29,6 +29,21 @@ export interface LSPProcess {
 }
 
 const isWindows = process.platform === "win32";
+
+/**
+ * Whether a resolved command must be spawned through a shell on Windows.
+ * `.cmd`/`.bat` are scripts cmd.exe must interpret; extensionless or spaced-path
+ * commands also go through the shell so cmd resolves/quotes them.
+ */
+function computeNeedsShell(resolvedCommand: string): boolean {
+	return (
+		isWindows &&
+		(resolvedCommand.includes(" ") ||
+			/\.(cmd|bat)$/i.test(resolvedCommand) ||
+			!/\.(exe|cmd|bat)$/i.test(resolvedCommand))
+	);
+}
+
 const DEFAULT_STARTUP_FAILURE_WINDOW_MS = 50;
 const WINDOWS_NAV_STARTUP_FAILURE_WINDOW_MS = 500;
 const SESSIONSTART_LOG_DIR = getGlobalPiLensDir();
@@ -531,12 +546,7 @@ export async function launchLSP(
 	// Compute needsShell based on command
 	// On Windows, shell: true is needed for .cmd/.bat files and extensionless binaries
 	// .exe files can be spawned directly, but .cmd/.bat require shell interpretation
-	const hasScriptExtension = /\.(cmd|bat)$/i.test(resolvedCommand);
-	let needsShell =
-		isWindows &&
-		(resolvedCommand.includes(" ") ||
-			hasScriptExtension ||
-			!/\.(exe|cmd|bat)$/i.test(resolvedCommand));
+	let needsShell = computeNeedsShell(resolvedCommand);
 
 	// Try to spawn the process
 	// If command not found, try npm global as fallback (handles PATH caching after install)
@@ -552,11 +562,7 @@ export async function launchLSP(
 		if (npmGlobalPath) {
 			spawnCommand = npmGlobalPath;
 			// Recompute needsShell for npm global path
-			needsShell =
-				isWindows &&
-				(spawnCommand.includes(" ") ||
-					/\.(cmd|bat)$/i.test(spawnCommand) ||
-					!/\.(exe|cmd|bat)$/i.test(spawnCommand));
+			needsShell = computeNeedsShell(spawnCommand);
 		}
 	}
 
@@ -607,11 +613,7 @@ export async function launchLSP(
 			const npmGlobalPath = _findBinaryInNpmGlobal(command);
 			if (npmGlobalPath && npmGlobalPath !== spawnCommand) {
 				// Recompute needsShell for npm global path
-				const needsShellGlobal =
-					isWindows &&
-					(npmGlobalPath.includes(" ") ||
-						/\.(cmd|bat)$/i.test(npmGlobalPath) ||
-						!/\.(exe|cmd|bat)$/i.test(npmGlobalPath));
+				const needsShellGlobal = computeNeedsShell(npmGlobalPath);
 				proc = trySpawn(npmGlobalPath, args, cwd, env, needsShellGlobal);
 			} else {
 				throw err;
