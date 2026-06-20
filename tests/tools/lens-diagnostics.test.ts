@@ -1,5 +1,9 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createLensDiagnosticsTool } from "../../tools/lens-diagnostics.js";
+import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 
 const projectDiagnosticsMocks = vi.hoisted(() => ({
 	scanProjectDiagnostics: vi.fn(),
@@ -37,6 +41,7 @@ beforeEach(() => {
 	projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReset();
 	mockSummaries.length = 0;
 	mockStaleDropped = 0;
+	resetProjectLensConfigCache();
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -62,12 +67,26 @@ function makeTool(
 	);
 }
 
-async function run(
+function run(
 	tool: ReturnType<typeof makeTool>,
 	params: Record<string, unknown> = {},
+	cwd = "/proj",
 ) {
-	return tool.execute("1", params, new AbortController().signal, null, {
-		cwd: "/proj",
+	return tool.execute("1", params, new AbortController().signal, null, { cwd });
+}
+
+function withIgnoredFixture<T>(fn: (cwd: string) => Promise<T>): Promise<T> {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-ignore-"));
+	fs.writeFileSync(
+		path.join(cwd, ".pi-lens.json"),
+		JSON.stringify({
+			ignore: ["**/.history/**", "pi-session-*.html", "ignored/**"],
+		}),
+	);
+	resetProjectLensConfigCache();
+	return fn(cwd).finally(() => {
+		fs.rmSync(cwd, { recursive: true, force: true });
+		resetProjectLensConfigCache();
 	});
 }
 
@@ -277,6 +296,69 @@ describe("lens_diagnostics mode=delta", () => {
 		expect(text).toContain("Unlisted dependency lodash");
 		expect(result.details).toMatchObject({ projectDiagnostics: 1 });
 	});
+
+	it("filters ignored actionable, quality, and project-delta entries (#279)", async () =>
+		withIgnoredFixture(async (cwd) => {
+			const ignored = path.join(cwd, ".history", "old.ts");
+			const kept = path.join(cwd, "src", "keep.ts");
+			const tool = makeTool({
+				"actionable-warnings": {
+					files: [
+						{
+							filePath: ignored,
+							warnings: [{ line: 1, rule: "ignored-a", tool: "t", message: "ignored actionable" }],
+						},
+						{
+							filePath: kept,
+							warnings: [{ line: 2, rule: "kept-a", tool: "t", message: "kept actionable" }],
+						},
+					],
+					summary: { warnings: 2 },
+				},
+				"code-quality-warnings": {
+					files: [
+						{
+							filePath: ignored,
+							warnings: [{ line: 3, rule: "ignored-q", tool: "t", message: "ignored quality" }],
+						},
+					],
+					summary: { warnings: 1 },
+				},
+			});
+			projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReturnValue({
+				version: 1,
+				cwd,
+				generatedAt: "2026-01-01T00:00:00.000Z",
+				sessionId: "session-1",
+				turnIndex: 3,
+				diagnostics: [
+					{
+						filePath: ignored,
+						line: 4,
+						severity: "warning",
+						semantic: "warning",
+						tool: "fact-rules",
+						runner: "fact-rules",
+						rule: "ignored-project",
+						message: "ignored project delta",
+						source: "project-scan",
+					},
+				],
+				sources: ["fact-rules"],
+			});
+
+			const result = await run(tool, { mode: "delta" }, cwd);
+			const text = String(result.content[0].text);
+			expect(text).toContain("kept actionable");
+			expect(text).not.toContain("ignored actionable");
+			expect(text).not.toContain("ignored quality");
+			expect(text).not.toContain("ignored project delta");
+			expect(result.details).toMatchObject({
+				actionableWarnings: 1,
+				qualityIssues: 0,
+				projectDiagnostics: 0,
+			});
+		}));
 });
 
 // ── all mode ──────────────────────────────────────────────────────────────────
@@ -498,6 +580,66 @@ describe("lens_diagnostics mode=full", () => {
 		expect(text).not.toContain("same diagnostic from workspace scan");
 		expect(result.details).toMatchObject({ totalBlocking: 1, totalErrors: 1 });
 	});
+
+	it("filters ignored cached/widget/project diagnostics when merging full mode (#279)", async () =>
+		withIgnoredFixture(async (cwd) => {
+			const keep = path.join(cwd, "src", "keep.ts");
+			const ignoredWidget = path.join(cwd, ".history", "old.ts");
+			const ignoredLsp = path.join(cwd, "pi-session-2026.html");
+			const ignoredProject = path.join(cwd, "ignored", "project.ts");
+			mockSummaries.push(
+				sum(keep, { warnings: 1 }, { diagnostics: [{ severity: "warning", message: "keep", line: 1 }] }),
+				sum(ignoredWidget, { blocking: 1, errors: 1 }, { diagnostics: [{ severity: "error", semantic: "blocking", message: "old history", line: 2 }] }),
+			);
+			const lspService = {
+				runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+					{
+						filePath: ignoredLsp,
+						diagnostics: [
+							{
+								severity: 1,
+								message: "ignored html parse error",
+								range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+								source: "html",
+							},
+						],
+					},
+				]),
+			};
+			projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReturnValue({
+				version: 1,
+				cwd,
+				tier: "cheap",
+				scannedAt: "2026-01-01T00:00:00.000Z",
+				filesScanned: 1,
+				runners: ["fact-rules"],
+				diagnostics: [
+					{
+						filePath: ignoredProject,
+						line: 3,
+						severity: "error",
+						semantic: "blocking",
+						tool: "fact-rules",
+						runner: "fact-rules",
+						rule: "ignored-project",
+						message: "ignored project blocker",
+						source: "project-scan",
+					},
+				],
+			});
+
+			const result = await run(
+				makeTool({}, lspService),
+				{ mode: "full", refreshRunners: "cached" },
+				cwd,
+			);
+			const text = String(result.content[0].text);
+			expect(text).toContain("keep");
+			expect(text).not.toContain("old history");
+			expect(text).not.toContain("ignored html parse error");
+			expect(text).not.toContain("ignored project blocker");
+			expect(result.details).toMatchObject({ totalWarnings: 1 });
+		}));
 });
 
 describe("lens_diagnostics mode=all", () => {
@@ -537,6 +679,39 @@ describe("lens_diagnostics mode=all", () => {
 		const result = await run(makeTool(), { mode: "all" });
 		expect(String(result.content[0].text)).toContain("✓");
 	});
+
+	it("filters ignored widget summaries in all mode (#279)", async () =>
+		withIgnoredFixture(async (cwd) => {
+			mockSummaries.push(
+				sum(path.join(cwd, "src", "keep.ts"), { warnings: 1 }, {
+					diagnostics: [
+						{ severity: "warning", message: "keep warning", line: 1 },
+					],
+				}),
+				sum(path.join(cwd, ".history", "old.ts"), {
+					blocking: 1,
+					errors: 1,
+				}, {
+					diagnostics: [
+						{
+							severity: "error",
+							semantic: "blocking",
+							message: "ignored history blocker",
+							line: 2,
+						},
+					],
+				}),
+			);
+
+			const result = await run(makeTool(), { mode: "all" }, cwd);
+			const text = String(result.content[0].text);
+			expect(text).toContain("keep warning");
+			expect(text).not.toContain("ignored history blocker");
+			expect(result.details).toMatchObject({
+				filesWithIssues: 1,
+				totalWarnings: 1,
+			});
+		}));
 
 	it("lists files with blocking errors first", async () => {
 		mockSummaries.length = 0;

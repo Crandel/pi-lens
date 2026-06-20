@@ -11,6 +11,7 @@
 
 import * as path from "node:path";
 import { Type } from "typebox";
+import { getProjectIgnoreMatcher } from "../clients/file-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import type { CacheManager } from "../clients/cache-manager.js";
@@ -175,9 +176,12 @@ function appendProjectDiagnosticsDeltaLines(
 	cwd: string,
 	report: ProjectDiagnosticsDeltaReport | undefined,
 	severity: string,
+	includeFile: (filePath: string) => boolean,
 ): number {
-	const diagnostics = (report?.diagnostics ?? []).filter((diagnostic) =>
-		matchesSeverity(projectDiagnosticToWidget(diagnostic), severity),
+	const diagnostics = (report?.diagnostics ?? []).filter(
+		(diagnostic) =>
+			includeFile(diagnostic.filePath) &&
+			matchesSeverity(projectDiagnosticToWidget(diagnostic), severity),
 	);
 	const byFile = new Map<string, ProjectDiagnostic[]>();
 	for (const diagnostic of diagnostics) {
@@ -212,16 +216,19 @@ function formatDeltaMode(
 	const actionable = actionableEntry?.data;
 	const quality = qualityEntry?.data;
 	const projectDelta = loadProjectDiagnosticsDeltaReport(cwd);
+	const includeFile = createCurrentIgnoreFilter(cwd);
+	const actionableFiles = (actionable?.files ?? []).filter((file) =>
+		includeFile(file.filePath),
+	);
+	const qualityFiles = (quality?.files ?? []).filter((file) =>
+		includeFile(file.filePath),
+	);
 
 	const lines: string[] = [];
 
 	// Fixable warnings from actionable-warnings
-	if (
-		actionable?.files &&
-		actionable.files.length > 0 &&
-		severity !== "error"
-	) {
-		for (const file of actionable.files) {
+	if (actionableFiles.length > 0 && severity !== "error") {
+		for (const file of actionableFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			lines.push(`${rel}`);
 			for (const w of file.warnings ?? []) {
@@ -233,8 +240,8 @@ function formatDeltaMode(
 	}
 
 	// Quality issues
-	if (quality?.files && quality.files.length > 0 && severity !== "error") {
-		for (const file of quality.files) {
+	if (qualityFiles.length > 0 && severity !== "error") {
+		for (const file of qualityFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			if (!lines.includes(rel)) lines.push(rel);
 			for (const w of file.warnings ?? []) {
@@ -250,10 +257,17 @@ function formatDeltaMode(
 		cwd,
 		projectDelta,
 		severity,
+		includeFile,
 	);
 
-	const aw = actionable?.summary?.warnings ?? 0;
-	const cq = quality?.summary?.warnings ?? 0;
+	const aw = actionableFiles.reduce(
+		(count, file) => count + (file.warnings?.length ?? 0),
+		0,
+	);
+	const cq = qualityFiles.reduce(
+		(count, file) => count + (file.warnings?.length ?? 0),
+		0,
+	);
 
 	if (lines.length === 0) {
 		let text = `No ${severity === "all" ? "" : severity + " "}issues in the current turn delta.`;
@@ -261,7 +275,7 @@ function formatDeltaMode(
 		// right after a resume even when prior findings were rehydrated into the
 		// session-wide view. Point the agent at `mode=all` when that's the case.
 		const carried = getFileDiagnosticSummaries().filter(
-			(f) => f.diagnostics.length > 0,
+			(f) => includeFile(f.filePath) && f.diagnostics.length > 0,
 		);
 		const carriedIssues = carried.reduce(
 			(n, f) => n + f.diagnostics.length,
@@ -289,6 +303,40 @@ function formatDeltaMode(
 }
 
 // ── all mode ──────────────────────────────────────────────────────────────────
+
+function createCurrentIgnoreFilter(cwd: string): (filePath: string) => boolean {
+	try {
+		const matcher = getProjectIgnoreMatcher(cwd);
+		return (filePath: string) => !matcher.isIgnored(path.resolve(filePath), false);
+	} catch {
+		// Diagnostics should remain available even if an ignore config/root probe is
+		// temporarily unreadable. Walkers already treat config load failures as
+		// non-fatal; match that behavior for cached diagnostic presentation.
+		return () => true;
+	}
+}
+
+function filterProjectDiagnosticsSnapshot(
+	snapshot: ProjectDiagnosticsSnapshot | undefined,
+	includeFile: (filePath: string) => boolean,
+): ProjectDiagnosticsSnapshot | undefined {
+	if (!snapshot) return undefined;
+	return {
+		...snapshot,
+		diagnostics: snapshot.diagnostics.filter((d) => includeFile(d.filePath)),
+	};
+}
+
+function filterProjectDiagnosticsDeltaReport(
+	report: ProjectDiagnosticsDeltaReport | undefined,
+	includeFile: (filePath: string) => boolean,
+): ProjectDiagnosticsDeltaReport | undefined {
+	if (!report) return undefined;
+	return {
+		...report,
+		diagnostics: report.diagnostics.filter((d) => includeFile(d.filePath)),
+	};
+}
 
 /** A diagnostic counts as error-like when it blocks or has error severity. */
 function isErrorLike(d: WidgetDiagnostic): boolean {
@@ -460,7 +508,7 @@ async function getProjectDiagnosticsSnapshotForFullMode(
 	options: { refreshRunners?: unknown; maxProjectFiles?: number },
 ): Promise<ProjectDiagnosticsSnapshot | undefined> {
 	if (shouldRefreshProjectDiagnostics(options.refreshRunners)) {
-		return await scanProjectDiagnostics({
+		return scanProjectDiagnostics({
 			cwd,
 			tier: "cheap",
 			maxFiles: options.maxProjectFiles,
@@ -490,20 +538,33 @@ async function formatFullMode(
 			details: { mode: "full", filesChecked: 0, lspUnavailable: true },
 		};
 	}
-	const [lspResults, projectSnapshot] = await Promise.all([
+	const includeFile = createCurrentIgnoreFilter(cwd);
+	const [rawLspResults, rawProjectSnapshot] = await Promise.all([
 		runWorkspaceDiagnostics.call(lspService, cwd),
 		getProjectDiagnosticsSnapshotForFullMode(cwd, options),
 	]);
-	const projectDelta = loadProjectDiagnosticsDeltaReport(cwd);
+	const lspResults = rawLspResults.filter((result) =>
+		includeFile(result.filePath),
+	);
+	const projectSnapshot = filterProjectDiagnosticsSnapshot(
+		rawProjectSnapshot,
+		includeFile,
+	);
+	const projectDelta = filterProjectDiagnosticsDeltaReport(
+		loadProjectDiagnosticsDeltaReport(cwd),
+		includeFile,
+	);
 	const summaries = mergeDiagnosticsWithWidgetSummaries(
-		getFileDiagnosticSummaries(),
+		getFileDiagnosticSummaries().filter((summary) =>
+			includeFile(summary.filePath),
+		),
 		lspResults,
 		projectSnapshot,
 		projectDelta,
 	);
 	return formatAllMode(cwd, severity, summaries, {
 		mode: "full",
-		lspFilesChecked: lspResults.length,
+		lspFilesChecked: rawLspResults.length,
 		projectDiagnostics:
 			projectSnapshot === undefined
 				? undefined
@@ -539,8 +600,11 @@ function formatAllMode(
 			? ` (${staleDropped} changed file${staleDropped === 1 ? "" : "s"} omitted as stale — use mode=full to rescan)`
 			: "";
 
+	const includeFile = createCurrentIgnoreFilter(cwd);
+	const visibleSummaries = summaries.filter((s) => includeFile(s.filePath));
+
 	// Filter to files with actual issues
-	const withIssues = summaries.filter((s) => {
+	const withIssues = visibleSummaries.filter((s) => {
 		if (severity === "error") return s.blocking > 0 || s.errors > 0;
 		if (severity === "warning") return s.warnings > 0;
 		return s.blocking > 0 || s.errors > 0 || s.warnings > 0;
@@ -548,15 +612,15 @@ function formatAllMode(
 
 	if (withIssues.length === 0) {
 		const text =
-			(summaries.length === 0
+			(visibleSummaries.length === 0
 				? "No files diagnosed yet this session."
-				: `No ${severity === "all" ? "" : severity + " "}issues across ${summaries.length} file${summaries.length === 1 ? "" : "s"} diagnosed this session. ✓`) +
+				: `No ${severity === "all" ? "" : severity + " "}issues across ${visibleSummaries.length} file${visibleSummaries.length === 1 ? "" : "s"} diagnosed this session. ✓`) +
 			staleNote;
 		return {
 			content: [{ type: "text" as const, text }],
 			details: {
 				...detailOverrides,
-				filesChecked: summaries.length,
+				filesChecked: visibleSummaries.length,
 				staleDropped,
 			},
 		};
@@ -614,7 +678,7 @@ function formatAllMode(
 	}
 
 	const summary = [
-		`\nSummary (${summaries.length} files diagnosed this session):`,
+		`\nSummary (${visibleSummaries.length} files diagnosed this session):`,
 		totalBlocking > 0
 			? `  🔴 ${totalBlocking} blocking error${totalBlocking === 1 ? "" : "s"}`
 			: null,
