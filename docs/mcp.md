@@ -25,10 +25,12 @@ Confirmed reuse points:
   (`clients/dispatch/integration.ts`) — runs the full per-edit pipeline and
   returns `DispatchResult` (diagnostics, blockers, warnings, fixed, output…).
   Its only host dependency, `pi: PiAgentAPI`, is **a one-method interface**:
+
   ```ts
   // clients/dispatch/types.ts
   export interface PiAgentAPI { getFlag(flag: string): string | boolean | undefined; }
   ```
+
   → trivially stubbable. This is the whole ballgame.
 - **`getLatencyReports()`** (`dispatch/integration.ts`) — structured latency
   reports per dispatch (`filePath`, `totalDurationMs`, `runners[]`,
@@ -50,6 +52,7 @@ Confirmed reuse points:
 ## The two design tensions, resolved
 
 ### Push vs pull
+
 pi-lens's value in pi is *push* (auto-injected on edit). MCP is *pull* (Claude
 calls a tool). MCP alone gives a **queryable** pi-lens, not an auto-debugging
 one. That's fine for **goal 1** (Claude explicitly asking "analyze this") and for
@@ -58,6 +61,7 @@ pull is the natural shape). Auto-injection in Claude Code would be a *separate*
 PostToolUse hook (out of scope here; noted as a future slice).
 
 ### Stale-process trap (the make-or-break for the review loop)
+
 A Claude Code MCP server is a **long-lived stdio process**; it does **not**
 hot-reload on source edits. If Claude commits and then calls the warm in-process
 server, it reviews the **old** code while believing it's new — a convincing false
@@ -93,6 +97,7 @@ Claude Code ──stdio/MCP──> pi-lens-mcp (dist/mcp/server.js)
 ```
 
 New files:
+
 - `clients/mcp/host-shim.ts` — `createMcpHost()` → `{ getFlag }` backed by
   `loadPiLensGlobalConfig()` + `resolvePiLensFlag()` + env. No pi dependency.
 - `clients/mcp/analyze.ts` — `analyzeFile(filePath, cwd, opts)` facade →
@@ -187,12 +192,14 @@ new files were added plus a one-line `tsconfig.dist` include and a `bin` entry �
 no existing source was edited, so existing-test risk is minimal.
 
 ### Honest limits (unchanged from the design)
+
 - `warm` mode reviews the server's started-with image; use `fresh` after a commit.
 - A single `fresh` run is a controlled bench, not the organic production p50 —
   the user's real pi `latency.log` remains the final word on the live distribution.
 - `fresh` pays a cold start each call (new process, cold LSP); `warm` is for speed.
 
 ### Future (separate slice, out of scope here)
+
 - Claude Code PostToolUse hook for *auto-injection* (the push half) — MCP is pull.
 - Warm-mode LSP reuse already happens (long-lived server); could expose an
   explicit warm-up tool to pre-pay the cold spawn.
@@ -247,6 +254,7 @@ warnings / baselines are all absent, and why the first analyze (and every
 ## Revised recommendation — drive the real lifecycle, don't re-plumb
 
 ### Tier 1 — make the per-edit slice honest & composable (small)
+
 - **D:** warm the LSP before the measured dispatch (a generous-budget `touchFile`
   with `collectDiagnostics` so the server spawns + publishes, then dispatch reads
   the warm cache). Makes `fresh` complete; `warm` first-call too. Latency then
@@ -259,8 +267,10 @@ warnings / baselines are all absent, and why the first analyze (and every
 - Plus: dedupe/aggregate `project_scan` output (E/F).
 
 ### Tier 2 — expose the actual lifecycle handlers (the real answer)
+
 Rather than re-implementing knip/jscpd/cascade/warnings as bespoke MCP tools,
 **run pi's own handlers**:
+
 - `pilens_session_start` (or auto-init on first call) → `handleSessionStart` →
   jscpd/knip/type-cov/dep full scan + **error-debt baseline** + LSP warm (also
   fixes D at the source).
@@ -279,12 +289,14 @@ can report "did this change flip tests/build green→red" — the regression del
 pitched as the real debug signal, currently impossible because no baseline runs.
 
 ### Plan: Tier 1 then Tier 2
+
 Land Tier 1 first (makes the foundation honest; the un-warmed, un-baselined base
 shouldn't carry more surface). Then Tier 2 on top. Tier 1's warm-LSP work is
 partially subsumed by Tier 2's session-start warm, but per-analyze warm is still
 needed for `fresh` (new process) and for files outside the warmed dominant language.
 
 ### Tier 1 — implementation notes (investigated, ready)
+
 - D warm-up: `getLSPService().touchFile(abs, content, { diagnostics: "document",
   collectDiagnostics: true, clientScope: "primary", maxClientWaitMs: ~15000,
   maxDiagnosticsWaitMs: ~8000, source: "mcp-warmup" })` before dispatch; guard on
@@ -297,6 +309,7 @@ needed for `fresh` (new process) and for files outside the warmed dominant langu
   process) these are harmless no-ops (process exits); they compose in `warm`.
 
 ### Progress (post-ship)
+
 - [x] Tier 1 implemented (42 MCP/dispatch tests green, build + lint clean):
   - **A** — `analyzeFile` runs full (`blockingOnly=false`) by default + no-delta
     (consistent full snapshot); added `blockingOnly?` to `dispatchLintWithResult`
@@ -331,6 +344,7 @@ needed for `fresh` (new process) and for files outside the warmed dominant langu
       block until the LSP has indexed (so warm analyze is immediately LSP-complete).
 
 ### D — honest limit found in live testing (matters for Tier 2)
+
 The per-call warm-up helps fast servers (pyright/rust-analyzer/gopls) and a warm
 typescript-language-server, but **cannot fully fix cold-LSP on a large TS
 project**: cold `typescript-language-server` must load the whole project before
@@ -350,6 +364,7 @@ Goal: mirror the *whole* pi-lens, including the push/inline half, so pi-lens can
 be exercised + debugged directly through Claude Code without running pi.
 
 ### Progress
+
 - [x] **Push/inline keystone** — `mcp/analyze-cli.ts` → bin `pi-lens-analyze`.
   Reuses the Tier 1 `analyzeFile` facade. Works as a Claude Code PostToolUse
   hook (reads the tool payload from stdin → `tool_input.path`/`file_path` + cwd)
@@ -360,11 +375,13 @@ be exercised + debugged directly through Claude Code without running pi.
   report. 4 bin tests (CLI, --hook envelope, clean-file silence, stdin payload).
 
   Wire it in Claude Code `settings.json`:
+
   ```json
   { "hooks": { "PostToolUse": [
     { "matcher": "Edit|Write",
       "hooks": [ { "type": "command", "command": "pi-lens-analyze --hook" } ] } ] } }
   ```
+
   (the cold-LSP fix means the type-check is honestly reported as skipped, not a
   false clean; the agent pulls `pilens_analyze` warm when it wants types.)
 
