@@ -1,6 +1,9 @@
 import type { EditToolInput } from "@earendil-works/pi-coding-agent";
 import * as nodeFs from "node:fs";
-import { normalizeForGuardMatch } from "./host-edit-normalize.js";
+import {
+	hostWouldApplyOldText,
+	normalizeForGuardMatch,
+} from "./host-edit-normalize.js";
 import type { PartiallyApplicableEdit } from "./partial-edit-apply.js";
 import { logReadGuardEvent } from "./read-guard-logger.js";
 import { isToolCallEventType } from "./tool-event.js";
@@ -462,6 +465,11 @@ function resolveOldTextEdits(
 				}
 			}
 			errors.push(errorMsg);
+			// Counterfactual: would the host's edit tool have applied this oldText
+			// anyway? hostWouldApply=true => this block is a false-block (pi-lens
+			// friction the host wouldn't have); false => a genuine miss. This is the
+			// measurement that tells us whether the guard earns its keep (#257).
+			const hostMatch = hostWouldApplyOldText(rawContent, oldText);
 			logReadGuardEvent({
 				event: "oldtext_not_found",
 				sessionId,
@@ -472,6 +480,9 @@ function resolveOldTextEdits(
 					editIndex,
 					oldTextPreview: preview,
 					repeatFailureCount: failCount,
+					hostWouldApply: hostMatch.wouldApply,
+					hostOccurrences: hostMatch.occurrences,
+					hostUsedFuzzyMatch: hostMatch.usedFuzzyMatch,
 				},
 			});
 		} else if (occurrenceLines.length === 1) {

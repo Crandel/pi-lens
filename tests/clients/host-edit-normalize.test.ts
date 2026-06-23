@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	detectLineEnding,
+	hostWouldApplyOldText,
 	normalizeForFuzzyMatch,
 	normalizeForGuardMatch,
 	normalizeToLF,
@@ -91,5 +92,58 @@ describe("host-edit-normalize: stripBom + composed guard match", () => {
 		expect(
 			normalizeForGuardMatch(file).includes(normalizeForGuardMatch(needle)),
 		).toBe(true);
+	});
+});
+
+describe("hostWouldApplyOldText (counterfactual)", () => {
+	const file = "function add(a, b) {\n\treturn a + b;\n}\n";
+
+	it("would apply a unique exact match", () => {
+		expect(hostWouldApplyOldText(file, "\treturn a + b;")).toEqual({
+			wouldApply: true,
+			occurrences: 1,
+			usedFuzzyMatch: false,
+		});
+	});
+
+	it("would apply a unique fuzzy (smart-quote) match — flags a false-block", () => {
+		const quoteFile = "const msg = 'hi';\n";
+		const out = hostWouldApplyOldText(
+			quoteFile,
+			`const msg = ${LSQUO}hi${RSQUO};`,
+		);
+		expect(out.wouldApply).toBe(true);
+		expect(out.usedFuzzyMatch).toBe(true);
+		expect(out.occurrences).toBe(1);
+	});
+
+	it("would NOT apply an ambiguous (duplicate) match — host rejects too", () => {
+		const dup = "x = 1;\nx = 1;\n";
+		expect(hostWouldApplyOldText(dup, "x = 1;")).toEqual({
+			wouldApply: false,
+			occurrences: 2,
+			usedFuzzyMatch: false,
+		});
+	});
+
+	it("would NOT apply a genuine miss — confirms a legit block", () => {
+		const out = hostWouldApplyOldText(file, "\treturn a - b;");
+		expect(out.wouldApply).toBe(false);
+		expect(out.occurrences).toBe(0);
+	});
+
+	it("would NOT apply an empty oldText", () => {
+		expect(hostWouldApplyOldText(file, "")).toEqual({
+			wouldApply: false,
+			occurrences: 0,
+			usedFuzzyMatch: false,
+		});
+	});
+
+	it("matches across CRLF / BOM differences the way the host does", () => {
+		const bomCrlf = `${BOM}function add(a, b) {\r\n\treturn a + b;\r\n}\r\n`;
+		expect(hostWouldApplyOldText(bomCrlf, "\treturn a + b;").wouldApply).toBe(
+			true,
+		);
 	});
 });

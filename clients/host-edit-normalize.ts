@@ -119,3 +119,51 @@ export function stripBom(content: string): { bom: string; text: string } {
 export function normalizeForGuardMatch(text: string): string {
 	return normalizeForFuzzyMatch(normalizeToLF(stripBom(text).text));
 }
+
+// --- counterfactual: would the host's edit tool apply this oldText? -----------
+
+export interface HostMatchOutcome {
+	/** The host would resolve this oldText to exactly one replacement. */
+	wouldApply: boolean;
+	/** Occurrences in the host's fuzzy match space (>1 => host rejects as ambiguous). */
+	occurrences: number;
+	/** A fuzzy (not exact) match was needed to find it. */
+	usedFuzzyMatch: boolean;
+}
+
+/**
+ * Replicate the host edit tool's match *decision* for a single oldText against
+ * file content, WITHOUT applying anything: exact-then-fuzzy find + duplicate
+ * count in fuzzy space, exactly as `fuzzyFindText` + `countOccurrences` do
+ * (edit-diff.js). The host pre-strips BOM and normalizes to LF, so this does the
+ * same before matching.
+ *
+ * Used as the read-guard's counterfactual log: when the guard blocks an edit,
+ * `wouldApply === true` flags a false-block (the host would have applied it),
+ * `false` confirms a genuine miss (the host would also fail). This is the only
+ * way to measure the guard's false-block rate without an A/B harness (#257).
+ */
+export function hostWouldApplyOldText(
+	content: string,
+	oldText: string,
+): HostMatchOutcome {
+	const c = normalizeToLF(stripBom(content).text);
+	const o = normalizeToLF(stripBom(oldText).text);
+	if (o.length === 0) {
+		return { wouldApply: false, occurrences: 0, usedFuzzyMatch: false };
+	}
+	const exactFound = c.indexOf(o) !== -1;
+	// The host always counts duplicates in fuzzy space, even for an exact match.
+	const fuzzyContent = normalizeForFuzzyMatch(c);
+	const fuzzyOldText = normalizeForFuzzyMatch(o);
+	const fuzzyFound = fuzzyContent.indexOf(fuzzyOldText) !== -1;
+	const occurrences =
+		fuzzyOldText.length === 0
+			? 0
+			: fuzzyContent.split(fuzzyOldText).length - 1;
+	return {
+		wouldApply: (exactFound || fuzzyFound) && occurrences === 1,
+		occurrences,
+		usedFuzzyMatch: !exactFound && fuzzyFound,
+	};
+}

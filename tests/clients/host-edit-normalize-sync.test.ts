@@ -99,4 +99,16 @@ describe("host-edit-normalize sync (host source drift guard)", () => {
 		expect(src).toContain("export function restoreLineEndings");
 		expect(src).toContain(`startsWith("${esc(HOST_BOM_CODE_POINT)}")`);
 	});
+
+	it("host match decision is still exact-then-fuzzy, counted in fuzzy space", () => {
+		// Guards hostWouldApplyOldText's replica of fuzzyFindText + countOccurrences.
+		expect(src).toContain("export function fuzzyFindText");
+		// exact match attempted first
+		expect(src).toContain("content.indexOf(oldText)");
+		// then fuzzy match in normalized space
+		expect(src).toContain("normalizeForFuzzyMatch(content)");
+		expect(src).toContain("normalizeForFuzzyMatch(oldText)");
+		// duplicate count is taken in fuzzy space (split length - 1)
+		expect(src).toContain("fuzzyContent.split(fuzzyOldText).length - 1");
+	});
 });
