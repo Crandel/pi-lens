@@ -115,7 +115,9 @@ d("shipped ast-grep rules have fixture-style valid/invalid tests", () => {
 		const l = (r.language || "TypeScript").toLowerCase();
 		return ALL_LANGUAGES.has(l);
 	};
-	const coveredRuleIds = new Set(rules.filter(isCoveredLanguage).map((r) => r.id));
+	const coveredRuleIds = new Set(
+		rules.filter(isCoveredLanguage).map((r) => r.id),
+	);
 	const ruleIds = new Set(rules.map((r) => r.id));
 
 	it("every test file's `id:` matches a real rule in rules/", () => {
@@ -225,9 +227,7 @@ d("shipped ast-grep rules have fixture-style valid/invalid tests", () => {
 				return /jsx_/.test(text) || /<[A-Za-z][A-Za-z0-9]*\s+\$/.test(text);
 			}),
 		);
-		const realFailures = failingRules.filter(
-			(id) => !cliFrameworkGap.has(id),
-		);
+		const realFailures = failingRules.filter((id) => !cliFrameworkGap.has(id));
 		const summary = realFailures.length
 			? `${realFailures.length} rule(s) failed ast-grep test (${cliFrameworkGap.size} additional failures are TSX framework gaps):\n  - ${realFailures.join("\n  - ")}\n\nFirst failure detail:\n${stdout}`
 			: stdout;
