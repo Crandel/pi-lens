@@ -24,6 +24,9 @@ share).
 - **`ast_grep_replace`** — AST-aware structural replace. Re-validates the pattern
   against the current file before writing and reports a clear error if the
   file changed since the preview.
+- **`ast_dump`** — Dumps the raw tree-sitter AST for a source snippet. Use this
+  when an `ast_grep_search` or `ast_grep_replace` pattern returns zero matches
+  and the correct node kind or field name is unknown.
 
 ## Project intelligence
 
@@ -39,6 +42,6 @@ share).
 
 - **`lens_health`** — Runtime health, latency telemetry, and current LSP
   status.
-- **`lens_project_scan`** — Cheap project-wide scans (knip, jscpd, dep-graph).
+- **`lens_project_scan`** — Cheap project-wide scans (knip, jscpd, type coverage).
 - **`lens_booboo`** (slash command, not a tool) — Full quality report for the
   current project state.
