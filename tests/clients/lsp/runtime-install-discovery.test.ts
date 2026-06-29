@@ -23,6 +23,7 @@ import {
 	goBinCandidates,
 	GoServer,
 	JavaServer,
+	PythonServer,
 	RustServer,
 	TypeScriptServer,
 } from "../../../clients/lsp/server.ts";
@@ -122,7 +123,7 @@ describe("runtime-install / discovery server wiring (#241)", () => {
 		expect(tried).toContain("fsautocomplete");
 	});
 
-	it("TypeScriptServer discovers a global tsserver-language-server when install is disabled (discovery decoupled from install)", async () => {
+	it("TypeScriptServer discovers a global typescript-language-server when install is disabled (discovery decoupled from install)", async () => {
 		// Regression: with PI_LENS_DISABLE_LSP_INSTALL=1 (allowInstall:false) the old
 		// code skipped the ensureTool call entirely, so a globally-installed
 		// typescript-language-server (no per-project node_modules) was never found and
@@ -134,17 +135,56 @@ describe("runtime-install / discovery server wiring (#241)", () => {
 		);
 		launchLSP.mockReset();
 		launchLSP.mockResolvedValue({ kill: vi.fn() } as never);
+		const fs = await import("node:fs");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ts-no-cwd-ts-"));
+		const oldCwd = process.cwd();
+		process.chdir(tmp);
 		try {
-			// A root with no node_modules/.bin so only ensureTool discovery can resolve.
-			const res = await TypeScriptServer.spawn(
-				sep("/tmp", "pi-lens-no-node-modules-xyz"),
-				{ allowInstall: false },
-			);
+			// A root + cwd with no node_modules/.bin/typescript-language-server and no
+			// node_modules/typescript, so only ensureTool discovery can resolve either
+			// the LSP binary or tsserver.
+			const res = await TypeScriptServer.spawn(tmp, { allowInstall: false });
 			expect(vi.mocked(ensureTool)).toHaveBeenCalledWith(
 				"typescript-language-server",
 				{ allowInstall: false },
 			);
+			expect(vi.mocked(ensureTool)).toHaveBeenCalledWith("typescript", {
+				allowInstall: false,
+			});
 			expect(triedCommands()).toContain(GLOBAL_TLS);
+			expect(res).toBeDefined();
+		} finally {
+			process.chdir(oldCwd);
+			fs.rmSync(tmp, { recursive: true, force: true });
+			vi.mocked(ensureTool).mockReset();
+			vi.mocked(ensureTool).mockResolvedValue(undefined);
+		}
+	});
+
+	it("PythonServer discovers global pyright when install is disabled", async () => {
+		const globalPyright = sep("/usr", "bin", "pyright");
+		const globalPyrightLangserver = sep("/usr", "bin", "pyright-langserver");
+		vi.mocked(ensureTool).mockImplementation(async (id: string) =>
+			id === "pyright" ? globalPyright : undefined,
+		);
+		launchLSP.mockReset();
+		launchLSP.mockImplementation(async (command: string) => {
+			if (command === globalPyrightLangserver) {
+				return { kill: vi.fn() } as never;
+			}
+			throw new Error(`not found: ${command}`);
+		});
+
+		try {
+			const res = await PythonServer.spawn(
+				sep("/tmp", "pi-lens-python-no-venv"),
+				{ allowInstall: false },
+			);
+
+			expect(vi.mocked(ensureTool)).toHaveBeenCalledWith("pyright", {
+				allowInstall: false,
+			});
+			expect(triedCommands()).toContain(globalPyrightLangserver);
 			expect(res).toBeDefined();
 		} finally {
 			vi.mocked(ensureTool).mockReset();
