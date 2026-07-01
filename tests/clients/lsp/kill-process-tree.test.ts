@@ -36,6 +36,7 @@ describe("killProcessTree", () => {
 		});
 		processKillSpy?.mockRestore();
 		processKillSpy = undefined;
+		vi.useRealTimers();
 	});
 
 	describe("Windows process-exit teardown", () => {
@@ -73,6 +74,10 @@ describe("killProcessTree", () => {
 				value: "linux",
 				configurable: true,
 			});
+			// Fake timers keep the escalation test deterministic and stop the
+			// unref'd 1500ms SIGKILL timer from firing against the real
+			// process.kill once processKillSpy is restored.
+			vi.useFakeTimers();
 			processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 		});
 
@@ -83,6 +88,45 @@ describe("killProcessTree", () => {
 			expect(processKillSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
 			expect(proc.kill).not.toHaveBeenCalledWith("SIGTERM");
 			expect(proc.unref).toHaveBeenCalled();
+		});
+
+		it("falls back to the direct child when group signaling fails (ESRCH)", async () => {
+			// A non-detached child has no process group whose id == pid, so
+			// process.kill(-pid) throws ESRCH. Teardown must not give up — it
+			// falls back to killing the handle we already hold.
+			processKillSpy?.mockImplementation(() => {
+				throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+			});
+			const proc = { kill: vi.fn(() => true), unref: vi.fn() };
+			await killProcessTree(proc, 4242, { fast: true });
+
+			expect(processKillSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
+			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+			expect(proc.unref).toHaveBeenCalled();
+		});
+
+		it("never negates a non-positive pid into a group kill (guards process.kill(-0))", async () => {
+			// process.kill(-0, sig) would signal pi-lens's OWN process group.
+			// The pid<=0 guard must skip the group path entirely and only touch
+			// the child handle.
+			const proc = { kill: vi.fn(() => true), unref: vi.fn() };
+			await killProcessTree(proc, 0, { fast: true });
+
+			expect(processKillSpy).not.toHaveBeenCalled();
+			expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+		});
+
+		it("non-fast shutdown escalates SIGTERM → SIGKILL on the process group", async () => {
+			const proc = { kill: vi.fn(() => true), unref: vi.fn() };
+			const done = killProcessTree(proc, 4242, {});
+
+			expect(processKillSpy).toHaveBeenCalledWith(-4242, "SIGTERM");
+			expect(processKillSpy).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+
+			await vi.advanceTimersByTimeAsync(1500);
+			await done;
+
+			expect(processKillSpy).toHaveBeenCalledWith(-4242, "SIGKILL");
 		});
 	});
 });
