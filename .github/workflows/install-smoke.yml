@@ -20,14 +20,15 @@ name: install-smoke
 # conditions end to end. Resolution failures are hard failures; the build-script
 # assets pnpm/bun skip (ast-grep CLI, tree-sitter grammars) are soft-warned.
 #
-# - mise-repro: the reporter's exact #285 combo — pi installed under a
-#            mise-managed node + pnpm as npmCommand. mise layers a node install +
-#            shim/realpath behavior on top of pnpm's isolated store, the one axis
-#            the pi-load matrix never exercises. NON-BLOCKING (continue-on-error)
-#            until the crash is reproduced/understood: a green run would be a false
-#            "covered" signal, so it stays an investigation cell (it prints the
-#            exact `typescript`-from-dist resolution that fails) rather than a gate.
-#            Flip to a hard failure once #285 is fixed.
+# - mise-repro: the #285 combo — pi under a mise-managed node + pnpm as
+#            npmCommand — swept over OS (ubuntu/macos) × pi-install topology
+#            (mise-node + npm-global pi, or mise's own npm backend). mise layers a
+#            node install + shim/realpath step on top of pnpm's isolated store, the
+#            axis the pi-load matrix never exercises. NON-BLOCKING (continue-on-
+#            error): our first ubuntu/mise-node run was GREEN without reproducing,
+#            so a green cell is NOT proof of coverage — it stays an investigation
+#            matrix (it prints the exact `typescript`-from-dist resolution that
+#            fails) rather than a gate. Flip to a hard failure once #285 is fixed.
 
 on:
   schedule:
@@ -212,16 +213,28 @@ jobs:
           git add -A && git commit -qm init
           node "$GITHUB_WORKSPACE/scripts/rpc-load-check.mjs" "$(command -v pi)"
 
-  # Reproduces #285: pi installed via mise + pnpm as npmCommand → module-resolution
-  # crash ("Cannot find package 'typescript' from …/pi-lens/dist/clients/…") behind
-  # symlinks. mise adds a node install + shim realpath layer that the pi-load matrix
-  # (npm/pnpm/bun global + curl) never covers. NON-BLOCKING investigation cell — see
-  # the header note: a green run does NOT prove coverage, so this must not gate merges
-  # until the crash is understood. Flip continue-on-error off once #285 is fixed.
+  # Reproduces #285 across OS × pi-install-topology: pi under mise + pnpm as
+  # npmCommand → module-resolution crash ("Cannot find package 'typescript' from
+  # …/pi-lens/dist/clients/…") behind symlinks. mise layers a node install + shim
+  # realpath step on top of pnpm's isolated store — the axis pi-load never covers.
+  #   - os:     macOS matters specifically — $HOME/tmp live under symlinked paths
+  #             (/var -> /private/var) that Node realpath-resolves, a plausible
+  #             trigger for a "behind symlinks" bug that Linux's flat tmp misses.
+  #   - pi_via: both readings of "pi installed using mise" — node-from-mise + a
+  #             plain npm-global pi, and mise's own npm backend (pi behind a mise
+  #             tool-shim).
+  # NON-BLOCKING investigation matrix — a green cell does NOT prove coverage (our
+  # first ubuntu/mise-node run was green without reproducing), so this must not gate
+  # merges. Flip continue-on-error off once #285 is understood/fixed.
   mise-repro:
-    name: mise + pnpm repro (#285, non-blocking)
-    runs-on: ubuntu-latest
+    name: mise repro (#285) · ${{ matrix.os }} · ${{ matrix.pi_via }}
+    runs-on: ${{ matrix.os }}
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        pi_via: [mise-node, mise-npm-backend]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7 # RPC driver
 
@@ -233,7 +246,8 @@ jobs:
           # Expose the mise binary AND its shim dir so later steps see the
           # mise-managed node/npm/pnpm/pi as shims (realpath-through-shim = the
           # #285 trigger). No `mise activate` — that PATH-injects the real bins and
-          # would mask the shim behavior we are trying to reproduce.
+          # would mask the shim behavior we are trying to reproduce. mise data dir
+          # is ~/.local/share/mise on both Linux and macOS.
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
 
@@ -244,21 +258,36 @@ jobs:
           mise use -g node@22
           mise reshim
           echo "node -> $(command -v node)"
-          echo "node realpath -> $(readlink -f "$(command -v node)")"
+          # Portable realpath: macOS `readlink` has no -f. node is guaranteed here.
+          echo "node realpath -> $(node -e 'console.log(require("fs").realpathSync(process.argv[1]))' "$(command -v node)")"
           node --version
           npm --version
 
-      - name: Install pi + pnpm under the mise-managed node
+      - name: Install pnpm (the npmCommand) under mise node
         shell: bash
         run: |
           set -uxo pipefail
-          # Both land in mise's node install dir; reshim exposes them as shims,
-          # matching a user who did everything through mise.
-          npm install -g --ignore-scripts @earendil-works/pi-coding-agent pnpm
+          npm install -g pnpm
+          mise reshim
+          pnpm --version
+
+      - name: Install pi (${{ matrix.pi_via }})
+        shell: bash
+        run: |
+          set -uxo pipefail
+          PKG="@earendil-works/pi-coding-agent"
+          case "${{ matrix.pi_via }}" in
+            mise-node)
+              # node from mise; pi as a plain npm-global under that node.
+              npm install -g --ignore-scripts "$PKG" ;;
+            mise-npm-backend)
+              # pi through mise's own npm backend — pi behind a mise tool-shim, the
+              # more literal reading of "pi installed using mise".
+              mise use -g "npm:$PKG" ;;
+          esac
           mise reshim
           command -v pi
           pi --version
-          pnpm --version
 
       - name: Configure pi (npmCommand=pnpm) + install pi-lens
         shell: bash
@@ -268,7 +297,8 @@ jobs:
           node -e 'const fs=require("fs"),os=require("os"),p=require("path");fs.writeFileSync(p.join(os.homedir(),".pi/agent/settings.json"),JSON.stringify({npmCommand:["pnpm"],defaultProvider:"anthropic",defaultModel:"claude-sonnet-4-6"}))'
           pi install npm:pi-lens
           pi list | grep -i 'pi-lens' || { echo "::error::pi-lens not registered after install"; exit 1; }
-          PILENS_DIR="$(readlink -f "$HOME/.pi/agent/npm/node_modules/pi-lens" 2>/dev/null || echo '')"
+          # Portable realpath (macOS-safe); empty if the path is missing.
+          PILENS_DIR="$(node -e 'try{console.log(require("fs").realpathSync(process.argv[1]))}catch{process.exit(0)}' "$HOME/.pi/agent/npm/node_modules/pi-lens")"
           echo "pi-lens layout: ${PILENS_DIR:-'(unresolved)'}"
           # Directly probe the resolution that crashes in #285: can `typescript`
           # (a real runtime dep) be resolved from pi-lens's compiled dist/clients?
