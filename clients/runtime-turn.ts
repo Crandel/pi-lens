@@ -15,7 +15,7 @@ import {
 import type { CacheManager } from "./cache-manager.js";
 import { logCascade } from "./cascade-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
-import type { DependencyChecker } from "./dependency-checker.js";
+import type { CircularDep, DependencyChecker } from "./dependency-checker.js";
 import {
 	resolveRunnerPath,
 	toRunnerDisplayPath,
@@ -40,6 +40,7 @@ import {
 	writeProjectDiagnosticsDeltaReport,
 } from "./project-diagnostics/cache.js";
 import { knipIssuesToProjectDiagnostics } from "./project-diagnostics/runner-adapters/knip.js";
+import { circularDepsToProjectDiagnostics } from "./project-diagnostics/runner-adapters/madge.js";
 import type { ProjectDiagnostic } from "./project-diagnostics/types.js";
 import { logLatency } from "./latency-logger.js";
 import { emitLensTurnFindings } from "./lens-events.js";
@@ -573,6 +574,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			dbg(
 				`turn_end: madge checking ${madgeFiles.length} file(s) for circular deps`,
 			);
+			const allCircular: CircularDep[] = [];
 			for (const file of madgeFiles) {
 				const absPath = path.resolve(cwd, file);
 				const depResult = await depChecker.checkFile(absPath, cwd);
@@ -584,16 +586,20 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					);
 				}
 				if (depResult.hasCircular && depResult.circular.length > 0) {
-					const circularDeps = depResult.circular
-						.flatMap((d) => d.path)
-						.filter((p: string) => !absPath.endsWith(path.basename(p)));
-					const uniqueDeps = [...new Set(circularDeps)];
-					if (uniqueDeps.length > 0) {
-						dbg(
-							`turn_end: circular dependency note for ${file} (suppressed in blockers-only mode)`,
-						);
-					}
+					allCircular.push(...depResult.circular);
 				}
+			}
+			// Surface circular deps in the project-diagnostics delta (consumed by
+			// lens_diagnostics mode=full), mapped per participating file via the same
+			// runner-adapter pattern as knip. This reuses the turn-end madge run that
+			// just executed — no fresh scan is launched.
+			const madgeDiagnostics = circularDepsToProjectDiagnostics(cwd, allCircular);
+			if (madgeDiagnostics.length > 0) {
+				projectDiagnosticsDelta.push(...madgeDiagnostics);
+				projectDiagnosticsSources.add("madge");
+				dbg(
+					`turn_end: ${madgeDiagnostics.length} circular-dep diagnostic(s) added to project delta`,
+				);
 			}
 		}
 	}

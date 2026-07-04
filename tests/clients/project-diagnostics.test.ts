@@ -11,6 +11,8 @@ import {
 	writeProjectDiagnosticsDeltaReport,
 } from "../../clients/project-diagnostics/cache.js";
 import { knipIssuesToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/knip.js";
+import { jscpdResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/jscpd.js";
+import { circularDepsToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/madge.js";
 import { scanProjectDiagnostics } from "../../clients/project-diagnostics/scanner.js";
 import type {
 	ProjectDiagnosticsDeltaReport,
@@ -221,6 +223,83 @@ describe("project diagnostics adapters", () => {
 			rule: "knip:export",
 			message: "Unused export unused",
 		});
+	});
+
+	it("maps a jscpd clone to a diagnostic on BOTH ends, each naming the other", () => {
+		const diags = jscpdResultToProjectDiagnostics(tmp, {
+			success: true,
+			duplicatedLines: 18,
+			totalLines: 100,
+			percentage: 18,
+			clones: [
+				{ fileA: "src/a.ts", startA: 42, fileB: "src/b.ts", startB: 80, lines: 18, tokens: 120 },
+			],
+		});
+
+		expect(diags).toHaveLength(2);
+		expect(diags[0]).toMatchObject({
+			filePath: path.join(tmp, "src/a.ts"),
+			line: 42,
+			severity: "warning",
+			runner: "jscpd",
+			rule: "jscpd:duplicate",
+			message: `Duplicate code (18 lines) — also at ${path.join("src", "b.ts")}:80`,
+		});
+		expect(diags[1]).toMatchObject({
+			filePath: path.join(tmp, "src/b.ts"),
+			line: 80,
+			message: `Duplicate code (18 lines) — also at ${path.join("src", "a.ts")}:42`,
+		});
+	});
+
+	it("returns no jscpd diagnostics on a failed or empty scan", () => {
+		expect(
+			jscpdResultToProjectDiagnostics(tmp, {
+				success: false,
+				clones: [],
+				duplicatedLines: 0,
+				totalLines: 0,
+				percentage: 0,
+			}),
+		).toEqual([]);
+		expect(
+			jscpdResultToProjectDiagnostics(tmp, {
+				success: true,
+				clones: [],
+				duplicatedLines: 0,
+				totalLines: 10,
+				percentage: 0,
+			}),
+		).toEqual([]);
+	});
+
+	it("maps a madge cycle to a diagnostic on EACH participating file", () => {
+		const diags = circularDepsToProjectDiagnostics(tmp, [
+			{ file: "src/a.ts", path: ["src/a.ts", "src/b.ts", "src/c.ts"] },
+		]);
+
+		expect(diags.map((d) => d.filePath)).toEqual([
+			path.join(tmp, "src/a.ts"),
+			path.join(tmp, "src/b.ts"),
+			path.join(tmp, "src/c.ts"),
+		]);
+		for (const d of diags) {
+			expect(d).toMatchObject({
+				runner: "madge",
+				rule: "madge:circular",
+				severity: "warning",
+				message: "Part of circular dependency: a.ts → b.ts → c.ts → a.ts",
+			});
+		}
+	});
+
+	it("dedupes a madge cycle reported from multiple anchors", () => {
+		const diags = circularDepsToProjectDiagnostics(tmp, [
+			{ file: "src/a.ts", path: ["src/a.ts", "src/b.ts"] },
+			{ file: "src/b.ts", path: ["src/b.ts", "src/a.ts"] }, // same cycle, other anchor
+		]);
+		// Same member set → emitted once (one diagnostic per file, not per anchor).
+		expect(diags).toHaveLength(2);
 	});
 });
 
