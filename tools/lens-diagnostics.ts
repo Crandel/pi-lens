@@ -23,14 +23,13 @@ import {
 	PROJECT_DIAGNOSTICS_CACHE_VERSION,
 	reconcileProjectDiagnosticsSnapshot,
 } from "../clients/project-diagnostics/cache.js";
-import { jscpdResultToProjectDiagnostics } from "../clients/project-diagnostics/runner-adapters/jscpd.js";
+import { extractCachedProjectDiagnostics } from "../clients/project-diagnostics/extractors.js";
 import { scanProjectDiagnostics } from "../clients/project-diagnostics/scanner.js";
 import type {
 	ProjectDiagnostic,
 	ProjectDiagnosticsDeltaReport,
 	ProjectDiagnosticsSnapshot,
 } from "../clients/project-diagnostics/types.js";
-import type { JscpdResult } from "../clients/jscpd-client.js";
 import type { ActionableWarningsReport } from "../clients/actionable-warnings.js";
 import type { CodeQualityWarningsReport } from "../clients/code-quality-warnings.js";
 import {
@@ -608,25 +607,24 @@ function shouldIncludeProjectRunners(value: unknown): boolean {
 }
 
 /**
- * Merge extra cache-derived diagnostics (e.g. jscpd) into the scanned project
- * snapshot: append to the existing one (recording the runner), or synthesize a
- * minimal snapshot when there was no scan. Returns the snapshot unchanged when
- * there is nothing extra to add.
+ * Merge cache-derived diagnostics from the analyzer extractors (jscpd, madge,
+ * gitleaks, knip …) into the scanned project snapshot: append to the existing
+ * one (recording the runners), or synthesize a minimal snapshot when there was
+ * no in-process scan. Returns the snapshot unchanged when there is nothing extra.
  */
 function foldExtraDiagnosticsIntoSnapshot(
 	snapshot: ProjectDiagnosticsSnapshot | undefined,
 	extra: ProjectDiagnostic[],
-	runner: string,
+	runners: string[],
 	cwd: string,
 ): ProjectDiagnosticsSnapshot | undefined {
 	if (extra.length === 0) return snapshot;
 	if (snapshot) {
+		const merged = new Set([...snapshot.runners, ...runners]);
 		return {
 			...snapshot,
 			diagnostics: [...snapshot.diagnostics, ...extra],
-			runners: snapshot.runners.includes(runner)
-				? snapshot.runners
-				: [...snapshot.runners, runner],
+			runners: [...merged],
 		};
 	}
 	return {
@@ -636,26 +634,8 @@ function foldExtraDiagnosticsIntoSnapshot(
 		scannedAt: new Date().toISOString(),
 		diagnostics: extra,
 		filesScanned: 0,
-		runners: [runner],
+		runners,
 	};
-}
-
-/**
- * Read the jscpd copy-paste snapshot that the session-start scan already computed
- * and cached, and map it to per-file `ProjectDiagnostic`s. This is CACHE-ONLY —
- * full mode never launches its own jscpd scan, so it can't relaunch or contend
- * with the background session-start run (mirrors how knip is consumed, not re-run).
- * The cache key mirrors session-start: `jscpd-ts` for TS projects, else `jscpd`.
- */
-function getCachedJscpdDiagnostics(
-	cacheManager: CacheManager,
-	cwd: string,
-): ProjectDiagnostic[] {
-	const entry =
-		cacheManager.readCache<JscpdResult>("jscpd-ts", cwd) ??
-		cacheManager.readCache<JscpdResult>("jscpd", cwd);
-	if (!entry?.data) return [];
-	return jscpdResultToProjectDiagnostics(cwd, entry.data);
 }
 
 async function getProjectDiagnosticsSnapshotForFullMode(
@@ -730,18 +710,17 @@ async function formatFullMode(
 		rawProjectSnapshot,
 		includeFile,
 	);
-	// Fold in the cached jscpd copy-paste snapshot (session-start already ran and
-	// cached it — cache-only read, never a fresh scan). Only when the caller opted
-	// into project-runner state.
-	const jscpdDiagnostics = shouldIncludeProjectRunners(options.refreshRunners)
-		? getCachedJscpdDiagnostics(cacheManager, cwd).filter((d) =>
-				includeFile(d.filePath),
-			)
-		: [];
+	// Fold in the cached heavyweight-analyzer findings (jscpd, madge, gitleaks,
+	// knip …) via the extractor registry — cache-only reads, never a fresh scan,
+	// so mode=full can't relaunch or contend with the background runs. Only when
+	// the caller opted into project-runner state.
+	const extracted = shouldIncludeProjectRunners(options.refreshRunners)
+		? extractCachedProjectDiagnostics(cacheManager, cwd)
+		: { diagnostics: [], runners: [] };
 	const projectSnapshot = foldExtraDiagnosticsIntoSnapshot(
 		scannedSnapshot,
-		jscpdDiagnostics,
-		"jscpd",
+		extracted.diagnostics.filter((d) => includeFile(d.filePath)),
+		extracted.runners,
 		cwd,
 	);
 	const projectDelta = filterProjectDiagnosticsDeltaReport(

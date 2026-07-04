@@ -13,6 +13,8 @@ import {
 import { knipIssuesToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/knip.js";
 import { jscpdResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/jscpd.js";
 import { circularDepsToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/madge.js";
+import { gitleaksResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/gitleaks.js";
+import { extractCachedProjectDiagnostics } from "../../clients/project-diagnostics/extractors.js";
 import { scanProjectDiagnostics } from "../../clients/project-diagnostics/scanner.js";
 import type {
 	ProjectDiagnosticsDeltaReport,
@@ -300,6 +302,90 @@ describe("project diagnostics adapters", () => {
 		]);
 		// Same member set → emitted once (one diagnostic per file, not per anchor).
 		expect(diags).toHaveLength(2);
+	});
+
+	it("maps gitleaks secrets to BLOCKING diagnostics", () => {
+		const [diag] = gitleaksResultToProjectDiagnostics(tmp, {
+			success: true,
+			scannedAt: "2026-01-01T00:00:00.000Z",
+			findings: [
+				{
+					ruleId: "aws-access-key",
+					description: "AWS Access Key",
+					file: "src/config.ts",
+					startLine: 12,
+				},
+			],
+		});
+		expect(diag).toMatchObject({
+			filePath: path.join(tmp, "src/config.ts"),
+			line: 12,
+			severity: "error",
+			semantic: "blocking",
+			runner: "gitleaks",
+			rule: "gitleaks:aws-access-key",
+			message: "Potential secret: AWS Access Key",
+		});
+	});
+});
+
+describe("extractCachedProjectDiagnostics (registry)", () => {
+	function cacheManagerWith(data: Record<string, unknown>) {
+		return {
+			readCache: (key: string) =>
+				data[key] ? { data: data[key] } : null,
+		} as unknown as import("../../clients/cache-manager.js").CacheManager;
+	}
+
+	it("reads each analyzer's cache and reports which runners contributed", () => {
+		const cm = cacheManagerWith({
+			"jscpd-ts": {
+				success: true,
+				duplicatedLines: 5,
+				totalLines: 50,
+				percentage: 10,
+				clones: [
+					{ fileA: "a.ts", startA: 1, fileB: "b.ts", startB: 2, lines: 5, tokens: 9 },
+				],
+			},
+			gitleaks: {
+				success: true,
+				scannedAt: "",
+				findings: [{ ruleId: "x", file: "c.ts", startLine: 3 }],
+			},
+			madge: { circular: [{ file: "d.ts", path: ["d.ts", "e.ts"] }], count: 1 },
+		});
+
+		const { diagnostics, runners } = extractCachedProjectDiagnostics(cm, tmp);
+
+		// jscpd (2, both ends) + gitleaks (1) + madge (2, per file) = 5
+		expect(diagnostics).toHaveLength(5);
+		expect(runners.sort()).toEqual(["gitleaks", "jscpd", "madge"]);
+	});
+
+	it("prefers jscpd-ts over jscpd, and skips analyzers with no cache", () => {
+		const cm = cacheManagerWith({
+			jscpd: {
+				success: true,
+				duplicatedLines: 1,
+				totalLines: 1,
+				percentage: 1,
+				clones: [
+					{ fileA: "a.ts", startA: 1, fileB: "b.ts", startB: 2, lines: 5, tokens: 9 },
+				],
+			},
+		});
+		const { runners } = extractCachedProjectDiagnostics(cm, tmp);
+		expect(runners).toEqual(["jscpd"]);
+	});
+
+	it("returns nothing when no analyzer has cached results", () => {
+		const { diagnostics, runners } = extractCachedProjectDiagnostics(
+			cacheManagerWith({}),
+			tmp,
+		);
+		expect(diagnostics).toEqual([]);
+		expect(runners).toEqual([]);
 	});
 });
 
