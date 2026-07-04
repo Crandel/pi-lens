@@ -68,7 +68,7 @@ type WorkspaceLspDiagnosticResult = {
 // aborts the scan so it always returns (partial) rather than never. Env-tunable.
 const FULL_SCAN_WALL_CLOCK_MS = (() => {
 	const raw = Number(process.env.PI_LENS_LENS_DIAGNOSTICS_FULL_TIMEOUT_MS);
-	return Number.isFinite(raw) && raw > 0 ? raw : 180_000; // 3 min default
+	return Number.isFinite(raw) && raw > 0 ? raw : 300_000; // 5 min default
 })();
 
 export function createLensDiagnosticsTool(

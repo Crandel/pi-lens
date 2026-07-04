@@ -9,8 +9,11 @@ All notable changes to pi-lens will be documented in this file.
 ### Changed
 
 - **CLI tool resolution now finds binaries installed by any package manager, not just npm/PATH** (#375) — the shared `resolveLocalFirstAsync` helper (the runner fleet's "local `.bin` → global → `npx --no`" resolver) plus the per-tool resolvers for **biome** (`biome-client.ts`, `dispatch/runners/biome.ts`, `formatters.ts`), **prettier** (`formatters.ts`), **type-coverage**, **jscpd**, **madge** (`dependency-checker.ts`), **ast-grep** (`sg-runner.ts` + the shared `isSgAvailableAsync`), and the **test runners** (`test-runner-client.ts`) now check every installed manager's global bin dir (npm/pnpm/yarn/bun) by direct file lookup before falling back to `npx`. This finds tools installed via `pnpm add -g` / `bun add -g` (whose bin dirs are often off PATH) and survives PATH-cache staleness right after an `install -g`. Each site's existing `npx` fallback is unchanged — the lookup is purely additive, so no user ever gets a surprise `dlx` download. New `findGlobalBinary` / `findNodeToolBinary` helpers in `package-manager.ts`, which also de-duplicate the identical private lookup in `lsp/launch.ts`.
+- **`lens_diagnostics mode=full` wall-clock ceiling raised from 3 min to 5 min** — large monorepos with many cold language servers were hitting the 180s cap and returning partial results before the sweep finished. The default is now 300s (still env-tunable via `PI_LENS_LENS_DIAGNOSTICS_FULL_TIMEOUT_MS`).
 
 ### Fixed
+
+- **`lsp_diagnostics` now stops opening files in the language server once the turn is abandoned** (#343) — the batch and directory scans thread the tool-call + turn (`ctx.signal`) abort signal into their concurrency fan-out, so an Escape/abort mid-scan stops scheduling new files (each in-flight file stays bounded by `waitMs`) and returns partial results, instead of grinding the whole capped batch into the server after the agent has moved on.
 
 ## [3.8.65] - 2026-07-04
 
