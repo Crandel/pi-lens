@@ -6,8 +6,11 @@ import {
 	markTreeSitterWasmAborted,
 	resolveTreeSitterLanguage,
 } from "../../clients/tree-sitter-shared.js";
+import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
+const cleanups: Array<() => void> = [];
 afterEach(() => {
+	while (cleanups.length) cleanups.pop()?.();
 	_resetSharedTreeSitterClientForTests();
 });
 
@@ -71,5 +74,46 @@ describe("shared TreeSitterClient singleton", () => {
 
 		expect(isTreeSitterWasmAborted()).toBe(false);
 		expect(getSharedTreeSitterClient()).not.toBeNull();
+	});
+});
+
+describe("shared tree cache is reused across consumers (one parse per write)", () => {
+	it("re-parsing the same unchanged file returns the cached tree (no re-parse)", async () => {
+		const env = setupTestEnvironment("pi-lens-tscache-");
+		cleanups.push(env.cleanup);
+		const file = createTempFile(env.tmpDir, "reuse.ts", "export const x = 1;\n");
+
+		const client = getSharedTreeSitterClient();
+		expect(client).not.toBeNull();
+
+		const tree1 = await client!.parseFile(file, "typescript");
+		// If grammars aren't available in this environment, the reuse claim is moot.
+		if (!tree1) return;
+		const tree2 = await client!.parseFile(file, "typescript");
+
+		// A cache hit returns the SAME tree object — the file is parsed once and the
+		// result served again, not re-parsed.
+		expect(tree2).toBe(tree1);
+	});
+
+	it("two shared-client handles (e.g. runner + module-report) share one parse", async () => {
+		const env = setupTestEnvironment("pi-lens-tscache-x-");
+		cleanups.push(env.cleanup);
+		const file = createTempFile(env.tmpDir, "shared.ts", "export function f() {}\n");
+
+		// Both subsystems obtain the SAME process-wide client → the SAME tree cache.
+		const runnerClient = getSharedTreeSitterClient();
+		const moduleReportClient = getSharedTreeSitterClient();
+		expect(runnerClient).toBe(moduleReportClient);
+
+		const parsedByRunner = await runnerClient!.parseFile(file, "typescript");
+		if (!parsedByRunner) return;
+		const servedToModuleReport = await moduleReportClient!.parseFile(
+			file,
+			"typescript",
+		);
+
+		// module-report is served the runner's cached tree — one parse, two consumers.
+		expect(servedToModuleReport).toBe(parsedByRunner);
 	});
 });
