@@ -222,6 +222,18 @@ export interface PipelineContext {
 	getFlag: (name: string) => boolean | string | undefined;
 	/** Debug logger */
 	dbg: (msg: string) => void;
+	/**
+	 * RuntimeCoordinator sequence state, threaded to the deferred cascade so the
+	 * review-graph builder can skip its per-build O(project) walk+stat sweep when
+	 * only pi-observed edits occurred since the last build (#451). `projectSeq` is
+	 * a function (not a captured number) because the cascade runs AFTER this
+	 * pipeline returns (#450) — it must read the CURRENT seq at build time.
+	 * Absent ⇒ builder behaves exactly as before (full sweep).
+	 */
+	seqState?: {
+		projectSeq: () => number;
+		getFilesChangedSince: (seq: number) => string[];
+	};
 }
 
 export interface PipelineDeps {
@@ -309,8 +321,12 @@ const _eslintCache = new Map<
 >();
 
 /**
- * Run eslint --fix on a file. Returns number of fixable issues resolved,
- * or 0 if ESLint is not configured / not available.
+ * Run eslint --fix on a file. Runs a single spawn and diffs the file before/after,
+ * same idiom as the other autofix helpers below. Exit code 1 (unfixable problems
+ * remain) is allowed because fixes may still have been applied; only exit code 2
+ * (config/fatal error) is treated as failure.
+ * Returns 1 if the file changed, 0 if ESLint is not configured / not available /
+ * made no changes.
  */
 async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 	const userHasConfig = hasEslintConfig(cwd);
@@ -331,52 +347,14 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 	}
 	if (!cached.available || !cached.bin) return 0;
 	const cmd = cached.bin;
-	const configArgs: string[] = [];
-	// --fix-dry-run returns JSON with fixable counts without writing to disk.
-	// Use it to get the real count, then apply with --fix only if needed.
-	const dry = await safeSpawnAsync(
+
+	return detectFileChangedAfterCommand(
+		filePath,
 		cmd,
-		[
-			"--fix-dry-run",
-			"--format",
-			"json",
-			"--no-error-on-unmatched-pattern",
-			...configArgs,
-			filePath,
-		],
-		{ timeout: 30000, cwd },
+		["--fix", "--no-error-on-unmatched-pattern", filePath],
+		cwd,
+		[1],
 	);
-	if (dry.status === 2) return 0;
-	let fixableCount = 0;
-	let anyDryRunOutput = false;
-	try {
-		const results: Array<{
-			fixableErrorCount?: number;
-			fixableWarningCount?: number;
-			output?: string;
-		}> = JSON.parse(dry.stdout);
-		fixableCount = results.reduce(
-			(sum, r) =>
-				sum + (r.fixableErrorCount ?? 0) + (r.fixableWarningCount ?? 0),
-			0,
-		);
-		// `--fix-dry-run` reports the POST-fix state: when every problem is
-		// auto-fixable, `messages`/`fixableErrorCount` are 0 and the fixed source
-		// lands in the `output` field instead. Keying on `fixableErrorCount` alone
-		// therefore misses the common "all fixable" case and never applies fixes.
-		anyDryRunOutput = results.some((r) => typeof r.output === "string");
-	} catch {
-		/* treat as zero fixable on error */
-	}
-	if (fixableCount === 0 && !anyDryRunOutput) return 0;
-	// Apply the fixes
-	const fix = await safeSpawnAsync(
-		cmd,
-		["--fix", "--no-error-on-unmatched-pattern", ...configArgs, filePath],
-		{ timeout: 30000, cwd },
-	);
-	if (fix.status === 2) return 0;
-	return fixableCount > 0 ? fixableCount : anyDryRunOutput ? 1 : 0;
 }
 
 async function tryStylelintFix(filePath: string, cwd: string): Promise<number> {
@@ -1263,6 +1241,7 @@ export async function runPipeline(
 				dbg,
 				turnSeq: ctx.telemetry?.turnIndex,
 				writeSeq: ctx.telemetry?.writeIndex,
+				seqState: ctx.seqState,
 			}).catch(
 				(err): import("./cascade-types.js").CascadeRun => {
 					dbg(`cascade compute failed for ${filePath}: ${err}`);
