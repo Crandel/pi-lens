@@ -125,6 +125,15 @@ describe("bundled dist entry shape (#335)", () => {
 		}
 	});
 
+	it.runIf(built)("carries exactly ONE require banner (bundle is idempotent)", () => {
+		// The banner line mentions __pilensCreateRequire twice (import alias +
+		// call). A doubled banner — the pre-guard artifact of running
+		// `bundle:dist` standalone on an already-bundled entry — would show 4 and
+		// fail to load ("Identifier ... has already been declared").
+		const count = src.match(/__pilensCreateRequire/g)?.length ?? 0;
+		expect(count).toBe(2);
+	});
+
 	it.runIf(built)("keeps host-provided packages external", () => {
 		for (const dep of ["typebox", "@earendil-works/pi-tui"]) {
 			expect(

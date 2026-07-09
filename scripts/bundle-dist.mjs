@@ -77,6 +77,18 @@ if (!existsSync(distEntry)) {
 	);
 	process.exit(1);
 }
+// Idempotency guard: the bundle step rewrites dist/index.js IN PLACE, so a
+// second standalone `npm run bundle:dist` (without build:dist's fresh tsc
+// emit) would re-bundle the bundle and prepend the require banner a second
+// time — a duplicate `const require` declaration that fails to load
+// ("Identifier '__pilensCreateRequire' has already been declared"). Detect the
+// banner and no-op instead.
+if (readFileSync(distEntry, "utf8").startsWith(REQUIRE_BANNER)) {
+	console.error(
+		"[bundle] dist/index.js is already bundled — skipping (run build:dist for a fresh emit).",
+	);
+	process.exit(0);
+}
 if (!npmCli) {
 	console.error("[bundle] npm_execpath unset — run via `npm run bundle:dist`.");
 	process.exit(1);
