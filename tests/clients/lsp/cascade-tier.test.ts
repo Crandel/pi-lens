@@ -8,6 +8,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { normalizeMapKey } from "../../../clients/path-utils.js";
+
 const getServersForFileWithConfig = vi.fn();
 const registerQuietWindowTask = vi.fn();
 
@@ -155,8 +157,12 @@ describe("outstanding touch registry + reconcile", () => {
 	) {
 		const map = new Map(
 			rows.map(([p, diags, ts]) => [
-				// getAllDiagnostics keys by normalizeMapKey — forward slashes.
-				p.replace(/\\/g, "/"),
+				// getAllDiagnostics keys by normalizeMapKey — use the REAL
+				// normalizer, never a hand-rolled replace: on a POSIX runner
+				// normalizeMapKey lowercases a nonexistent Windows-style path
+				// ("C:/repo/…" → "c:/repo/…"), so a hand-keyed fake map matches
+				// on Windows but misses on Linux CI (the #210 path-key lesson).
+				normalizeMapKey(p),
 				{ diags, ts },
 			]),
 		);
