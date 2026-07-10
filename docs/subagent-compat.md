@@ -241,3 +241,27 @@ env-vocabulary contract for avtc-pi-subagent in
 `scripts/lib/compat-contracts.mjs`, and a Layer B behavioral regression case
 asserting light mode engages for an avtc-only-marker child. Both are an
 M-effort follow-up, not part of the detection fix itself.
+
+### pi-swarm (`gjczone/pi-swarm`, assessed 2026-07-11)
+
+Agent-swarm orchestration ported from MoonshotAI/kimi-code: a `Swarm` tool
+spawning 1–128 parallel subagents in isolated git worktrees, plus a
+collaborative "Team" mode with a file-based JSONL mailbox (polling, no bus).
+**Execution model = real out-of-process children — but with NO subagent
+vocabulary at all**: `spawnSubagent` (`src/shared/spawner.ts:141-168`) builds
+`pi --print <task>` CLI args and spawns via `child_process.spawn` with
+`env: { ...process.env }` (`spawner.ts:397`) — a verbatim spread, zero
+additions. No `PI_SUBAGENT_CHILD=1`, no `PI_SUBAGENT_CHILD_AGENT`/
+`PI_SUBAGENT_PARENT_PID` pair, no `bindExtensions`/`createAgentSession`
+in-process shape (grep-verified). Extensions DO activate in the children
+(they are full `pi` processes), so pi-lens runs there — but
+`classifySubagentSession()` sees no marker, light mode (#475) never engages,
+and every child pays full startup cost (LSP pre-warm + heavyweight scans),
+multiplied by up to 128 parallel worktrees. This is a **detection gap pi-lens
+cannot close unilaterally**: there is nothing in the child environment to
+key on. Fix is a one-line upstream change (adopt either existing vocabulary
+at `spawner.ts:397`); upstream ask is approval-gated per house policy.
+Active, well-maintained project (strict CI, last commit 2026-07-10). Its
+subagent tool-blocklist (`pi-invoke.ts:29-35`, prevents recursive swarms) is
+sound design, unrelated to pi-lens. **No contract to pin until upstream
+adds markers.**
