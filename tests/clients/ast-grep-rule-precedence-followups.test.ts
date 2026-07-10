@@ -188,7 +188,15 @@ afterEach(() => {
 	}
 });
 
-describe("project rule precedence follow-ups", () => {
+// Every case here runs one or more COLD baseline resolves — each materializes
+// the full bundled rule set (~350 files incl. the CodeRabbit catalog) into a
+// merged dir plus sha256 fingerprints over all contents. ~60ms on an idle box,
+// but under full-suite parallel load (32 forked workers hammering the same
+// disk) a 5-cycle case was measured blowing past vitest's 5s default (timeout,
+// not an assertion failure — passes alone every time).
+const HEAVY_IO_TIMEOUT_MS = 30_000;
+
+describe("project rule precedence follow-ups", { timeout: HEAVY_IO_TIMEOUT_MS }, () => {
 	it("discovers nested primary and secondary rules in deterministic precedence order", () => {
 		const root = makeProject();
 		writeRule(root, PRIMARY_RULES, "nested/typescript/primary.yml", {
