@@ -16,14 +16,26 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { CacheManager } from "../cache-manager.js";
 import {
+	CASCADE_GRAPH_KINDS,
 	dispatchLintWithResult,
 	getLatencyReports,
 } from "../dispatch/integration.js";
+import { FactStore } from "../dispatch/fact-store.js";
 import type { Diagnostic } from "../dispatch/types.js";
+import { detectFileKind } from "../file-kinds.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getLSPService } from "../lsp/index.js";
+import { buildOrUpdateGraph } from "../review-graph/service.js";
 import { recordDiagnostics } from "../widget-state.js";
 import { createMcpHost } from "./host-shim.js";
+
+// #536: module-scoped FactStore for the warm-analyze graph seam, mirroring the
+// per-edit cascade path's own module-level `sessionFacts` singleton
+// (clients/dispatch/integration.ts) — buildOrUpdateGraph's incremental/cached
+// tiers key off a stable FactStore instance across calls, so a fresh FactStore
+// per call would defeat that reuse. Scoped separately from integration.ts's
+// singleton since this file has no dependency on that module's internal state.
+const warmGraphFacts = new FactStore();
 
 // Generous warm-up budgets: a cold language server needs to spawn AND publish
 // diagnostics. The per-edit dispatch runner caps these tightly (spawn budget +
@@ -121,6 +133,25 @@ export interface AnalyzeFileOptions {
 	 * benchmarking doesn't pollute the real turn-state.
 	 */
 	registerTurnState?: boolean;
+	/**
+	 * Maintain the review graph for this file after a successful dispatch — the
+	 * SAME `buildOrUpdateGraph` call pi's per-edit cascade path makes
+	 * (`computeCascadeForFile`, clients/dispatch/integration.ts), so
+	 * `pilens_module_report`'s usedBy/blastRadius and `pilens_symbol_search`'s
+	 * centrality reflect files analyzed via MCP, not just session-start state.
+	 * Default false — this is a DELIBERATE opt-in gate (#536), not a
+	 * per-call-site inference from cwd/process, because `analyzeFile` is the
+	 * shared facade for BOTH the warm in-process path (mcp/server.ts) and the
+	 * `fresh` worker (mcp/worker.ts, forked per-call, always cold, exits after
+	 * one result) — the fresh worker's process-lifetime is too short for the
+	 * persist debounce to ever flush, and building/persisting a graph from a
+	 * one-shot throwaway process on every fresh analysis would be pure waste
+	 * plus a needless disk write. Only mcp/server.ts's two warm call sites (the
+	 * IPC handler and the direct tool dispatch) set this true. This retires the
+	 * #256 "read-only facade" contract for warm mode specifically; `fresh`
+	 * stays read-only.
+	 */
+	updateGraph?: boolean;
 }
 
 function toMcpDiagnostic(diagnostic: Diagnostic): McpAnalyzeDiagnostic {
@@ -229,6 +260,26 @@ export async function analyzeFile(
 			);
 		} catch {
 			// unreadable — skip turn-state registration
+		}
+	}
+
+	if (options.updateGraph && !result.hasBlockers) {
+		// #536: maintain the review graph on a successful warm analysis — the same
+		// call pi's per-edit cascade path makes (computeCascadeForFile), gated the
+		// same way (CASCADE_GRAPH_KINDS: only languages the graph actually models,
+		// and skipped when the file has blockers, matching the cascade path's own
+		// "primary_has_blockers" skip). buildOrUpdateGraph owns its own debounced
+		// persist + seq machinery internally — this is the ONLY call needed; no
+		// separate persist/flush step. Best-effort: a graph build failure must
+		// never fail the analysis itself (the diagnostics are already computed).
+		const fileKind = detectFileKind(absPath);
+		if (fileKind && CASCADE_GRAPH_KINDS.has(fileKind)) {
+			try {
+				await buildOrUpdateGraph(cwd, [absPath], warmGraphFacts);
+			} catch {
+				// Best-effort — the graph update is additive; a failure here must not
+				// surface as an analyze failure.
+			}
 		}
 	}
 

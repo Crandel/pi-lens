@@ -65,6 +65,9 @@ export {
 	type ModuleReport,
 	type ModuleReportOptions,
 	type ModuleSymbolEntry,
+	readEnclosing,
+	type ReadEnclosingOptions,
+	type ReadEnclosingResult,
 	readSymbol,
 	type ReadSymbolResult,
 	type RecommendedRead,
@@ -143,6 +146,14 @@ export interface SymbolSearchResult {
 	 * index build was kicked off in the background (deduped per cwd), never
 	 * blocking this call — retry shortly. */
 	hint?: string;
+	/**
+	 * ISO timestamp the persisted project snapshot (`ProjectSnapshot.generatedAt`)
+	 * was last written — the snapshot backs BOTH the word index this search ranks
+	 * over and the `reverseDeps` centrality boost. Present whenever `available` is
+	 * true. Additive (#536): an MCP adapter uses this to compute a staleness hint;
+	 * omitted (not surfaced) on the pi tool surface, whose index is per-edit warm.
+	 */
+	snapshotGeneratedAt?: string;
 }
 
 function toSymbolSearchHit(result: RankedFile): SymbolSearchHit {
@@ -192,6 +203,7 @@ export function symbolSearch(
 		available: true,
 		query,
 		results: results.map(toSymbolSearchHit),
+		snapshotGeneratedAt: snapshot?.generatedAt,
 	};
 }
 
