@@ -109,7 +109,11 @@ describe("TypeScript native LSP selection", () => {
 			env: { PI_LENS_TEST_TOOLCHAIN: "1" },
 		});
 		expect(ensureTool).not.toHaveBeenCalled();
-		expect(result).toEqual({ process: fakeProcess, source: "direct" });
+		expect(result).toEqual({
+			process: fakeProcess,
+			source: "direct",
+			launchVariant: "native-ts7",
+		});
 	});
 
 	it("uses a TypeScript 7 compiler hoisted above the nearest package root", async () => {
@@ -131,7 +135,11 @@ describe("TypeScript native LSP selection", () => {
 			env: { PI_LENS_TEST_TOOLCHAIN: "1" },
 		});
 		expect(ensureTool).not.toHaveBeenCalled();
-		expect(result).toEqual({ process: fakeProcess, source: "direct" });
+		expect(result).toEqual({
+			process: fakeProcess,
+			source: "direct",
+			launchVariant: "native-ts7",
+		});
 	});
 
 	it("keeps TypeScript 6 on typescript-language-server and tsserver", async () => {
@@ -151,6 +159,7 @@ describe("TypeScript native LSP selection", () => {
 		expect(result?.initialization).toEqual({
 			tsserver: { path: tsserverPath },
 		});
+		expect(result?.launchVariant).toBe("classic");
 	});
 
 	it("does not skip a nearer TypeScript 6 package for an ancestor TypeScript 7 package", async () => {

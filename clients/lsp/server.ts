@@ -86,6 +86,19 @@ export interface LSPServerInfo {
 				process: LSPProcess;
 				initialization?: Record<string, unknown>;
 				source?: "direct" | "managed" | "package-manager" | "interactive";
+				/**
+				 * Which concrete binary/protocol variant was launched for this server
+				 * id, when a single `LSPServerInfo.id` can mean more than one actual
+				 * server (e.g. "typescript" = classic typescript-language-server OR
+				 * TS7's native `tsc --lsp --stdio`). Per-server behavioral knowledge
+				 * keyed by server id (`server-strategies.ts`'s `silentOnClean` etc.)
+				 * is only proven for the variant it was measured against — this lets
+				 * such knowledge-consumers (the #458 cascade tier classifier) tell
+				 * the variants apart. Undefined = single-variant server, or a
+				 * variant-carrying server that hasn't been updated to report one yet;
+				 * treat as the classic/default behavior (fail-safe).
+				 */
+				launchVariant?: "classic" | "native-ts7";
 		  }
 		| undefined
 	>;
@@ -1385,7 +1398,7 @@ export const TypeScriptServer: LSPServerInfo = {
 				cwd: root,
 				env,
 			});
-			return { process: proc, source: "direct" };
+			return { process: proc, source: "direct", launchVariant: "native-ts7" };
 		}
 
 		let source: "direct" | "managed" = "direct";
@@ -1466,6 +1479,7 @@ export const TypeScriptServer: LSPServerInfo = {
 			initialization: tsserverPath
 				? { tsserver: { path: tsserverPath } }
 				: undefined,
+			launchVariant: "classic",
 		};
 	},
 };
