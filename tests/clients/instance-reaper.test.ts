@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildIdentityMatcher,
 	decideOrphanReaping,
+	STALE_HEARTBEAT_MS,
 	type ChildToKill,
 } from "../../clients/instance-reaper.js";
 import type { InstanceEntry, LspChildEntry } from "../../clients/instance-registry.js";
@@ -231,6 +232,111 @@ describe("decideOrphanReaping", () => {
 				serverId: "ast-grep",
 			},
 		]);
+	});
+});
+
+/**
+ * #525 root-cause regression: a dead-pid entry with a stale heartbeat must be
+ * reaped even when `isPidAlive` reports the (recycled) pid as alive — see the
+ * clients/instance-reaper.ts module docstring for the full root-cause
+ * writeup. Pins the exact scenario dogfooding caught live: heartbeat
+ * 2026-07-10T17:00, ~13h stale by the time a 2026-07-11T06:35 session_start
+ * ran the sweep.
+ */
+describe("decideOrphanReaping — heartbeat staleness (#525)", () => {
+	const NOW = Date.parse("2026-07-11T06:35:00.000Z");
+
+	it("stale heartbeat + dead pid ⇒ reaped (the exact dogfooded scenario)", () => {
+		const reg = [
+			instance({
+				pid: 1,
+				heartbeatAt: "2026-07-10T17:00:00.000Z", // ~13h30m before NOW
+			}),
+		];
+		// pid is dead too — but prior to #525 this ALSO reaped fine; the bug was
+		// specifically pid-alive-but-stale (below). Included here to pin the
+		// baseline case stays fixed.
+		const decision = decideOrphanReaping(reg, alivePids(), undefined, NOW);
+
+		expect(decision.deadInstances).toHaveLength(1);
+		expect(decision.deadInstances[0].pid).toBe(1);
+	});
+
+	it("stale heartbeat + LIVE (recycled) pid ⇒ still reaped — the actual #525 bug", () => {
+		const reg = [
+			instance({
+				pid: 1,
+				heartbeatAt: "2026-07-10T17:00:00.000Z", // ~13h30m before NOW
+			}),
+		];
+		// pid 1 reports ALIVE (simulates Windows pid-recycling: the original
+		// process is long dead, but the OS reassigned pid 1 to some unrelated
+		// live process). Before the #525 fix this instance was never reaped.
+		const decision = decideOrphanReaping(reg, alivePids(1), undefined, NOW);
+
+		expect(decision.deadInstances).toHaveLength(1);
+		expect(decision.deadInstances[0].pid).toBe(1);
+	});
+
+	it("fresh heartbeat + live pid ⇒ NOT reaped", () => {
+		const reg = [
+			instance({
+				pid: 1,
+				heartbeatAt: new Date(NOW - 5 * 60 * 1000).toISOString(), // 5 min ago
+			}),
+		];
+		const decision = decideOrphanReaping(reg, alivePids(1), undefined, NOW);
+
+		expect(decision.deadInstances).toHaveLength(0);
+	});
+
+	it("heartbeat exactly at the staleness boundary is NOT yet reaped (strictly greater-than)", () => {
+		const reg = [
+			instance({
+				pid: 1,
+				heartbeatAt: new Date(NOW - STALE_HEARTBEAT_MS).toISOString(),
+			}),
+		];
+		const decision = decideOrphanReaping(reg, alivePids(1), undefined, NOW);
+
+		expect(decision.deadInstances).toHaveLength(0);
+	});
+
+	it("heartbeat one ms past the staleness boundary IS reaped", () => {
+		const reg = [
+			instance({
+				pid: 1,
+				heartbeatAt: new Date(NOW - STALE_HEARTBEAT_MS - 1).toISOString(),
+			}),
+		];
+		const decision = decideOrphanReaping(reg, alivePids(1), undefined, NOW);
+
+		expect(decision.deadInstances).toHaveLength(1);
+	});
+
+	it("unparseable heartbeatAt is treated as stale, never masks a dead instance", () => {
+		const reg = [instance({ pid: 1, heartbeatAt: "not-a-date" })];
+		const decision = decideOrphanReaping(reg, alivePids(1), undefined, NOW);
+
+		expect(decision.deadInstances).toHaveLength(1);
+	});
+
+	it("a stale-but-pid-alive instance's children still require identity match before killing", () => {
+		const reg = [
+			instance({
+				pid: 1,
+				heartbeatAt: "2026-07-10T17:00:00.000Z",
+				lspChildren: [child({ pid: 100, command: "C:\\real\\ast-grep.exe" })],
+			}),
+		];
+		// Both parent and child pid report alive (recycled pids) but the
+		// identity matcher says the live pid 100 process does NOT match what
+		// was recorded — must not be killed, only (optionally) marker-searched.
+		const matchProcess = () => false;
+		const decision = decideOrphanReaping(reg, alivePids(1, 100), matchProcess, NOW);
+
+		expect(decision.deadInstances).toHaveLength(1);
+		expect(decision.childrenToKill).toHaveLength(0);
 	});
 });
 

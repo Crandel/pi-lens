@@ -15,7 +15,37 @@
  * a command-line marker fallback for the case where the pid itself was
  * recycled or the mid-tree pid link is broken (e.g. a dead node-wrapper whose
  * native-exe grandchild is still alive under a different, unrecorded pid).
+ *
+ * #525 root cause: a parent instance was ONLY ever considered dead via
+ * `isPidAlive(instance.pid)` — a raw `process.kill(pid, 0)` check. Unlike
+ * child pids (which get a command-line/marker identity check via
+ * `matchProcess` to guard against a recycled pid), the PARENT pid had no
+ * identity verification at all, because `InstanceEntry` never recorded the
+ * parent's own command line. Windows recycles pids far more aggressively than
+ * POSIX (no zombie/wait-reaping semantics holding a dead pid "reserved"), so
+ * over a long enough window (observed: ~13h) a dead parent's pid is very
+ * plausibly reassigned to a live, unrelated process — `isPidAlive` then
+ * (correctly, per its own conservative contract) reports "alive", and the
+ * stale instance is never reaped, no matter how old its heartbeat is.
+ * `decideOrphanReaping` now ALSO reaps on heartbeat staleness
+ * (`STALE_HEARTBEAT_MS`) as an independent signal alongside pid-liveness —
+ * either one being true is sufficient to classify an instance as dead. This
+ * does not require matching identity because a heartbeat this stale for a
+ * genuinely live pi-lens process would mean `updateHeartbeat` silently
+ * stopped firing for the whole threshold window, which is itself pathological.
  */
+
+/**
+ * An instance whose heartbeat is older than this is reaped regardless of
+ * pid-liveness (see #525 root-cause note above). Deliberately generous: a
+ * long-idle-but-alive session still refreshes its heartbeat every turn end
+ * (clients/quiet-window.ts `instance_registry_heartbeat` task) and every
+ * `updateHeartbeat` call is cheap, so a healthy process should never go this
+ * long without a refresh. 6 hours comfortably exceeds any plausible
+ * inter-turn idle gap while still catching the observed 13h-stale case well
+ * before it doubles in age again.
+ */
+export const STALE_HEARTBEAT_MS = 6 * 60 * 60 * 1000;
 
 import { spawn as nodeSpawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -55,6 +85,25 @@ export interface OrphanReapDecision {
 }
 
 /**
+ * Whether an instance's PARENT should be treated as dead: either pid-liveness
+ * says so, OR its heartbeat is stale beyond `STALE_HEARTBEAT_MS` (#525 —
+ * pid-liveness alone is unsound on Windows for a long-dead parent whose pid
+ * has since been recycled onto an unrelated live process; see the module
+ * docstring). An invalid/unparseable `heartbeatAt` is treated as stale
+ * (missing data must never mask an otherwise-dead instance).
+ */
+function isInstanceParentDead(
+	instance: InstanceEntry,
+	isPidAlive: (pid: number) => boolean,
+	now: number,
+): boolean {
+	if (!isPidAlive(instance.pid)) return true;
+	const heartbeatMs = Date.parse(instance.heartbeatAt);
+	if (Number.isNaN(heartbeatMs)) return true;
+	return now - heartbeatMs > STALE_HEARTBEAT_MS;
+}
+
+/**
  * Markers claimed by any LIVE instance's children. A marker search kills by
  * command-line match, so a marker that a live session also uses must never
  * be searched — killing it would take down the live session's server.
@@ -66,10 +115,11 @@ export interface OrphanReapDecision {
 function collectLiveMarkers(
 	registry: InstanceEntry[],
 	isPidAlive: (pid: number) => boolean,
+	now: number,
 ): Set<string> {
 	const liveMarkers = new Set<string>();
 	for (const instance of registry) {
-		if (!isPidAlive(instance.pid)) continue;
+		if (isInstanceParentDead(instance, isPidAlive, now)) continue;
 		for (const child of instance.lspChildren) {
 			if (child.marker) liveMarkers.add(child.marker);
 		}
@@ -131,6 +181,13 @@ function classifyDeadInstanceChildren(
  * @param matchProcess - optional identity verification (e.g. confirm the
  *   live pid's command line still matches what we recorded) to guard against
  *   a recycled pid coincidentally matching. If omitted, liveness alone is used.
+ * @param now - epoch ms "now", for heartbeat-staleness comparison (#525).
+ *   Injectable for deterministic tests; defaults to `Date.now()`. A parent
+ *   instance is classified dead when EITHER `isPidAlive` says so OR its
+ *   `heartbeatAt` is older than `STALE_HEARTBEAT_MS` — pid-liveness alone is
+ *   unsound once a long-dead parent's pid has been recycled onto an unrelated
+ *   live process (observed on Windows: a ~13h-stale entry survived because
+ *   its dead pid coincidentally matched a live, unrelated process).
  */
 export function decideOrphanReaping(
 	registry: InstanceEntry[],
@@ -139,16 +196,17 @@ export function decideOrphanReaping(
 		pid: number,
 		expected: { command: string; marker?: string },
 	) => boolean,
+	now: number = Date.now(),
 ): OrphanReapDecision {
 	const deadInstances: InstanceEntry[] = [];
 	const childrenToKill: ChildToKill[] = [];
 	const markerSearches: MarkerSearch[] = [];
 
-	const liveMarkers = collectLiveMarkers(registry, isPidAlive);
+	const liveMarkers = collectLiveMarkers(registry, isPidAlive, now);
 
 	for (const instance of registry) {
-		if (isPidAlive(instance.pid)) {
-			continue; // parent still alive — leave its children alone entirely
+		if (!isInstanceParentDead(instance, isPidAlive, now)) {
+			continue; // parent still alive and heartbeat is fresh — leave it alone
 		}
 		deadInstances.push(instance);
 		classifyDeadInstanceChildren(instance, isPidAlive, matchProcess, liveMarkers, {
