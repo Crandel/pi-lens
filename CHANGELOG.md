@@ -4,6 +4,14 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+## [3.8.69] - 2026-07-11
+
 ### Fixed
 
 - **Warm MCP server no longer silently serves stale code after a rebuild** (#535, refs #514/#256) — the long-lived warm server loads its code once at process start and never re-reads disk, so a `npm run build:dist`/merge that lands after the server started went completely undetected: dogfooding a post-#517 rebuild through an already-running server still returned the pre-#517 `pilens_module_report` schema, the exact "plausible-but-wrong" failure the #240/#511 honesty doctrine exists to prevent. Fix: at startup, `mcp/build-staleness.ts`'s `computeBuildStamp` captures the mtime of the server's OWN entry file (resolved via `import.meta.url`, never a hardcoded repo path — the server may run from an installed package); every `tools/call` and the IPC side-channel handler re-check via a `StalenessGate` (one `fs.stat`, cached at most once/second — same shape as the #492 cross-process reader, so a burst of calls costs one stat). On a detected mismatch: `pilens_analyze` (a stateless per-file dispatch with no warm-only dependency) force-routes through the EXISTING `mode=fresh` worker fork even when the caller asked for warm, tagging the result `servedBy: "fresh (warm code stale — restart the Claude session to re-warm)"`. Every other tool depends on state that only exists inside this process (the in-memory review graph behind `pilens_module_report`/`pilens_symbol_search`, the warm LSP fleet behind `pilens_lsp_navigation`/`pilens_lsp_diagnostics`, the CacheManager/latency log behind the rest) — a fresh fork would answer with an EMPTY graph, a worse result than a stale-but-populated one, so those get an honest `warmCodeStale: true` warning appended instead of routing. The PostToolUse hook's warm-IPC-first path (`clients/mcp/ipc.ts`) gets the same protection for free: on stale, the IPC handler replies with an error, which the hook bin (`mcp/analyze-cli.ts`) already treats as "no usable warm server" and falls back to its own cold, load-fresh-from-disk analysis — no new fresh-fork plumbing needed there. Kill switch: `PI_LENS_WARM_STALENESS_CHECK=0`.
