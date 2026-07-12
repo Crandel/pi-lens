@@ -10,7 +10,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getProjectIgnoreMatcher } from "./file-utils.js";
+import {
+	getProjectIgnoreMatcher,
+	type ProjectIgnoreMatcher,
+} from "./file-utils.js";
 import { isAtOrAboveHomeDir } from "./path-utils.js";
 import { readDirEntriesSafe, shouldRecurseIntoDir } from "./source-walker.js";
 
@@ -57,14 +60,54 @@ export function findNearestProjectRoot(startDir: string): string | null {
 	}
 }
 
+/** Shared (rootDir, ignoreMatcher, stack) setup for both count-walk variants below. */
+function initSourceCountWalk(dir: string): {
+	rootDir: string;
+	ignoreMatcher: ProjectIgnoreMatcher;
+	stack: string[];
+} {
+	const rootDir = path.resolve(dir);
+	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
+	return { rootDir, ignoreMatcher, stack: [rootDir] };
+}
+
+/**
+ * Shared per-entry decision for both `countSourceFilesWithinLimit` and its
+ * async twin: pushes a recursable directory onto `stack` (mutated in place)
+ * and reports whether `entry` itself counts as a source file. Extracted
+ * (refs #191) so the sync/async loops don't carry a byte-identical
+ * directory-branch block — the two loops still own their own traversal
+ * shape (sync recursion-via-stack vs. async with a yield cadence), only this
+ * per-entry classification is shared.
+ *
+ * Directories here never check for symlinks or generated-artifact names —
+ * always follows symlinks (unlike source-filter.ts's collectSourceFiles*).
+ */
+function classifyCountEntry(
+	entry: fs.Dirent,
+	fullPath: string,
+	ignoreMatcher: ProjectIgnoreMatcher,
+	stack: string[],
+): boolean {
+	if (entry.isDirectory()) {
+		if (shouldRecurseIntoDir(entry, fullPath, { ignoreMatcher, followSymlinks: true })) {
+			stack.push(fullPath);
+		}
+		return false;
+	}
+	return (
+		entry.isFile() &&
+		!ignoreMatcher.isIgnored(fullPath, false) &&
+		SOURCE_FILE_PATTERN.test(entry.name)
+	);
+}
+
 export function countSourceFilesWithinLimit(
 	dir: string,
 	limit: number,
 ): number {
 	let count = 0;
-	const rootDir = path.resolve(dir);
-	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
-	const stack = [rootDir];
+	const { ignoreMatcher, stack } = initSourceCountWalk(dir);
 
 	while (stack.length > 0) {
 		const current = stack.pop();
@@ -74,20 +117,7 @@ export function countSourceFilesWithinLimit(
 
 		for (const entry of entries) {
 			const fullPath = path.join(current, entry.name);
-			if (entry.isDirectory()) {
-				// Never checked symlinks — always follows them (unlike
-				// source-filter.ts's collectSourceFiles*, refs #191).
-				if (!shouldRecurseIntoDir(entry, fullPath, { ignoreMatcher, followSymlinks: true })) {
-					continue;
-				}
-				stack.push(fullPath);
-				continue;
-			}
-			if (
-				entry.isFile() &&
-				!ignoreMatcher.isIgnored(fullPath, false) &&
-				SOURCE_FILE_PATTERN.test(entry.name)
-			) {
+			if (classifyCountEntry(entry, fullPath, ignoreMatcher, stack)) {
 				count += 1;
 				if (count > limit) return count;
 			}
@@ -210,9 +240,7 @@ export async function countSourceFilesWithinLimitAsync(
 	const yieldEvery = opts.yieldEvery ?? 100;
 	let count = 0;
 	let processedSinceYield = 0;
-	const rootDir = path.resolve(dir);
-	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
-	const stack = [rootDir];
+	const { ignoreMatcher, stack } = initSourceCountWalk(dir);
 
 	while (stack.length > 0) {
 		const current = stack.pop();
@@ -222,18 +250,7 @@ export async function countSourceFilesWithinLimitAsync(
 
 		for (const entry of entries) {
 			const fullPath = path.join(current, entry.name);
-			if (entry.isDirectory()) {
-				// Never checked symlinks — always follows them (unlike
-				// source-filter.ts's collectSourceFiles*, refs #191).
-				if (!shouldRecurseIntoDir(entry, fullPath, { ignoreMatcher, followSymlinks: true })) {
-					continue;
-				}
-				stack.push(fullPath);
-			} else if (
-				entry.isFile() &&
-				!ignoreMatcher.isIgnored(fullPath, false) &&
-				SOURCE_FILE_PATTERN.test(entry.name)
-			) {
+			if (classifyCountEntry(entry, fullPath, ignoreMatcher, stack)) {
 				count += 1;
 				if (count > limit) return count;
 			}
