@@ -30,6 +30,7 @@
 		"check:grammar-load": "node scripts/check-grammar-load.mjs",
 		"audit:tree-sitter": "node scripts/audit-tree-sitter-rules.mjs",
 		"audit:rule-catalog": "node scripts/validate-rule-catalog.mjs",
+		"audit:astgrep-rule-pairs": "node scripts/audit-astgrep-rule-pairs.mjs",
 		"audit:playground": "node scripts/playground-verify-rule.mjs",
 		"logs:smells": "node scripts/analyze-pi-lens-logs.mjs",
 		"changelog:check": "node scripts/changelog-release.mjs --check",

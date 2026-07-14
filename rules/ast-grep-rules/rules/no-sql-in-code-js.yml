@@ -1,5 +1,5 @@
 id: no-sql-in-code-js
-language: TypeScript
+language: JavaScript
 message: "Raw SQL string in code — use query builder or ORM"
 severity: error
 note: |

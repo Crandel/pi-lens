@@ -15,10 +15,11 @@ afterAll(() => {
 async function rulesFiredOn(
 	code: string,
 	flags: Record<string, unknown> = {},
+	sampleFile = "sample.ts",
 ): Promise<Set<string>> {
 	const env = setupTestEnvironment("pi-lens-sonar-sg-");
 	cleanups.push(env.cleanup);
-	const filePath = createTempFile(env.tmpDir, "sample.ts", code);
+	const filePath = createTempFile(env.tmpDir, sampleFile, code);
 	const mod = await import(
 		"../../../../clients/dispatch/runners/ast-grep-napi.js"
 	);
@@ -173,20 +174,38 @@ describe("ast-grep Sonar gap rules (integration via real runner)", () => {
 		});
 
 		describe("nested-ternary (has stopBy: end, no self-match)", () => {
+			// The TypeScript-tagged `nested-ternary` id is in TREE_SITTER_OVERLAP
+			// (skipped by this runner, on the assumption the tree-sitter query
+			// runner covers .ts — separately stale since that query currently
+			// lives under tree-sitter-queries/typescript-disabled/, but that's a
+			// pre-existing gap unrelated to #657). Before the #657 fix, this
+			// suite exercised the `has`/stopBy semantics via the JavaScript-
+			// tagged `nested-ternary-js` twin cross-firing on a .ts sample file —
+			// exactly the double-firing bug #657 closes. Test against a real
+			// .js sample instead so `nested-ternary-js` fires for the RIGHT
+			// reason (its own language match, not a superset-grammar leak).
 			it("flags a chained ternary", async () => {
-				expect(await rulesFiredOn("const x = a ? b : c ? d : e;\n")).toContain(
-					"nested-ternary-js",
-				);
+				expect(
+					await rulesFiredOn(
+						"const x = a ? b : c ? d : e;\n",
+						{},
+						"sample.js",
+					),
+				).toContain("nested-ternary-js");
 			});
 			it("flags a parenthesized nested ternary (needs stopBy: end)", async () => {
 				expect(
-					await rulesFiredOn("const x = a ? (b ? c : d) : e;\n"),
+					await rulesFiredOn(
+						"const x = a ? (b ? c : d) : e;\n",
+						{},
+						"sample.js",
+					),
 				).toContain("nested-ternary-js");
 			});
 			it("does NOT flag a single ternary (the has self-match bug)", async () => {
-				expect(await rulesFiredOn("const x = a ? b : c;\n")).not.toContain(
-					"nested-ternary-js",
-				);
+				expect(
+					await rulesFiredOn("const x = a ? b : c;\n", {}, "sample.js"),
+				).not.toContain("nested-ternary-js");
 			});
 		});
 

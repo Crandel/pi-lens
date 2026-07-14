@@ -1,5 +1,5 @@
 id: jwt-no-verify-js
-language: TypeScript
+language: JavaScript
 message: "Unsafe JWT operation — verification is bypassed"
 severity: error
 note: |

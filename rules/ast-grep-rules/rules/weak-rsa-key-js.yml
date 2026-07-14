@@ -1,5 +1,5 @@
 id: weak-rsa-key-js
-language: TypeScript
+language: JavaScript
 message: "Weak RSA key size — use at least 2048 bits"
 severity: error
 note: |

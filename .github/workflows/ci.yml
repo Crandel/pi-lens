@@ -45,6 +45,13 @@ jobs:
       - name: TypeScript lint
         run: npm run lint
 
+      # Catches accidental duplicate ast-grep rule bodies across language
+      # tags (#657) — e.g. a `-js` twin whose language tag never got updated
+      # off its copy-pasted `TypeScript` value, so both rules always fired
+      # under the SAME language and the twin's JS coverage was silently dead.
+      - name: ast-grep rule pair audit
+        run: npm run audit:astgrep-rule-pairs
+
   test:
     name: Unit tests
     runs-on: ubuntu-latest

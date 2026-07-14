@@ -136,6 +136,35 @@ export function canHandle(filePath: string): boolean {
 	return SUPPORTED_EXTS.includes(path.extname(filePath).toLowerCase());
 }
 
+/**
+ * The TypeScript grammar is a syntactic superset of JavaScript, so a
+ * `JavaScript`-tagged rule using generic node kinds (`variable_declarator`,
+ * `assignment_expression`, …) still matches against a parsed `.ts`/`.tsx`
+ * root — and vice versa isn't an issue since JS files never parse
+ * TS-only syntax, but a `TypeScript`-tagged rule with a plain-JS-compatible
+ * body would equally double-fire alongside a `JavaScript` twin on a `.ts`
+ * file. Without this, `language:` reads as a real filter but isn't one for
+ * ts↔js pairs, so twin rules sharing a base name (e.g. `hardcoded-url` /
+ * `hardcoded-url-js`) both match the same construct in the SAME runner
+ * invocation (#657). Returns undefined for extensions this scoping doesn't
+ * apply to (css/html), where no filtering is added.
+ */
+export function ruleLanguageForFile(
+	filePath: string,
+): "typescript" | "javascript" | undefined {
+	const ext = path.extname(filePath).toLowerCase();
+	switch (ext) {
+		case ".ts":
+		case ".tsx":
+			return "typescript";
+		case ".js":
+		case ".jsx":
+			return "javascript";
+		default:
+			return undefined;
+	}
+}
+
 export function getLang(
 	filePath: string,
 	sgModule: AstGrepNapi,
@@ -237,6 +266,7 @@ export function evaluateAstGrepRules(
 	const diagnostics: Diagnostic[] = [];
 	const seenRuleIds = new Set<string>();
 	const suppressLinterOverlap = kind === "jsts" && hasEslintConfig(cwd);
+	const fileLang = ruleLanguageForFile(filePath);
 
 	// Shared with the raw sgconfig materializer so both surfaces walk the same
 	// workspace-rooted sources in the same precedence order.
@@ -299,6 +329,12 @@ export function evaluateAstGrepRules(
 
 			const lang = rule.language?.toLowerCase();
 			if (lang && lang !== "typescript" && lang !== "javascript") {
+				continue;
+			}
+			// Scope TypeScript/JavaScript-tagged rules to the file's actual
+			// grammar (#657) — otherwise a `-js` twin sharing generic node
+			// kinds with its TS sibling double-fires on every .ts file.
+			if (lang && fileLang && lang !== fileLang) {
 				continue;
 			}
 

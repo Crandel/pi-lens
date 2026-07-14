@@ -133,10 +133,11 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `use-of-sha1-java` | warning | CodeRabbit | Detected SHA1 hash algorithm which is considered insecure. SHA1 is not collision resistant and is therefore not suitable as a cryptographic… |
 | `weak-ssl-context-java` | warning | CodeRabbit | 'An insecure SSL context was detected. TLS versions 1.0, 1.1, and all SSL versions are considered weak encryption and are deprecated. Use S… |
 
-### JavaScript (69)
+### JavaScript (76)
 
 | Rule | Severity | Source | Description |
 |---|---|---|---|
+| `array-callback-return-js` | error | pi-lens | return statements must be enforced in callbacks of array methods |
 | `consistent-existence-index-check-js` | warning | pi-lens | Use .includes() instead of .indexOf() for existence checks |
 | `detect-angular-sce-disabled-javascript` | warning | CodeRabbit | $sceProvider is set to false. Disabling Strict Contextual escaping (SCE) in an AngularJS application could provide additional attack surfac… |
 | `enforce-node-protocol-js` | warning | pi-lens | Use node: prefix for Node.js built-in module imports |
@@ -144,6 +145,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `express-session-hardcoded-secret-javascript` | warning | CodeRabbit | A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and use… |
 | `hardcoded-url-js` | warning | pi-lens | Hardcoded URL — use config or environment variable |
 | `incomplete-string-escaping-js` | warning | pi-lens | Regex replace escapes with a backslash before escaping backslashes |
+| `jwt-no-verify-js` | error | pi-lens | Unsafe JWT operation — verification is bypassed |
 | `jwt-simple-noverify-javascript` | warning | CodeRabbit | "Detected the decoding of a JWT token without a verify step. JWT tokens must be verified before use, otherwise the token's integrity is unk… |
 | `nested-ternary-js` | warning | pi-lens | Nested ternary expressions are hard to read — use if/else or switch |
 | `no-absolute-path-import-js` | warning | pi-lens | Absolute import path is not portable — use a relative or aliased path |
@@ -163,12 +165,15 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `no-constant-condition-js` | error | pi-lens | Unexpected constant condition |
 | `no-discarded-error-js` | error | pi-lens | new Error() result discarded — add 'throw' or assign to a variable |
 | `no-dupe-keys-js` | error | pi-lens | Disallow duplicate keys in object literals |
+| `no-extra-boolean-cast-js` | warning | pi-lens | Unnecessary double negation '!!' — the value is already coerced in this context |
 | `no-flag-argument-js` | warning | pi-lens | Flag argument — a boolean parameter the function branches on. Split into two functions. |
 | `no-global-eval-js` | error | pi-lens | Avoid dynamic code execution (eval/Function/string timers) |
+| `no-implied-eval-js` | error | pi-lens | Avoid implied eval via setTimeout/setInterval with string arguments |
 | `no-inner-html-js` | error | pi-lens | Avoid innerHTML/outerHTML — use textContent or a sanitizer to prevent XSS |
 | `no-insecure-randomness-js` | error | pi-lens | Math.random() used for security-sensitive operations — use crypto.getRandomValues() instead |
 | `no-instanceof-array-js` | warning | pi-lens | Use Array.isArray() instead of instanceof Array — fails across realm boundaries |
 | `no-instanceof-builtins-js` | error | pi-lens | Do not use instanceof with primitive wrapper types — use typeof instead |
+| `no-javascript-url-js` | error | pi-lens | Avoid javascript: URLs — they can execute arbitrary code |
 | `no-nan-comparison-js` | error | pi-lens | x === NaN is always false — use Number.isNaN(x) |
 | `no-negation-in-equality-check-js` | error | pi-lens | Negation before equality check — !a === b evaluates as (!a) === b, not !(a === b) |
 | `no-new-symbol-js` | error | pi-lens | Symbol cannot be called as a constructor. |
@@ -176,6 +181,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `no-open-redirect-js` | error | pi-lens | Potential open redirect vulnerability — validate redirect URLs |
 | `no-prototype-builtins-js` | error | pi-lens | Use Object.hasOwn() or Object.prototype.hasOwnProperty.call() instead of calling methods directly on the object |
 | `no-single-promise-in-promise-methods-js` | warning | pi-lens | Promise.all/race with a single promise is unnecessary — await it directly |
+| `no-sql-in-code-js` | error | pi-lens | Raw SQL string in code — use query builder or ORM |
 | `no-throw-string-js` | error | pi-lens | Throw Error objects, not strings |
 | `no-typeof-undefined-js` | hint | pi-lens | Use === undefined instead of typeof x === 'undefined' |
 | `no-unimplemented-stub-js` | warning | pi-lens | Unimplemented stub — function was scaffolded but never completed |
@@ -206,6 +212,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `strict-inequality-js` | warning | pi-lens | Use !== instead of != |
 | `throw-new-error-js` | error | pi-lens | Use new Error() not Error() — explicit construction is clearer |
 | `unchecked-throwing-call-js` | error | pi-lens | $CALL without try/catch — throws on invalid input |
+| `weak-rsa-key-js` | error | pi-lens | Weak RSA key size — use at least 2048 bits |
 
 ### Kotlin (5)
 
@@ -394,12 +401,11 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `redundant-usestate-type` | info | pi-lens | `useState<TYPE>(...)` where TYPE is a primitive redundant — TS can infer it from the initial value |
 | `unnecessary-react-hook` | warning | pi-lens | Function with a `use*` name does not call any other React hook — rename to a plain function |
 
-### TypeScript (124)
+### TypeScript (117)
 
 | Rule | Severity | Source | Description |
 |---|---|---|---|
 | `array-callback-return` | error | pi-lens | return statements must be enforced in callbacks of array methods |
-| `array-callback-return-js` | error | pi-lens | return statements must be enforced in callbacks of array methods |
 | `consistent-existence-index-check` | warning | pi-lens | Use .includes() instead of .indexOf() for existence checks |
 | `detect-angular-sce-disabled-typescript` | warning | CodeRabbit | $sceProvider is set to false. Disabling Strict Contextual escaping (SCE) in an AngularJS application could provide additional attack surfac… |
 | `enforce-node-protocol` | warning | pi-lens | Use node: prefix for Node.js built-in module imports |
@@ -408,7 +414,6 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `hardcoded-url` | warning | pi-lens | Hardcoded URL — use config or environment variable |
 | `incomplete-string-escaping` | warning | pi-lens | Regex replace escapes with a backslash before escaping backslashes |
 | `jwt-no-verify` | error | pi-lens | Unsafe JWT operation — verification is bypassed |
-| `jwt-no-verify-js` | error | pi-lens | Unsafe JWT operation — verification is bypassed |
 | `jwt-simple-noverify-typescript` | warning | CodeRabbit | "Detected the decoding of a JWT token without a verify step. JWT tokens must be verified before use, otherwise the token's integrity is unk… |
 | `large-class` | hint | pi-lens | Large class detected — consider splitting responsibilities |
 | `long-parameter-list` | hint | pi-lens | Function has many parameters — consider using an options object |
@@ -434,16 +439,13 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `no-dupe-class-members` | error | pi-lens | Duplicate class member '$NAME'. |
 | `no-dupe-keys` | error | pi-lens | Disallow duplicate keys in object literals |
 | `no-extra-boolean-cast` | warning | pi-lens | Unnecessary double negation '!!' — the value is already coerced in this context |
-| `no-extra-boolean-cast-js` | warning | pi-lens | Unnecessary double negation '!!' — the value is already coerced in this context |
 | `no-flag-argument` | warning | pi-lens | Flag argument — a boolean parameter the function branches on. Split into two functions. |
 | `no-implied-eval` | error | pi-lens | Avoid implied eval via setTimeout/setInterval with string arguments |
-| `no-implied-eval-js` | error | pi-lens | Avoid implied eval via setTimeout/setInterval with string arguments |
 | `no-inner-html` | error | pi-lens | Avoid innerHTML/outerHTML — use textContent or a sanitizer to prevent XSS |
 | `no-insecure-randomness` | error | pi-lens | Math.random() used for security-sensitive operations — use crypto.getRandomValues() instead |
 | `no-instanceof-array` | warning | pi-lens | Use Array.isArray() instead of instanceof Array — fails across realm boundaries |
 | `no-instanceof-builtins` | error | pi-lens | Do not use instanceof with primitive wrapper types — use typeof instead |
 | `no-javascript-url` | error | pi-lens | Avoid javascript: URLs — they can execute arbitrary code |
-| `no-javascript-url-js` | error | pi-lens | Avoid javascript: URLs — they can execute arbitrary code |
 | `no-mutable-export` | warning | pi-lens | Exported 'let'/'var' is mutable — importers observe it change, creating hidden shared state; export 'const' |
 | `no-nan-comparison` | error | pi-lens | x === NaN is always false — use Number.isNaN(x) |
 | `no-negation-in-equality-check` | error | pi-lens | Negation before equality check — !a === b evaluates as (!a) === b, not !(a === b) |
@@ -459,7 +461,6 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `no-single-promise-in-promise-methods` | warning | pi-lens | Promise.all/race with a single promise is unnecessary — await it directly |
 | `no-sort-without-comparator` | warning | pi-lens | .sort()/.toSorted() without a compare function sorts by string order — numbers sort wrong (e.g. [10,9,1] becomes [1,10,9]) |
 | `no-sql-in-code` | error | pi-lens | Raw SQL string in code — use query builder or ORM |
-| `no-sql-in-code-js` | error | pi-lens | Raw SQL string in code — use query builder or ORM |
 | `no-throw-string` | error | pi-lens | Throw Error objects, not strings |
 | `no-typeof-undefined` | hint | pi-lens | Use === undefined instead of typeof x === 'undefined' |
 | `no-unimplemented-stub` | warning | pi-lens | Unimplemented stub — function was scaffolded but never completed |
@@ -521,7 +522,6 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `ts-while-index-length` | warning | pi-lens | while loop with index < length - consider for-of or array methods |
 | `unchecked-throwing-call` | error | pi-lens | $CALL without try/catch — throws on invalid input |
 | `weak-rsa-key` | error | pi-lens | Weak RSA key size — use at least 2048 bits |
-| `weak-rsa-key-js` | error | pi-lens | Weak RSA key size — use at least 2048 bits |
 
 ## Disabled rules
 
