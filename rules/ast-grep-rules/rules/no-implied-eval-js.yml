@@ -1,5 +1,5 @@
 id: no-implied-eval-js
-language: TypeScript
+language: JavaScript
 message: "Avoid implied eval via setTimeout/setInterval with string arguments"
 severity: error
 note: |

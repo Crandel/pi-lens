@@ -1,7 +1,7 @@
 id: array-callback-return-js
 message: return statements must be enforced in callbacks of array methods
 severity: error
-language: TypeScript
+language: JavaScript
 rule:
   all:
     - any:

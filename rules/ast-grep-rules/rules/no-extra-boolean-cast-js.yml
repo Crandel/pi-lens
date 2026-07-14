@@ -1,5 +1,5 @@
 id: no-extra-boolean-cast-js
-language: TypeScript
+language: JavaScript
 message: >-
   Unnecessary double negation '!!' — the value is already coerced in
   this context

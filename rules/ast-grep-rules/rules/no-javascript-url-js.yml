@@ -1,5 +1,5 @@
 id: no-javascript-url-js
-language: TypeScript
+language: JavaScript
 message: "Avoid javascript: URLs — they can execute arbitrary code"
 severity: error
 note: |

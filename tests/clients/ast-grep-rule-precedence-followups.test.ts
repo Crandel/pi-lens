@@ -504,6 +504,120 @@ describe("project rule precedence follow-ups", { timeout: HEAVY_IO_TIMEOUT_MS },
 		);
 	});
 
+	it(
+		"never double-fires a JavaScript/TypeScript rule pair sharing generic grammar-superset node kinds on one file (#657)",
+		() => {
+			// TypeScript's grammar is a syntactic superset of JavaScript, so a
+			// generic node kind (variable_declarator/assignment_expression) shared
+			// by a TS-tagged and a JS-tagged rule body used to fire BOTH rules on
+			// the SAME .ts file — the real-world manifestation was
+			// hardcoded-url/hardcoded-url-js both firing on one line of a .ts
+			// file in production dogfooding (issue #657). Reproduce with project
+			// rules (not the bundled twins) so this test pins the runner
+			// behavior, not today's bundled catalog content.
+			const root = makeProject();
+			// pattern-based rules get filtered as "overly broad" by the runner's
+			// own guard, so express the same generic-node-kind shape the real
+			// hardcoded-url pair uses (kind, not pattern) via a raw rule write.
+			const tsRule = path.join(root, PRIMARY_RULES, "shared-kind-ts.yml");
+			fs.mkdirSync(path.dirname(tsRule), { recursive: true });
+			fs.writeFileSync(
+				tsRule,
+				[
+					"id: shared-kind-ts",
+					"language: TypeScript",
+					"severity: warning",
+					"message: ts twin",
+					"rule:",
+					"  kind: variable_declarator",
+					"  regex: 'MARKER'",
+					"",
+				].join("\n"),
+			);
+			const jsRule = path.join(root, PRIMARY_RULES, "shared-kind-js.yml");
+			fs.mkdirSync(path.dirname(jsRule), { recursive: true });
+			fs.writeFileSync(
+				jsRule,
+				[
+					"id: shared-kind-js",
+					"language: JavaScript",
+					"severity: warning",
+					"message: js twin",
+					"rule:",
+					"  kind: variable_declarator",
+					"  regex: 'MARKER'",
+					"",
+				].join("\n"),
+			);
+
+			const tsDiagnostics = napiDiagnostics(
+				root,
+				path.join(root, "input.ts"),
+				'const url = "MARKER";\n',
+				"typescript",
+			);
+			expect(
+				tsDiagnostics.filter((d) => d.rule === "shared-kind-ts"),
+			).toHaveLength(1);
+			expect(
+				tsDiagnostics.filter((d) => d.rule === "shared-kind-js"),
+			).toHaveLength(0);
+
+			const jsDiagnostics = napiDiagnostics(
+				root,
+				path.join(root, "input.js"),
+				'const url = "MARKER";\n',
+				"javascript",
+			);
+			expect(
+				jsDiagnostics.filter((d) => d.rule === "shared-kind-js"),
+			).toHaveLength(1);
+			expect(
+				jsDiagnostics.filter((d) => d.rule === "shared-kind-ts"),
+			).toHaveLength(0);
+		},
+	);
+
+	it(
+		"the bundled hardcoded-url/hardcoded-url-js twins fire exactly once per file, per grammar (#657)",
+		() => {
+			// Guards the exact production report: a real .ts file used to trip
+			// BOTH hardcoded-url (TypeScript) and hardcoded-url-js (JavaScript)
+			// in one runner invocation because their rule bodies are
+			// intentional twins (see skills/pi-lens-write-ast-grep-rule) sharing
+			// generic node kinds. The twin pair itself is correct — CLI/LSP
+			// dispatch needs both for real per-grammar .js coverage — so the fix
+			// lives in the NAPI runner's per-file language scoping, not in
+			// deleting either rule file.
+			const root = makeProject();
+			const tsDiagnostics = napiDiagnostics(
+				root,
+				path.join(root, "input.ts"),
+				'const apiUrl = "https://api.example.com";\n',
+				"typescript",
+			);
+			expect(
+				tsDiagnostics.filter((d) => d.rule === "hardcoded-url"),
+			).toHaveLength(1);
+			expect(
+				tsDiagnostics.filter((d) => d.rule === "hardcoded-url-js"),
+			).toHaveLength(0);
+
+			const jsDiagnostics = napiDiagnostics(
+				root,
+				path.join(root, "input.js"),
+				'const apiUrl = "https://api.example.com";\n',
+				"javascript",
+			);
+			expect(
+				jsDiagnostics.filter((d) => d.rule === "hardcoded-url-js"),
+			).toHaveLength(1);
+			expect(
+				jsDiagnostics.filter((d) => d.rule === "hardcoded-url"),
+			).toHaveLength(0);
+		},
+	);
+
 	cliIt("keeps raw sg and NAPI blocking semantics aligned for same-layer duplicates", () => {
 		const root = makeProject();
 		writeRule(root, PRIMARY_RULES, "nested/a.yml", {
