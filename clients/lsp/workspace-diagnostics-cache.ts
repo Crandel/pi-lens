@@ -170,7 +170,9 @@ export function buildScopeKey(
 	clientScope: "all" | "primary",
 	excludeServerIds?: readonly string[],
 ): string {
-	const excluded = excludeServerIds ? [...excludeServerIds].sort() : [];
+	const excluded = excludeServerIds
+		? [...excludeServerIds].sort((a, b) => a.localeCompare(b))
+		: [];
 	return `${clientScope}|${excluded.join(",")}`;
 }
 
