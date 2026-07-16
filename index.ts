@@ -94,6 +94,7 @@ import {
 	type ActivatableToolInfo,
 } from "./tools/activate-tools.js";
 import { createLensDiagnosticsTool } from "./tools/lens-diagnostics.js";
+import { createLensDiagnosticMarkTool } from "./tools/lens-diagnostic-mark.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
 import { createAstGrepOutlineTool } from "./tools/ast-grep-outline.js";
@@ -946,6 +947,7 @@ export default function (pi: ExtensionAPI) {
 		createAstGrepOutlineTool(astGrepClient),
 		createAstGrepDumpTool(astGrepClient),
 		createLspNavigationTool((name) => getLensFlag(name)),
+		createLensDiagnosticMarkTool(() => runtime.projectRoot),
 	];
 	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = [
 		{
@@ -971,6 +973,11 @@ export default function (pi: ExtensionAPI) {
 			name: "lsp_navigation",
 			summary:
 				"IDE-style LSP navigation: definition, references, implementation, rename, call hierarchy.",
+		},
+		{
+			name: "lens_diagnostic_mark",
+			summary:
+				"Record a disposition for a diagnostic: false-positive / suppress (inline ignore comment) / defer (this session) / flagged (to fix).",
 		},
 	];
 	const activateToolsTool = createActivateToolsTool(
