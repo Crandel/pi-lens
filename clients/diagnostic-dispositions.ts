@@ -57,6 +57,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { logDispositionEvent } from "./disposition-logger.js";
+import { publishDisposition } from "./disposition-publish.js";
 import { getProjectDataDir } from "./file-utils.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { lineContentHash } from "./read-guard.js";
@@ -264,10 +266,57 @@ export function _resetStateCacheForTests(): void {
  * than "anchor args" in hand. */
 export type DispositionMarkTarget = DispositionAnchorArgs;
 
+/** Fire-and-forget mark telemetry (see markDisposition's doc): the NDJSON log
+ * entry (project-relative path — rule-tuning data, not machine layout) and
+ * the bus event (absolute normalized path — in-process consumers navigate).
+ * Neither can throw into the mark path; both are already internally
+ * fail-safe, but the try/catch keeps a future regression in either from
+ * breaking a mark. */
+function emitMarkTelemetry(
+	cwd: string,
+	target: DispositionMarkTarget,
+	disposition: Disposition,
+	anchor: string,
+	reason: string | undefined,
+	existing: DispositionEntry | undefined,
+): void {
+	try {
+		logDispositionEvent({
+			event: "mark",
+			disposition,
+			tool: target.tool,
+			rule: target.rule,
+			filePath: relativeFile(target.filePath, cwd),
+			line: target.line,
+			reason,
+			anchor,
+			previousDisposition: existing?.disposition,
+		});
+		publishDisposition({
+			cwd,
+			filePath: target.filePath,
+			disposition,
+			tool: target.tool,
+			rule: target.rule,
+			line: target.line,
+			anchor,
+			reason,
+		});
+	} catch {
+		// never let telemetry break a mark
+	}
+}
+
 /**
  * Record a disposition. Picks the anchor flavor per-disposition (see module
  * doc): strict for false-positive, weak for everything else. Returns the
  * anchor actually used, so callers (the mark tool) can report/verify it.
+ *
+ * This is THE single choke point for mark telemetry — the NDJSON log
+ * (disposition-logger.ts, #181's FP-rule-tuning signal) and the
+ * `pilens:diagnostic:disposition` bus event (disposition-publish.ts) both
+ * hang off it, so the agent tool and any future UI caller are covered without
+ * per-caller wiring.
  */
 export function markDisposition(
 	cwd: string,
@@ -279,6 +328,11 @@ export function markDisposition(
 		disposition === "false-positive"
 			? computeStrictAnchor(target)
 			: computeWeakAnchor(target);
+	// Captured for BOTH branches: a defer never writes the store, but a store
+	// entry can already exist at the same weak anchor (a prior flagged/suppress
+	// mark) — the log should record what this mark shadowed either way.
+	const existing = readState(cwd).dispositions?.[anchor];
+	emitMarkTelemetry(cwd, target, disposition, anchor, reason, existing);
 
 	if (disposition === "defer") {
 		deferredThisSession.add(anchor);
@@ -288,7 +342,6 @@ export function markDisposition(
 	const state = readState(cwd);
 	state.dispositions ??= {};
 	const now = new Date().toISOString();
-	const existing = state.dispositions[anchor];
 	const capturesFixContext = disposition === "flagged";
 	const lineText = capturesFixContext
 		? (target.content?.split(/\r?\n/)[
