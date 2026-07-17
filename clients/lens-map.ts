@@ -640,6 +640,21 @@ export function renderMapHtml(payload: LensMapPayload): string {
   .edge { stroke: var(--line-strong); stroke-opacity: 0.55; transition: opacity 120ms ease, stroke 120ms ease; }
   .edge.active { stroke: var(--accent); stroke-opacity: 0.9; }
   .dimmed { opacity: 0.12; }
+  .faded { opacity: 0.15; }
+  .edge.edge-hidden { display: none; }
+  .node.no-label text { display: none; }
+  .node.search-hit .node-circle { stroke: var(--accent); stroke-width: 2.5px; }
+  .node.selected .node-circle { stroke: var(--warn); stroke-width: 2.5px; }
+  .node.trace-hit .node-circle { stroke: var(--accent); stroke-width: 3px; }
+  #controls { position: absolute; top: 12px; left: 12px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; max-width: min(560px, calc(100% - 24px)); padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 6px 18px rgba(0,0,0,0.12); font-size: 0.8rem; color: var(--muted); }
+  #search-input { width: 170px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-recessed); color: var(--fg); font-family: var(--font-mono); font-size: 0.8rem; }
+  #weight-label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  #weight-slider { width: 100px; }
+  #trace-toggle { border: 1px solid var(--line); border-radius: 6px; background: var(--panel-recessed); color: var(--fg); padding: 4px 10px; cursor: pointer; font-size: 0.78rem; }
+  #trace-toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+  #help-note { flex-basis: 100%; font-size: 0.72rem; line-height: 1.4; }
+  #trace-status { margin: 0 0 8px; color: var(--warn); }
+  #trace-status[hidden] { display: none; }
   #detail-panel { position: fixed; right: 16px; bottom: 16px; width: 300px; max-width: calc(100% - 32px); border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 12px 34px rgba(0,0,0,0.18); padding: 14px 16px; font-size: 0.85rem; }
   #detail-panel[hidden] { display: none; }
   #detail-panel h2 { margin: 0 0 8px; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
@@ -670,10 +685,20 @@ export function renderMapHtml(payload: LensMapPayload): string {
   <p id="truncation-note" hidden></p>
 </header>
 <div id="stage">
+  <div id="controls">
+    <input id="search-input" type="search" placeholder="search files" autocomplete="off" spellcheck="false" aria-label="Search files" />
+    <label id="weight-label">min edge weight
+      <input id="weight-slider" type="range" min="1" max="1" step="1" value="1" />
+      <span id="weight-value">1</span> (<span id="visible-edges">0</span> edges)
+    </label>
+    <button id="trace-toggle" type="button" aria-pressed="false">trace path</button>
+    <span id="help-note">hover: neighbors &middot; click: select + details &middot; shift+click a 2nd node (or arm &quot;trace path&quot;, then click another node): trace their connection &middot; Esc or background click: clear</span>
+  </div>
   <svg id="graph-svg" xmlns="http://www.w3.org/2000/svg"></svg>
   <div id="detail-panel" hidden>
     <button id="detail-close" type="button" aria-label="Close">&times;</button>
     <h2>File</h2>
+    <p id="trace-status" hidden></p>
     <span id="detail-path"></span>
     <dl>
       <dt>Symbols</dt><dd id="detail-symbols"></dd>
@@ -766,6 +791,8 @@ export function renderMapHtml(payload: LensMapPayload): string {
     if (neighbors[e.to]) neighbors[e.to][e.from] = true;
   });
 
+  // Edge records keep from/to/weight alongside the element so the single
+  // visibility pass below can filter without re-reading DOM attributes.
   var edgeEls = [];
   edges.forEach(function (e) {
     var a = nodeById[e.from];
@@ -778,10 +805,8 @@ export function renderMapHtml(payload: LensMapPayload): string {
     line.setAttribute("y2", String(b.y));
     line.setAttribute("class", "edge");
     line.setAttribute("stroke-width", String(Math.min(4, 0.6 + Math.log2(e.weight + 1))));
-    line.dataset.from = e.from;
-    line.dataset.to = e.to;
     edgeGroup.appendChild(line);
-    edgeEls.push(line);
+    edgeEls.push({ el: line, from: e.from, to: e.to, weight: e.weight || 1 });
   });
 
   // Node fill: neutral brand-blue intensity scale by transitive dependents
@@ -801,6 +826,18 @@ export function renderMapHtml(payload: LensMapPayload): string {
 
   var maxDependents = nodes.reduce(function (m, n) { return Math.max(m, n.dependents || 0); }, 0) || 1;
   var minRadius = 5, maxRadius = 22;
+
+  // Label culling: a label renders only when (zoomed in past LABEL_ZOOM) OR
+  // (the node is in the top-25 by transitive dependents — the structurally
+  // load-bearing files a viewer wants named at any zoom). Safe on tiny
+  // graphs: slice(0, 25) of a 3-node list is just those 3.
+  var LABEL_ZOOM = 1.5;
+  var labelAlways = {};
+  nodes.slice()
+    .sort(function (a, b) { return (b.dependents || 0) - (a.dependents || 0); })
+    .slice(0, 25)
+    .forEach(function (n) { labelAlways[n.id] = true; });
+
   var nodeEls = {};
   nodes.forEach(function (n) {
     var g = document.createElementNS(svgNS, "g");
@@ -821,29 +858,184 @@ export function renderMapHtml(payload: LensMapPayload): string {
     title.textContent = n.path + " — " + n.symbolCount + " symbols, " + n.dependents + " dependents";
     g.appendChild(title);
 
-    g.addEventListener("mouseenter", function () { highlight(n.id); });
-    g.addEventListener("mouseleave", clearHighlight);
-    g.addEventListener("click", function (ev) { ev.stopPropagation(); showDetail(n); });
+    // Repo-derived string → textContent only, never markup (the #504-spike
+    // discipline): the label is the path's last segment.
+    var label = document.createElementNS(svgNS, "text");
+    label.setAttribute("y", String(radius + 10));
+    label.setAttribute("text-anchor", "middle");
+    label.textContent = (n.path || "").split("/").pop() || n.path;
+    g.appendChild(label);
+
+    g.addEventListener("mouseenter", function () { hoverId = n.id; recomputeVisibility(); });
+    g.addEventListener("mouseleave", function () { hoverId = null; recomputeVisibility(); });
+    g.addEventListener("click", function (ev) { ev.stopPropagation(); onNodeClick(n, ev); });
 
     nodeGroup.appendChild(g);
     nodeEls[n.id] = g;
   });
 
-  function highlight(id) {
-    var related = neighbors[id] || {};
-    Object.keys(nodeEls).forEach(function (nid) {
-      var isRelated = nid === id || related[nid];
-      nodeEls[nid].classList.toggle("dimmed", !isRelated);
+  // ── Interaction state — composed by ONE visibility pass ───────────────────
+  var hoverId = null;
+  var searchTerm = "";
+  var weightThreshold = 1;
+  var selectedId = null;
+  var traceArmed = false;
+  var trace = null; // { found, nodeSet, edgeKeys } while a trace is displayed
+
+  // Undirected edge identity (order-independent): NUL can never appear in a
+  // file path, same idiom as the aggregation layer.
+  function edgeKey(a, b) { return a < b ? a + "\\u0000" + b : b + "\\u0000" + a; }
+
+  // The four interactions (search, weight filter, trace, label culling) all
+  // funnel through this single pass instead of four fighting inline style
+  // writers. Precedence for node/edge OPACITY: trace active > search filter
+  // > weight-isolation fade (hover only narrows within what the winning
+  // filter allows). The weight filter is a DISPLAY axis — edges below the
+  // threshold hide entirely — with one exception: a traced-path edge always
+  // shows, or the trace visual would have holes. Label culling only ever
+  // affects labels, never circles or edges.
+  function recomputeVisibility() {
+    var searching = searchTerm.length > 0;
+    var matches = {};
+    if (searching) {
+      nodes.forEach(function (n) {
+        if ((n.path || "").toLowerCase().indexOf(searchTerm) !== -1) matches[n.id] = true;
+      });
+    }
+
+    var tracing = trace !== null && trace.found;
+    var visibleEdgeCount = 0;
+    var touchedByVisibleEdge = {};
+    edgeEls.forEach(function (e) {
+      var passesWeight = e.weight >= weightThreshold;
+      if (passesWeight) {
+        visibleEdgeCount += 1;
+        touchedByVisibleEdge[e.from] = true;
+        touchedByVisibleEdge[e.to] = true;
+      }
+      var onTracePath = tracing && trace.edgeKeys[edgeKey(e.from, e.to)];
+      var dimmed, active;
+      if (trace !== null) {
+        active = !!onTracePath;
+        dimmed = !onTracePath;
+      } else {
+        active = hoverId !== null && (e.from === hoverId || e.to === hoverId);
+        if (searching) {
+          dimmed = !(matches[e.from] && matches[e.to]);
+          if (!dimmed && hoverId !== null) dimmed = !active;
+        } else {
+          dimmed = hoverId !== null ? !active : false;
+        }
+      }
+      e.el.classList.toggle("edge-hidden", !passesWeight && !onTracePath);
+      e.el.classList.toggle("active", !!active);
+      e.el.classList.toggle("dimmed", dimmed);
     });
-    edgeEls.forEach(function (line) {
-      var isRelated = line.dataset.from === id || line.dataset.to === id;
-      line.classList.toggle("active", isRelated);
-      line.classList.toggle("dimmed", !isRelated);
+    setText("weight-value", String(weightThreshold));
+    setText("visible-edges", String(visibleEdgeCount));
+
+    nodes.forEach(function (n) {
+      var el = nodeEls[n.id];
+      if (!el) return;
+      var dimmed;
+      var faded = false;
+      if (trace !== null) {
+        dimmed = !(tracing && trace.nodeSet[n.id]);
+      } else if (searching) {
+        dimmed = !matches[n.id];
+        if (!dimmed && hoverId !== null) {
+          dimmed = !(n.id === hoverId || (neighbors[hoverId] || {})[n.id]);
+        }
+      } else {
+        dimmed = hoverId !== null
+          ? !(n.id === hoverId || (neighbors[hoverId] || {})[n.id])
+          : false;
+        // Weight-isolation fade — lowest precedence, and a fade rather than
+        // a removal: layout position stability matters more than reclaiming
+        // the pixels.
+        if (!dimmed && weightThreshold > 1 && !touchedByVisibleEdge[n.id]) faded = true;
+      }
+      el.classList.toggle("dimmed", dimmed);
+      el.classList.toggle("faded", faded);
+      el.classList.toggle("search-hit", searching && trace === null && !!matches[n.id]);
+      el.classList.toggle("selected", n.id === selectedId);
+      el.classList.toggle("trace-hit", tracing && !!trace.nodeSet[n.id]);
+      var labelOn = !dimmed && !faded && (view.scale > LABEL_ZOOM || !!labelAlways[n.id]);
+      el.classList.toggle("no-label", !labelOn);
     });
   }
-  function clearHighlight() {
-    Object.keys(nodeEls).forEach(function (nid) { nodeEls[nid].classList.remove("dimmed"); });
-    edgeEls.forEach(function (line) { line.classList.remove("active", "dimmed"); });
+
+  // Path tracing: BFS treating edges as UNDIRECTED — for "how are these two
+  // files related", connectivity matters more than dependency direction
+  // (whether A imports B or B imports A, a human tracing the map wants the
+  // chain shown either way).
+  function runTrace(fromId, toId) {
+    var parent = {};
+    parent[fromId] = fromId;
+    var queue = [fromId];
+    var found = false;
+    while (queue.length > 0 && !found) {
+      var next = [];
+      for (var i = 0; i < queue.length && !found; i += 1) {
+        var adj = neighbors[queue[i]] || {};
+        for (var nid in adj) {
+          if (parent[nid] !== undefined) continue;
+          parent[nid] = queue[i];
+          if (nid === toId) { found = true; break; }
+          next.push(nid);
+        }
+      }
+      queue = next;
+    }
+    var nodeSet = {};
+    var edgeKeys = {};
+    var hops = 0;
+    if (found) {
+      var cur = toId;
+      nodeSet[cur] = true;
+      while (cur !== fromId) {
+        var p = parent[cur];
+        edgeKeys[edgeKey(p, cur)] = true;
+        nodeSet[p] = true;
+        cur = p;
+        hops += 1;
+      }
+    }
+    trace = { found: found, nodeSet: nodeSet, edgeKeys: edgeKeys };
+    var status = document.getElementById("trace-status");
+    if (status) {
+      status.textContent = found
+        ? "Path: " + (hops + 1) + " files, " + hops + " hops."
+        : "No path between the selected files.";
+      status.hidden = false;
+    }
+    detailPanel.hidden = false;
+  }
+
+  function hideTraceStatus() {
+    var status = document.getElementById("trace-status");
+    if (status) status.hidden = true;
+  }
+
+  function onNodeClick(n, ev) {
+    var wantsTrace = (ev.shiftKey || traceArmed) && selectedId !== null && selectedId !== n.id;
+    if (wantsTrace) {
+      runTrace(selectedId, n.id);
+    } else {
+      trace = null;
+      hideTraceStatus();
+      selectedId = n.id;
+      showDetail(n);
+    }
+    recomputeVisibility();
+  }
+
+  function clearTraceAndSelection() {
+    trace = null;
+    selectedId = null;
+    hideTraceStatus();
+    detailPanel.hidden = true;
+    recomputeVisibility();
   }
 
   var detailPanel = document.getElementById("detail-panel");
@@ -858,7 +1050,37 @@ export function renderMapHtml(payload: LensMapPayload): string {
   document.getElementById("detail-close").addEventListener("click", function () {
     detailPanel.hidden = true;
   });
-  svg.addEventListener("click", function () { detailPanel.hidden = true; });
+  svg.addEventListener("click", clearTraceAndSelection);
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") clearTraceAndSelection();
+  });
+
+  // ── Controls wiring ───────────────────────────────────────────────────────
+  var searchInput = document.getElementById("search-input");
+  if (searchInput) {
+    // No debounce: recomputeVisibility is a single O(nodes+edges) pass and
+    // the map caps at PI_LENS_MAP_MAX_NODES (500 default) — cheap per input.
+    searchInput.addEventListener("input", function () {
+      searchTerm = searchInput.value.trim().toLowerCase();
+      recomputeVisibility();
+    });
+  }
+  var maxWeight = edges.reduce(function (m, e) { return Math.max(m, e.weight || 1); }, 1);
+  var slider = document.getElementById("weight-slider");
+  if (slider) {
+    slider.max = String(maxWeight);
+    slider.addEventListener("input", function () {
+      weightThreshold = Number(slider.value) || 1;
+      recomputeVisibility();
+    });
+  }
+  var traceToggle = document.getElementById("trace-toggle");
+  if (traceToggle) {
+    traceToggle.addEventListener("click", function () {
+      traceArmed = !traceArmed;
+      traceToggle.setAttribute("aria-pressed", traceArmed ? "true" : "false");
+    });
+  }
 
   // Pan (drag background) + zoom (wheel).
   var view = { x: 0, y: 0, scale: 1 };
@@ -887,8 +1109,11 @@ export function renderMapHtml(payload: LensMapPayload): string {
     var delta = ev.deltaY > 0 ? 0.9 : 1.1;
     view.scale = Math.max(0.15, Math.min(6, view.scale * delta));
     applyTransform();
+    // Zoom crossing LABEL_ZOOM changes which labels render.
+    recomputeVisibility();
   }, { passive: false });
   applyTransform();
+  recomputeVisibility();
 })();
 </script>
 </body>

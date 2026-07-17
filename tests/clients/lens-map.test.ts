@@ -511,6 +511,50 @@ describe("renderMapHtml", () => {
 		const html = renderMapHtml(payload());
 		expect(html).not.toMatch(/script-src[^"]*https?:/);
 	});
+
+	// Deep interaction testing (typing in the search box, dragging the slider,
+	// clicking nodes) is deliberately NOT done here — the viewer script targets
+	// a real browser (SVG + pointer events), not jsdom. These assertions pin
+	// the static contract: the controls exist exactly once and the script
+	// composes visibility through the single recomputeVisibility pass.
+	it("renders the four interaction controls exactly once each, wired through one visibility pass", () => {
+		const html = renderMapHtml(payload());
+		for (const id of [
+			"search-input",
+			"weight-slider",
+			"trace-toggle",
+			"trace-status",
+		]) {
+			expect(html.split(`id="${id}"`).length - 1).toBe(1);
+		}
+		expect(html).toContain("recomputeVisibility");
+	});
+
+	it("emits a syntactically valid viewer script", () => {
+		const html = renderMapHtml(payload());
+		const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+		expect(scripts).toHaveLength(1);
+		// new Function PARSES the body without executing it — a syntax error
+		// (e.g. a stray template-literal escape) throws here.
+		expect(() => new Function(scripts[0][1])).not.toThrow();
+	});
+
+	it("renders fine for a tiny graph (fewer nodes than the client-side top-25 label set)", () => {
+		const tinyNodes = ["x.ts", "y.ts", "z.ts"].map((p, i) => ({
+			id: p,
+			path: p,
+			language: "ts",
+			symbolCount: i,
+			inDegree: 0,
+			outDegree: 0,
+			dependents: i,
+			x: 100 + i,
+			y: 100 + i,
+		}));
+		const html = renderMapHtml(payload({ fileCount: 3, nodes: tinyNodes }));
+		expect(html).toContain("lens-map-payload");
+		expect(html).toContain("recomputeVisibility");
+	});
 });
 
 // The git integration itself (spawn) is deliberately NOT mocked here: a
