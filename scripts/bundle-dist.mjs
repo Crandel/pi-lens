@@ -30,13 +30,41 @@
  * `exec --package` syntax; pi always installs via npm so the shipping path is
  * npm. A non-npm `npm_execpath` (pnpm/yarn/bun) is rejected with a clear error.
  *
+ * WHY THE SPAWN RUNS FROM A TEMP CWD, NOT `root` (#2590)
+ * `npm exec --package <spec>` does not only check the npx cache: npm's
+ * libnpmexec builds an Arborist tree rooted at the spawn's cwd
+ * (`localArb.loadActual()`) and, for each `--package` spec, queries that
+ * tree's FULL inventory (every nested `node_modules`, not just top-level
+ * deps) for a version satisfying the spec. If ANY nested copy matches — e.g.
+ * a transitive dependency that happens to vendor an `esbuild` at
+ * `ESBUILD_VERSION` — npm treats the package as already present and skips
+ * the npx-cache install entirely. `binPaths` (what gets prepended to the
+ * child's PATH) is populated only on the separate bare-`npx <bin>` swap path,
+ * never on this explicit `--package` path, so the matched-but-not-linked
+ * nested copy leaves the child with no esbuild anywhere on PATH at all —
+ * `esbuild: not found`, reproduced verbatim when
+ * `@earendil-works/pi-coding-agent` nested a transitive `esbuild@0.28.1`.
+ * Running the spawn from a freshly created temp directory with no
+ * `package.json` anywhere in its ancestry gives Arborist an empty tree, so
+ * this is independent of whatever the project's own `node_modules` contains.
+ * `distEntry` and the esbuild `--outfile` are both already absolute paths, so
+ * nothing about the actual bundling is affected by the child's cwd.
+ *
  * USAGE
  *   node scripts/bundle-dist.mjs   # invoked by `npm run bundle:dist`
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { BUNDLE_EXTERNALS } from "./lib/host-provided-deps.mjs";
 
 const ESBUILD_VERSION = "0.28.1";
@@ -69,64 +97,106 @@ const isNpmCli = npmCli
 	? /npm-cli\.js$|(^|[\\/])npm(\.js)?$/.test(npmCli)
 	: false;
 
-if (!existsSync(distEntry)) {
-	console.error(
-		`[bundle] ${distEntry} not found — run build:dist (tsc) first.`,
-	);
-	process.exit(1);
-}
-// Idempotency guard: the bundle step rewrites dist/index.js IN PLACE, so a
-// second standalone `npm run bundle:dist` (without build:dist's fresh tsc
-// emit) would re-bundle the bundle and prepend the require banner a second
-// time — a duplicate `const require` declaration that fails to load
-// ("Identifier '__pilensCreateRequire' has already been declared"). Detect the
-// banner and no-op instead.
-if (readFileSync(distEntry, "utf8").startsWith(REQUIRE_BANNER)) {
-	console.error(
-		"[bundle] dist/index.js is already bundled — skipping (run build:dist for a fresh emit).",
-	);
-	process.exit(0);
-}
-if (!npmCli) {
-	console.error("[bundle] npm_execpath unset — run via `npm run bundle:dist`.");
-	process.exit(1);
-}
-if (!isNpmCli) {
-	console.error(
-		`[bundle] npm_execpath is not npm (${npmCli}) — this step uses npm's ` +
-			"`exec --package` syntax. Run `npm run bundle:dist` with npm.",
-	);
-	process.exit(1);
+/**
+ * cwd for the `npm exec --package esbuild@…` spawn — see the header comment
+ * "WHY THE SPAWN RUNS FROM A TEMP CWD, NOT `root`" (#2590). Must have no
+ * `package.json` anywhere in its ancestry, so npm's Arborist-based
+ * `exec --package` resolution always sees an empty dependency tree and
+ * installs into its own npx cache instead of matching a nested transitive
+ * copy already present somewhere in the project's `node_modules`. A fresh
+ * `mkdtemp` under the OS temp dir guarantees that: it is never inside `root`
+ * and `root` is never inside it.
+ *
+ * Exported as a pure, directly testable unit — see
+ * tests/scripts/bundle-dist.test.ts — since faithfully exercising npm's real
+ * Arborist-based resolution in a test would mean reimplementing it.
+ *
+ * @returns {string} a freshly created, empty temporary directory
+ */
+export function resolveBundleExecCwd() {
+	return mkdtempSync(path.join(os.tmpdir(), "pilens-bundle-"));
 }
 
-try {
-	execFileSync(
-		process.execPath,
-		[
-			npmCli,
-			"exec",
-			"--yes",
-			"--package",
-			`esbuild@${ESBUILD_VERSION}`,
-			"--",
-			"esbuild",
-			distEntry,
-			"--bundle",
-			"--platform=node",
-			"--format=esm",
-			...EXTERNAL.map((name) => `--external:${name}`),
-			`--outfile=${tmpOut}`,
-		],
-		{ cwd: root, stdio: "inherit" },
+export function main() {
+	if (!existsSync(distEntry)) {
+		console.error(
+			`[bundle] ${distEntry} not found — run build:dist (tsc) first.`,
+		);
+		process.exit(1);
+	}
+	// Idempotency guard: the bundle step rewrites dist/index.js IN PLACE, so a
+	// second standalone `npm run bundle:dist` (without build:dist's fresh tsc
+	// emit) would re-bundle the bundle and prepend the require banner a second
+	// time — a duplicate `const require` declaration that fails to load
+	// ("Identifier '__pilensCreateRequire' has already been declared"). Detect
+	// the banner and no-op instead.
+	if (readFileSync(distEntry, "utf8").startsWith(REQUIRE_BANNER)) {
+		console.error(
+			"[bundle] dist/index.js is already bundled — skipping (run build:dist for a fresh emit).",
+		);
+		process.exit(0);
+	}
+	if (!npmCli) {
+		console.error(
+			"[bundle] npm_execpath unset — run via `npm run bundle:dist`.",
+		);
+		process.exit(1);
+	}
+	if (!isNpmCli) {
+		console.error(
+			`[bundle] npm_execpath is not npm (${npmCli}) — this step uses npm's ` +
+				"`exec --package` syntax. Run `npm run bundle:dist` with npm.",
+		);
+		process.exit(1);
+	}
+
+	const execCwd = resolveBundleExecCwd();
+	let bundleFailed = false;
+	try {
+		execFileSync(
+			process.execPath,
+			[
+				npmCli,
+				"exec",
+				"--yes",
+				"--package",
+				`esbuild@${ESBUILD_VERSION}`,
+				"--",
+				"esbuild",
+				distEntry,
+				"--bundle",
+				"--platform=node",
+				"--format=esm",
+				...EXTERNAL.map((name) => `--external:${name}`),
+				`--outfile=${tmpOut}`,
+			],
+			{ cwd: execCwd, stdio: "inherit" },
+		);
+	} catch (err) {
+		console.error(`[bundle] esbuild failed: ${err?.message ?? err}`);
+		bundleFailed = true;
+	} finally {
+		// Tidiness, not correctness: npm's own package cache lives under npm's
+		// cache dir, not this cwd, so nothing load-bearing is left behind here
+		// either way — but don't leak temp directories on every build.
+		rmSync(execCwd, { recursive: true, force: true });
+	}
+	if (bundleFailed) {
+		process.exit(1);
+	}
+
+	// Prepend the require banner, then replace the tsc-emitted entry in place.
+	writeFileSync(tmpOut, `${REQUIRE_BANNER}\n${readFileSync(tmpOut, "utf8")}`);
+	renameSync(tmpOut, distEntry);
+	console.error(
+		`[bundle] wrote self-contained ${path.relative(root, distEntry)}`,
 	);
-} catch (err) {
-	console.error(`[bundle] esbuild failed: ${err?.message ?? err}`);
-	process.exit(1);
 }
 
-// Prepend the require banner, then replace the tsc-emitted entry in place.
-writeFileSync(tmpOut, `${REQUIRE_BANNER}\n${readFileSync(tmpOut, "utf8")}`);
-renameSync(tmpOut, distEntry);
-console.error(
-	`[bundle] wrote self-contained ${path.relative(root, distEntry)}`,
-);
+const invokedPath = process.argv[1];
+const invokedDirectly =
+	typeof invokedPath === "string" &&
+	pathToFileURL(path.resolve(invokedPath)).href === import.meta.url;
+if (invokedDirectly) {
+	main();
+}
