@@ -415,13 +415,22 @@ export async function runTsserverSyncCommand(
  * server had computed but never published (silentOnClean) — these must be
  * surfaced to the caller, not discarded. `confirmed: false` = sync path
  * unavailable, fall through to existing behavior.
+ *
+ * #2598: `getAdvertisedCommands` is REQUIRED here rather than probed for. The
+ * real `LSPService` defines it unconditionally (clients/lsp/index.ts), and both
+ * production callers hand this function that service, so the former
+ * `typeof … !== "function"` bail was reachable only from a partial test double
+ * (AGENTS.md shape 7). It was also unobservable even there: an absent method
+ * throws a `TypeError` that this function's own catch turns into the same
+ * `undefined` the bail returned. `executeCommand` stays optional on
+ * {@link TsserverSyncCapableService} — see {@link runTsserverSyncCommand}.
  */
 export async function attemptTsserverSyncDiagnostics(
 	file: string,
-	svc: TsserverSyncCapableService,
+	svc: TsserverSyncCapableService &
+		Required<Pick<TsserverSyncCapableService, "getAdvertisedCommands">>,
 ): Promise<LSPDiagnostic[] | undefined> {
 	try {
-		if (typeof svc.getAdvertisedCommands !== "function") return undefined;
 		const advertised = await svc.getAdvertisedCommands(file);
 		if (!advertised.includes(TSSERVER_REQUEST_COMMAND)) return undefined;
 

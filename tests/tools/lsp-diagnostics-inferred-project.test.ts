@@ -42,36 +42,33 @@ import { createLspDiagnosticsTool } from "../../tools/lsp-diagnostics.js";
 const INFERRED_BODY = { configFileName: "/dev/null/inferredProject1*" };
 
 function makeService() {
-	return makeLspServiceDouble(
-		{
-			openFile: vi.fn().mockResolvedValue(undefined),
-			getDiagnostics: vi.fn(async () => [
-				{
-					severity: 1,
-					message: "Cannot find name 'describe'.",
-					range: {
-						start: { line: 0, character: 0 },
-						end: { line: 0, character: 8 },
-					},
-					source: "typescript",
-					code: 2582,
+	return makeLspServiceDouble({
+		getDiagnostics: vi.fn(async () => [
+			{
+				severity: 1,
+				message: "Cannot find name 'describe'.",
+				range: {
+					start: { line: 0, character: 0 },
+					end: { line: 0, character: 8 },
 				},
-			]),
-			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
-			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-			runWorkspaceDiagnostics: vi.fn(),
-			executeReadOnlyCommandOnLiveClient: vi.fn(async () => ({
-				executed: true,
-				result: { success: true, body: INFERRED_BODY },
-			})),
-		},
-		// `touchFile` absence is observed by production at
-		// tools/lsp-diagnostics.ts:789 — this suite asserts the `openFile` arm,
-		// and un-omitting it reds the demotion case. `getAdvertisedCommands` is
-		// left seeded: clients/lsp/tsserver-sync.ts bails the same way on absent
-		// and on "advertises nothing", so omitting it proves nothing (#2592).
-		{ omit: ["touchFile"] },
-	);
+				source: "typescript",
+				code: 2582,
+			},
+		]),
+		getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
+		getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+		runWorkspaceDiagnostics: vi.fn(),
+		executeReadOnlyCommandOnLiveClient: vi.fn(async () => ({
+			executed: true,
+			result: { success: true, body: INFERRED_BODY },
+		})),
+		// #2598: the tool touches unconditionally now. `undefined` is the real
+		// `touchFile`'s answer when it resolves no client for the file
+		// (clients/lsp/index.ts, `no_clients`), which is what routes this case
+		// through `getDiagnostics` — the source of the demotable TS error the
+		// demotion under test has to rewrite.
+		touchFile: vi.fn(async () => undefined),
+	});
 }
 
 describe("lsp_diagnostics — inferred-project demotion (#1645 F3)", () => {
