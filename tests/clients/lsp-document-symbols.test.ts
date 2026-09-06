@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on a seam #2582 did not scope, burn-down tracked in #2592
 import { describe, expect, it, vi } from "vitest";
 import {
 	findDocumentSymbolAtLine,

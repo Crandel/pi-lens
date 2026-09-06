@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the MCP session seam, burn-down tracked in #2592
 /**
  * analyzeFile facade: runs the dispatch pipeline and maps the DispatchResult +
  * latency report into the JSON contract the MCP server returns.

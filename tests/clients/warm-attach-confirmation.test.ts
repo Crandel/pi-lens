@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on a seam #2582 did not scope, burn-down tracked in #2592
 /**
  * #1253 — the PRODUCER half of the warm-attach confirmation carriage.
  *

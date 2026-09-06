@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592
 /**
  * #2504 review round 2 — the DEFERRED off-hook actionable-warnings loop.
  *

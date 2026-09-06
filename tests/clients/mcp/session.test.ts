@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the MCP session seam, burn-down tracked in #2592
 /**
  * session: drives pi-lens's real lifecycle handlers for the MCP path. The
  * handlers (handleSessionStart/handleTurnEnd) and the bootstrap bundle are

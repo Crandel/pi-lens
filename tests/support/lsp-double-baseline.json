@@ -1,0 +1,19 @@
+{
+	"tests/clients/actionable-warnings-bounds.test.ts": 1,
+	"tests/clients/actionable-warnings-deferred-bounds.test.ts": 1,
+	"tests/clients/actionable-warnings-history.test.ts": 1,
+	"tests/clients/actionable-warnings-lsp-cache.test.ts": 1,
+	"tests/clients/actionable-warnings.test.ts": 1,
+	"tests/clients/dispatch/runners/pyright-environment.test.ts": 1,
+	"tests/clients/lsp-document-symbols.test.ts": 2,
+	"tests/clients/mcp/analyze.test.ts": 1,
+	"tests/clients/mcp/session-context-eviction.test.ts": 1,
+	"tests/clients/mcp/session-test-findings-retire.test.ts": 1,
+	"tests/clients/mcp/session.test.ts": 1,
+	"tests/clients/warm-attach-confirmation.test.ts": 1,
+	"tests/tools/lsp-diagnostics-cache.test.ts": 1,
+	"tests/tools/lsp-diagnostics-inferred-project.test.ts": 1,
+	"tests/tools/lsp-diagnostics-per-server-concurrency.test.ts": 1,
+	"tests/tools/lsp-diagnostics.test.ts": 1,
+	"tests/tools/lsp-navigation.test.ts": 1
+}

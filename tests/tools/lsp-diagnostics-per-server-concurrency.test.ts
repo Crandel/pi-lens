@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the lsp tools seam, burn-down tracked in #2592
 /**
  * #631: `lsp_diagnostics`' batch/directory scan (`collectBatchDiagnostics` in
  * tools/lsp-diagnostics.ts) used to fan files out across a flat, server-
