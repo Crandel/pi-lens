@@ -338,12 +338,15 @@ export function computeVerdict(
 	const pendingGatingRows = rows.filter((row) => {
 		if (!row.gating) return false;
 		if (row.status !== "completed") return true;
-		// The F2 "uncertain cancellation" grace, discovered rows only (a
-		// required row's cancelled conclusion was already routed to
-		// `failingGatingRows` above and never reaches here as pending).
-		return (
-			!requiredNameSet.has(row.name) && isUncertainConclusion(row.conclusion)
-		);
+		// No `requiredNameSet` check needed here (unlike `failingGatingRows`
+		// above): a required row's "cancelled" conclusion is ALREADY caught by
+		// `failingGatingRows`'s literal-success rule, and `failingGatingRows`
+		// is checked first in the exit-code precedence below, so this branch
+		// never gets a chance to downgrade it to pending regardless of what it
+		// returns here (probed: removing this guard changes no test outcome).
+		// Only a DISCOVERED row's "cancelled" conclusion actually turns on
+		// this rule.
+		return isUncertainConclusion(row.conclusion);
 	});
 
 	let exitCode;

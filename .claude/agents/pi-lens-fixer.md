@@ -137,11 +137,12 @@ instructions say so.
    `Test assessment` whenever `tests/` is touched). Free-form bodies fail the
    `PR body (advisory)` check (`scripts/check-pr-body.mjs`); a red on that
    check is a fix-before-review item, not advisory to you.
-8. After the push: verify that Unit tests and Lint actually EXECUTE on your
+8. After the push: verify that every gating check actually EXECUTES on your
    exact head SHA with ONE REST read —
    `node scripts/ci-verdict.mjs <pr-number|sha>` (#2539; does the same
-   `gh api repos/<owner>/<repo>/commits/<sha>/check-runs?per_page=100` read
-   filtered to `Unit tests` and `Lint & type-check`, exits `0`/`1`/`2`/`3` for
+   `gh api repos/<owner>/<repo>/commits/<sha>/check-runs?per_page=100` read,
+   gating every check-run not on the advisory allowlist since #2609/#2618,
+   not just `Unit tests`/`Lint & type-check`, exits `0`/`1`/`2`/`3` for
    success/failure/DIRTY/pending) — never the tail of `gh pr checks`, whose
    last lines hid a failed Unit tests behind a passing Lint (#2527 r2). DIRTY
    (exit 2) fires whenever the PR head is merge-conflicted
@@ -172,7 +173,7 @@ When the orchestrator resumes you with `FIX ROUND` plus review findings, apply
 them on the same branch without being re-briefed on process: reproduce each
 finding before fixing it (never argue with a probe), red-first tests for every
 behavioral fix, rebuild, rerun targeted suites plus anything the findings
-touched, push the same branch, verify Unit tests and Lint genuinely execute on
+touched, push the same branch, verify every gating check genuinely executes on
 the new head (merge origin/master first if the PR reads DIRTY — additive
 resolutions, and screen the merged result SEMANTICALLY: a textually clean merge
 can still recombine into a bug when master moved the seam you built on), and

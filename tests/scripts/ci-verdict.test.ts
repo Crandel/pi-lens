@@ -739,22 +739,13 @@ describe("computeVerdict — a discovered row's cancelled conclusion is uncertai
 		);
 	});
 
-	// Mutation guard: dropping the `requiredNameSet.has(row.name)` check from
-	// the pending-side grace (so a REQUIRED row's cancelled conclusion could
-	// also land in `pendingGatingRows`) must not silently downgrade a
-	// required cancellation to "pending" -- it has to stay a hard FAILURE
-	// (previous describe block's last test pins the CONFLICTING variant;
-	// this one pins the MERGEABLE variant of the same guard).
-	it("a required row's cancelled conclusion fails outright, never pends, even though discovered cancellations pend", () => {
-		const payload = {
-			check_runs: [
-				checkRun({ name: "Unit tests", conclusion: "cancelled", id: 1 }),
-				checkRun({ name: "Lint & type-check", id: 2 }),
-			],
-		};
-		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
-		expect(verdict.exitCode).toBe(EXIT_FAILURE);
-	});
+	// A required row's cancelled conclusion failing outright (never pending)
+	// in the MERGEABLE case is already pinned by the "required row concluding
+	// %s exits %i" table-driven test above (its "cancelled" row) -- deleted a
+	// near-duplicate here after probing that `pendingGatingRows`' own
+	// `requiredNameSet` guard is structurally dead code (removing it changes
+	// no test outcome: `failingGatingRows` always wins precedence first for a
+	// required row), so there is no separate line left to guard against.
 });
 
 describe("resolveRequiredCheckNames — live branch-protection read (#2609)", () => {

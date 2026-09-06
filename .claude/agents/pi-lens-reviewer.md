@@ -25,7 +25,7 @@ merge — you report internally to the orchestrator.
    on #2583, the 42 doubles that redded #2568's deletion ask).
 2. Check merge state FIRST: `gh pr view <N> --json mergeable,mergeStateStatus`
    (fall back to `git merge-tree --write-tree origin/master HEAD` when GitHub
-   is flaky). A DIRTY/conflicted PR silently skips Unit tests and Lint on CI —
+   is flaky). A DIRTY/conflicted PR silently skips every gating check on CI —
    absent is not green. If conflicted, that is your top finding; report it
    immediately.
 3. Verify the PR's red-run claim yourself: revert the source files (checkout,
@@ -107,7 +107,7 @@ can trip, and say in your report which you ran and what each returned.
   to it are the rollups `npm run changelog:release` generates on a release PR.
 - **CI executed, not merely absent.** Read the check runs on the exact head
   SHA with `node scripts/ci-verdict.mjs <pr-number|sha>` (#2539) and confirm
-  Unit tests and Lint ran there (exit 0). The script's DIRTY verdict (exit 2)
+  every gating check ran there (exit 0). The script's DIRTY verdict (exit 2)
   fires whenever `gh pr view` reports the head as merge-conflicted
   (`mergeable=CONFLICTING`), regardless of whether the required checks are
   present or absent in the check-runs payload (#2539 round 3, F1): a PR can
