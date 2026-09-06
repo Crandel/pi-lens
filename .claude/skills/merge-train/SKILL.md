@@ -167,9 +167,11 @@ operator's private notes, so a different orchestrator can run the same train.
 - **Retargeting a PR's base does not re-arm CI.** `ci.yml` fires on
   `opened`/`synchronize`/`reopened`; `gh pr edit --base` is an `edited`
   event, so the required checks stay ABSENT and `ci-verdict` reports "absent,
-  treating as pending" with exit 0 (#2664). After a retarget, push a commit
-  or close/reopen, and never read exit 0 as green — the merge loop keys on
-  the literal "every gating check concluded success" line.
+  treating as pending" — exit 3, not 0; the "exit 0" first recorded on #2664
+  was `$?` read after a `| tail`. After a retarget, push a commit or
+  close/reopen. Read exit codes without a pipe (`node scripts/ci-verdict.mjs
+  <pr>; echo $?`); the merge loop keys on the literal "every gating check
+  concluded success" line.
 - **Maintainer trailing commits** are for intent-free deltas only (a literal
   NUL byte, a false comment, a missing PR-body heading); anything that changes
   what code MEANS goes through a fix round.
