@@ -46,4 +46,17 @@ describe("installer managed tool coverage", () => {
 		const tsls = TOOLS.find((tool) => tool.id === "typescript-language-server");
 		expect(tsls?.packageName).toBe("typescript-language-server@5.3.0");
 	});
+
+	it("points vscode-css-languageserver at a package that is actually published (#2638)", async () => {
+		// The bare package `vscode-css-languageserver` was unpublished from npm
+		// on 2021-07-22 (E404) — the id must resolve through
+		// `vscode-langservers-extracted` instead, the SAME package the
+		// `vscode-json-language-server` entry already installs (it bundles
+		// json/css/html/eslint/markdown; see the `isLspTransportRequiredError`
+		// doc comment in clients/installer/index.ts).
+		const { TOOLS } = await import("../../../clients/installer/index.js");
+		const css = TOOLS.find((tool) => tool.id === "vscode-css-languageserver");
+		expect(css?.packageName).toBe("vscode-langservers-extracted");
+		expect(css?.binaryName).toBe("vscode-css-language-server");
+	});
 });

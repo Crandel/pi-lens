@@ -695,7 +695,17 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-css-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		packageName: "vscode-css-languageserver",
+		// `vscode-css-languageserver` (the bare package this id used to name) was
+		// unpublished from npm on 2021-07-22 (E404) — `ensureTool` for this id
+		// could never succeed (#2638). The CSS server ships today inside
+		// `vscode-langservers-extracted`, the SAME package the
+		// `vscode-json-language-server` entry below already installs, exposing
+		// `vscode-css-language-server` as one of its five bins (json/css/html/
+		// eslint/markdown — see the `isLspTransportRequiredError` doc comment
+		// above). Left unpinned like that sibling entry: `npm view
+		// vscode-langservers-extracted engines` reports no floor, so there is no
+		// EBADENGINE reason to pin it (unlike typescript-language-server, #2633).
+		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-css-language-server",
 	},
 	{
@@ -2145,7 +2155,7 @@ const lspTransportRequiredMatcher =
  * correctly reports "no pin" rather than mistaking the scope for a version.
  * Returns undefined when packageName has no explicit `@version` suffix.
  */
-function parsePinnedVersion(packageName: string): string | undefined {
+export function parsePinnedVersion(packageName: string): string | undefined {
 	const at = packageName.lastIndexOf("@");
 	if (at <= 0) return undefined;
 	return packageName.slice(at + 1) || undefined;
