@@ -482,7 +482,7 @@ jobs:
       - name: Supply host-provided packages the way pi does (#1926)
         run: | # zizmor: ignore[adhoc-packages]
           SUPPLY=scripts/supply-host-provided-deps.mjs
-          read -ra HOST_PKGS <<< "$(node "$SUPPLY" --install-args)"
+          mapfile -t HOST_PKGS < <(node "$SUPPLY" --install-args)
           echo "Supplying: ${HOST_PKGS[*]}"
           npm install --no-save --no-audit --no-fund "${HOST_PKGS[@]}"
 
@@ -534,7 +534,7 @@ jobs:
           # Then supply them, as pi does, so the load check can still see a
           # genuinely missing dep instead of stopping at the first host package.
           SUPPLY=scripts/supply-host-provided-deps.mjs
-          read -ra HOST_PKGS <<< "$(node "$SUPPLY" --install-args)"
+          mapfile -t HOST_PKGS < <(node "$SUPPLY" --install-args)
           echo "Supplying: ${HOST_PKGS[*]}"
           npm install --no-save --no-audit --no-fund "${HOST_PKGS[@]}"
           ALLOW=$(node scripts/supply-host-provided-deps.mjs --allow-pattern)
@@ -786,7 +786,7 @@ jobs:
         run: | # zizmor: ignore[adhoc-packages]
           INSTALL_DIR=$(npm root -g)/pi-lens
           SUPPLY=scripts/supply-host-provided-deps.mjs
-          read -ra HOST_PKGS <<< "$(node "$SUPPLY" --install-args)"
+          mapfile -t HOST_PKGS < <(node "$SUPPLY" --install-args)
           echo "Supplying: ${HOST_PKGS[*]}"
           npm install --no-save --no-audit --no-fund \
             --prefix "$INSTALL_DIR" "${HOST_PKGS[@]}"
