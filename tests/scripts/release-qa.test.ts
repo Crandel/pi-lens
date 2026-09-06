@@ -168,7 +168,10 @@ describe("release-QA outcome rules (#2606)", () => {
 
 	it("classifies a row skipped by a blocked run as UNTESTED with the block reason", () => {
 		expect(
-			classifyProbe({ status: "blocked", detail: "pi could not boot: timeout" }),
+			classifyProbe({
+				status: "blocked",
+				detail: "pi could not boot: timeout",
+			}),
 		).toEqual({
 			outcome: "UNTESTED",
 			detail: "pi could not boot: timeout",
@@ -213,9 +216,9 @@ describe("release-QA polling (#2606)", () => {
 		);
 		expect(polled.status).toBe("expired");
 		expect(polled.detail).toContain("still scanning");
-		expect(classifyProbe({ status: polled.status, detail: polled.detail }).outcome).toBe(
-			"UNTESTED",
-		);
+		expect(
+			classifyProbe({ status: polled.status, detail: polled.detail }).outcome,
+		).toBe("UNTESTED");
 	});
 });
 

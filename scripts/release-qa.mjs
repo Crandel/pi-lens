@@ -349,7 +349,9 @@ export function renderReport({
 	lines.push("");
 	lines.push("## Rows");
 	lines.push("");
-	lines.push("| row id | modality | outcome | witness | what the witness shows |");
+	lines.push(
+		"| row id | modality | outcome | witness | what the witness shows |",
+	);
 	lines.push("| --- | --- | --- | --- | --- |");
 	for (const row of rows ?? []) {
 		const result = byId.get(row.id);
@@ -526,16 +528,12 @@ function captureGetCommands({ piBin, cwd, env, timeoutMs = RPC_TIMEOUT_MS }) {
 					continue;
 				}
 				if (
-					(message.type === "event" &&
-						message.event === "extension_error") ||
+					(message.type === "event" && message.event === "extension_error") ||
 					message.type === "extension_error"
 				) {
 					extensionErrors.push(message);
 				}
-				if (
-					message.type === "response" &&
-					message.command === "get_commands"
-				) {
+				if (message.type === "response" && message.command === "get_commands") {
 					finish({
 						ok: true,
 						commands: message.data?.commands ?? [],
@@ -743,16 +741,12 @@ const ROW_PROBES = {
 		let stdout = "";
 		let code = 0;
 		try {
-			stdout = execFileSync(
-				process.execPath,
-				[selftest, "--allow-soft"],
-				{
-					cwd: ctx.projectDir,
-					encoding: "utf8",
-					env: ctx.env,
-					timeout: 300_000,
-				},
-			);
+			stdout = execFileSync(process.execPath, [selftest, "--allow-soft"], {
+				cwd: ctx.projectDir,
+				encoding: "utf8",
+				env: ctx.env,
+				timeout: 300_000,
+			});
 		} catch (err) {
 			stdout = `${err?.stdout ?? ""}${err?.stderr ?? ""}`;
 			code = typeof err?.status === "number" ? err.status : 1;
@@ -785,9 +779,10 @@ const ROW_PROBES = {
 			`${skills.map((c) => c.name).join(", ") || "(none)"}; ` +
 			`${inPackage.length} resolved inside the installed package`;
 		return {
-			status: skills.length >= 4 && inPackage.length === skills.length
-				? "pass"
-				: "fail",
+			status:
+				skills.length >= 4 && inPackage.length === skills.length
+					? "pass"
+					: "fail",
 			detail: shows,
 			shows,
 			witness: {
@@ -828,7 +823,10 @@ const ROW_PROBES = {
 	"mcp-tools-registered": async (ctx) => {
 		const listed = ctx.mcpTools;
 		if (!listed?.ok) {
-			return { status: "fail", detail: listed?.reason ?? "no tools/list result" };
+			return {
+				status: "fail",
+				detail: listed?.reason ?? "no tools/list result",
+			};
 		}
 		const names = listed.names;
 		const required = [
@@ -1051,7 +1049,8 @@ async function main() {
 	const baselineText = fs.readFileSync(opts.baseline, "utf8");
 	const { rows, errors } = parseBaselineRows(baselineText);
 	if (errors.length > 0) {
-		for (const error of errors) console.error(`[release-qa] baseline: ${error}`);
+		for (const error of errors)
+			console.error(`[release-qa] baseline: ${error}`);
 		process.exit(4);
 	}
 	// The tie between the matrix document and this file, checked at run time as
@@ -1209,7 +1208,10 @@ async function main() {
 			// health rows below have a session to report on.
 			await mcp.callToolText("pilens_analyze", { file: "a.ts" });
 		} catch (err) {
-			mcpTools = { ok: false, reason: `MCP session failed: ${err?.message || err}` };
+			mcpTools = {
+				ok: false,
+				reason: `MCP session failed: ${err?.message || err}`,
+			};
 		}
 	}
 
@@ -1306,9 +1308,7 @@ async function main() {
 		}
 	}
 
-	process.exit(
-		coverage.balanced ? verdictExitCode(verdict.verdict) : 4,
-	);
+	process.exit(coverage.balanced ? verdictExitCode(verdict.verdict) : 4);
 }
 
 /** Package-relative file list of an installed tree, in `npm pack --json` shape. */
