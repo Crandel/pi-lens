@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	BASELINE_COLUMNS,
-	classifyProbe,
+	classifyRowOutcome,
 	coverageArithmetic,
 	formatOutcome,
 	implementedRowIds,
@@ -125,27 +125,27 @@ describe("release-QA matrix and probe map are one list (#2606)", () => {
 
 describe("release-QA outcome rules (#2606)", () => {
 	it("classifies a passing probe as PASS", () => {
-		expect(classifyProbe({ status: "pass", detail: "4 skills" })).toEqual({
+		expect(classifyRowOutcome({ status: "pass", detail: "4 skills" })).toEqual({
 			outcome: "PASS",
 			detail: "4 skills",
 		});
 	});
 
 	it("classifies a failing probe as FAIL carrying the observed cause", () => {
-		expect(classifyProbe({ status: "fail", detail: "0 skills" })).toEqual({
+		expect(classifyRowOutcome({ status: "fail", detail: "0 skills" })).toEqual({
 			outcome: "FAIL",
 			detail: "0 skills",
 		});
 	});
 
 	it("classifies a thrown probe as FAIL, not as untested", () => {
-		expect(classifyProbe({ status: "error", detail: "ENOENT" }).outcome).toBe(
-			"FAIL",
-		);
+		expect(
+			classifyRowOutcome({ status: "error", detail: "ENOENT" }).outcome,
+		).toBe("FAIL");
 	});
 
 	it("classifies an expired polling cap as UNTESTED, never PASS", () => {
-		const classified = classifyProbe({
+		const classified = classifyRowOutcome({
 			status: "expired",
 			detail: "cap 120000ms expired after 24 attempt(s)",
 		});
@@ -155,12 +155,13 @@ describe("release-QA outcome rules (#2606)", () => {
 
 	it("classifies an unreachable row as SKIPPED", () => {
 		expect(
-			classifyProbe({ status: "unreachable", detail: "no --git-ref" }).outcome,
+			classifyRowOutcome({ status: "unreachable", detail: "no --git-ref" })
+				.outcome,
 		).toBe("SKIPPED");
 	});
 
 	it("classifies a row with no probe as UNTESTED with that reason", () => {
-		expect(classifyProbe({ status: "unimplemented" })).toEqual({
+		expect(classifyRowOutcome({ status: "unimplemented" })).toEqual({
 			outcome: "UNTESTED",
 			detail: "no runner implementation for this row",
 		});
@@ -168,7 +169,7 @@ describe("release-QA outcome rules (#2606)", () => {
 
 	it("classifies a row skipped by a blocked run as UNTESTED with the block reason", () => {
 		expect(
-			classifyProbe({
+			classifyRowOutcome({
 				status: "blocked",
 				detail: "pi could not boot: timeout",
 			}),
@@ -179,7 +180,7 @@ describe("release-QA outcome rules (#2606)", () => {
 	});
 
 	it("classifies an unrecognised status as UNTESTED rather than assuming success", () => {
-		const classified = classifyProbe({ status: "probably-fine" });
+		const classified = classifyRowOutcome({ status: "probably-fine" });
 		expect(classified.outcome).toBe("UNTESTED");
 		expect(classified.detail).toContain("unknown probe status");
 	});
@@ -217,7 +218,8 @@ describe("release-QA polling (#2606)", () => {
 		expect(polled.status).toBe("expired");
 		expect(polled.detail).toContain("still scanning");
 		expect(
-			classifyProbe({ status: polled.status, detail: polled.detail }).outcome,
+			classifyRowOutcome({ status: polled.status, detail: polled.detail })
+				.outcome,
 		).toBe("UNTESTED");
 	});
 });
@@ -342,6 +344,31 @@ describe("release-QA report rendering (#2606)", () => {
 		expect(report).toContain("release-qa-evidence/skills-registered.json");
 		expect(report).toContain("4 skill command(s): skill:pi-lens-ast-grep");
 		expect(report).toContain("coverage: discovered 1 / rows 1 / untested 0");
+	});
+
+	it("renders a discovered row that produced no result beside the mismatch line", () => {
+		// The pair that makes a dropped row visible instead of invisible: the row
+		// still gets a line (UNTESTED, not run) AND the arithmetic says the
+		// discovered set did not add up.
+		const rows = [
+			{
+				id: "dropped-row",
+				feature: "f",
+				modality: "mcp-stdio",
+				entryPoint: "e",
+				passCriterion: "p",
+				witness: "w",
+				reuse: "r",
+			},
+		];
+		const report = renderReport({
+			rows,
+			results: [],
+			coverage: coverageArithmetic([], 1),
+			verdict: shipVerdict([]),
+		});
+		expect(report).toContain("| dropped-row | mcp-stdio | UNTESTED(not run) |");
+		expect(report).toContain("ARITHMETIC MISMATCH");
 	});
 
 	it("says plainly that a blocked run gets no ship verdict", () => {

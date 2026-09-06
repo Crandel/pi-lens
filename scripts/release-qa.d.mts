@@ -68,7 +68,7 @@ export const OUTCOME: {
 };
 
 export function parseBaselineRows(text: string): ParsedBaseline;
-export function classifyProbe(probe: ProbeReport | null | undefined): {
+export function classifyRowOutcome(probe: ProbeReport | null | undefined): {
 	outcome: string;
 	detail: string;
 };
@@ -95,7 +95,7 @@ export function renderReport(input: {
 }): string;
 export function pollToTerminal(
 	attempt: () => Promise<{ terminal: boolean; detail: string }>,
-	options: { capMs: number; intervalMs?: number },
+	options: { capMs: number; intervalMs: number },
 ): Promise<{
 	status: "terminal" | "expired";
 	attempts: number;

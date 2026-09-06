@@ -161,7 +161,7 @@ export function parseBaselineRows(text) {
  * @param {{ status?: string, detail?: string }} probe
  * @returns {{ outcome: string, detail: string }}
  */
-export function classifyProbe(probe) {
+export function classifyRowOutcome(probe) {
 	const detail = String(probe?.detail ?? "").trim();
 	switch (probe?.status) {
 		case "pass":
@@ -377,6 +377,7 @@ const REPO_ROOT = path.resolve(
 	"..",
 );
 const DEFAULT_POLL_CAP_MS = 120_000;
+const NPM_TIMEOUT_MS = 600_000;
 const RPC_TIMEOUT_MS = 60_000;
 const MCP_CALL_TIMEOUT_MS = 180_000;
 
@@ -409,11 +410,11 @@ function log(message) {
 }
 
 /** Shell-free `npm` with an argv array. */
-function npm(args, cwd, timeoutMs = 600_000) {
+function npm(args, cwd) {
 	return execFileSync(NPM_BIN, args, {
 		cwd,
 		encoding: "utf8",
-		timeout: timeoutMs,
+		timeout: NPM_TIMEOUT_MS,
 	});
 }
 
@@ -673,10 +674,10 @@ class McpSession {
  * Poll `attempt` until it reports terminal, or the cap elapses.
  *
  * The cap is a real deadline measured against the wall clock, and expiry
- * returns `{ status: "expired" }` — which `classifyProbe` turns into UNTESTED.
+ * returns `{ status: "expired" }` — which `classifyRowOutcome` turns into UNTESTED.
  * Nothing here can turn a timeout into a pass.
  */
-export async function pollToTerminal(attempt, { capMs, intervalMs = 5000 }) {
+export async function pollToTerminal(attempt, { capMs, intervalMs }) {
 	const deadline = Date.now() + capMs;
 	let last = { terminal: false, detail: "never attempted" };
 	let attempts = 0;
@@ -1053,19 +1054,6 @@ async function main() {
 			console.error(`[release-qa] baseline: ${error}`);
 		process.exit(4);
 	}
-	// The tie between the matrix document and this file, checked at run time as
-	// well as in the unit suite: a probe for a row the matrix dropped would run
-	// invisibly, and a matrix row with no probe must be UNTESTED arithmetic, not
-	// an omission.
-	const baselineIds = new Set(rows.map((r) => r.id));
-	const strayProbes = implementedRowIds().filter((id) => !baselineIds.has(id));
-	if (strayProbes.length > 0) {
-		console.error(
-			`[release-qa] probes with no baseline row: ${strayProbes.join(", ")}`,
-		);
-		process.exit(4);
-	}
-
 	const scratchRoot = fs.mkdtempSync(
 		path.join(os.tmpdir(), "pi-lens-release-qa-"),
 	);
@@ -1247,13 +1235,10 @@ async function main() {
 				raw = { status: "error", detail: `${err?.message || err}` };
 			}
 		}
-		const classified = classifyProbe(raw);
+		const classified = classifyRowOutcome(raw);
 		let witnessPath = "—";
 		if (raw.witness) {
-			const file = path.join(
-				evidenceDir,
-				`${row.id}.${raw.witness.ext ?? "txt"}`,
-			);
+			const file = path.join(evidenceDir, `${row.id}.${raw.witness.ext}`);
 			fs.writeFileSync(file, raw.witness.content ?? "");
 			witnessPath = path.relative(opts.out, file).replaceAll("\\", "/");
 		}
