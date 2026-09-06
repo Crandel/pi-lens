@@ -1,0 +1,115 @@
+---
+name: release-qa
+description: Run the pi-lens release-readiness QA pass — witness the feature × modality matrix against a real pi, count coverage, and issue a ship / ship-with-caveats / don't-ship / blocked line. Use before cutting a release tag, or when asked whether a build is shippable.
+---
+
+# Release QA
+
+The pass that runs before a release is cut. Sibling of `merge-train`: that skill
+decides whether one PR may land, this one decides whether the accumulated result
+may ship.
+
+Why it exists: #2587. Four shipped skills were suspected of never registering
+for four releases (3.8.51 → 4.1.3) because **no check ever asked a real pi what
+it loaded**. The unit suite (~10.8k tests) and the nightly smokes (install,
+compat, tool, lifecycle, parser) are per-seam; nothing composed them into a
+release verdict with counted coverage, so a missing row read as absence rather
+than arithmetic.
+
+## Hard rules
+
+These outrank convenience, habit, and the shape of any previous pass.
+
+1. **No witness, no verdict.** A row is PASS only when an artifact SHOWS the
+   pass criterion. A witness that merely exists — a log file that was written, a
+   process that exited 0 — is not a witness. Quote the line.
+2. **Reachability is decided in planning, not discovered mid-run.** A row that
+   cannot be reached in this run is SKIPPED with the reason written down BEFORE
+   the run, never a PASS that quietly measured nothing.
+3. **Coverage is counted, never claimed.** Report the
+   `discovered / rows / untested` arithmetic the runner prints, verbatim. "All
+   the important paths were checked" is not a coverage statement.
+4. **An expired poll is UNTESTED, never PASS.** Async rows are polled to a
+   terminal state under a stated cap. Expiry means you did not see the result.
+5. **BLOCKED is not a failure and not a pass.** If pi cannot boot, no ship
+   verdict is issued at all. Say BLOCKED and stop.
+6. **The repo's runbook outranks habit.** `docs/release-qa-baseline.md` and
+   `AGENTS.md` are the contract. If a step here disagrees with them, they win
+   and this file is wrong.
+
+## Procedure
+
+### 1. Read the baseline
+
+`docs/release-qa-baseline.md` is the matrix — row ids, entry points, pass
+criteria, witness kinds. Read it before running anything; the runner parses this
+same document, so a row you cannot explain is a row the runner will execute
+anyway.
+
+### 2. Derive the DIFF rows
+
+The BASE rows are the matrix. The DIFF rows are what THIS release changed, and
+`.changelog/` is the diff inventory:
+
+```
+git describe --tags --abbrev=0            # the last tag
+ls .changelog/*.md                        # every pending entry = one change
+```
+
+For each fragment, ask: does it touch a surface the matrix already covers, or a
+new one? A fragment that adds a modality, a new entry point, or a new shipped
+resource needs a row. Two outcomes are acceptable and one is not:
+
+- add the row to `docs/release-qa-baseline.md` (and a probe in
+  `scripts/release-qa.mjs` — the two lists are tied and the unit test enforces
+  it), or
+- record in the report that the change is covered by an existing row, naming
+  which.
+
+Silently leaving a change unrowed is the failure this skill exists to prevent.
+
+### 3. Run the runner
+
+```
+npm run build:dist                                  # the runner packs the tree
+node scripts/release-qa.mjs --pi <path-to-pi>
+```
+
+Useful flags:
+
+- `--from npm:pi-lens@<version>` — QA a PUBLISHED release instead of the working
+  tree. This is how a regression is demonstrated against the last release.
+- `--git-ref <ref>` — enable the `git-install` row against a pushed ref. Without
+  it that row is SKIPPED, because a `git:` install resolves a pushed ref rather
+  than the working tree.
+- `--poll-cap-ms <n>` — the cap for polled rows. State the value you used.
+- `--keep` — leave the scratch root for inspection.
+
+Use the pi version `install-smoke.yml` pins (bump by hand, #731) and, when a
+newer line exists, repeat against the newest one. Both readings go in the
+report.
+
+The runner pins `HOME`, `PI_LENS_HOME` and `PILENS_DATA_DIR` inside its own
+scratch root. Never run any release probe without those pins — an unpinned probe
+writes into the maintainer's real `~/.pi` and `~/.pi-lens` (#2506).
+
+### 4. Report
+
+The runner writes `release-qa-report.md` and `release-qa-evidence/<row-id>.*`.
+The report you hand back carries, in this order:
+
+1. the verdict line — `ship` / `ship-with-caveats` / `don't ship` / `blocked`;
+2. the coverage arithmetic, quoted verbatim from the runner;
+3. every non-PASS row with its cause or reason;
+4. the pi version(s) driven and the QA target (`tree`, or the published version);
+5. the DIFF rows derived in step 2 and where each landed.
+
+`ship-with-caveats` requires the caveats to be named in the release notes. A
+caveat nobody wrote down is a defect that shipped.
+
+## What this is not
+
+- Not a substitute for CI. Unit tests and Lint are still the per-PR gate.
+- Not a per-language tool sweep — `scripts/smoke-tools.mjs` does that nightly.
+- Not a model-driven test. Every row is model-free by construction; a row that
+  needs a real LLM turn cannot be a release gate.

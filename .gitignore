@@ -110,6 +110,7 @@ migrate-*.js
 !docs/astplayground.md
 !docs/public-api-stability.md
 !docs/configuration.md
+!docs/release-qa-baseline.md
 !skills/**/*.md
 !.github/PULL_REQUEST_TEMPLATE.md
 
