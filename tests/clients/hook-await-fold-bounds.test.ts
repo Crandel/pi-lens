@@ -197,6 +197,15 @@ describe("#2523 slice 2 — clients/observed-mutation.ts#withBounds folded onto 
 	}
 
 	it("records hook-await-exceeded naming the arm when the capture outlives its budget", async () => {
+		// #2574/#2596: this case used to race the REAL `OBSERVED_CAPTURE_BUDGET_MS`
+		// (200ms) `setTimeout` inside `bounded()` against this test's
+		// never-releasing gate. Under load that real race went either way — a
+		// fast pass landing `armed: true` before the 200ms fired (#2574), or the
+		// unref'd real timer never getting a scheduling turn at all so the test
+		// hung to the suite's 5s ceiling (#2596, reproduced locally below). A
+		// fake clock this test drives itself removes the dependency on real
+		// scheduling entirely: the deadline fires exactly when this test decides
+		// to advance past it, on every machine under every load.
 		const gate = gateStatsCapture();
 		const ledger = await import("../../clients/degradation-ledger.js");
 		ledger.resetDegradationLedger();
@@ -204,8 +213,16 @@ describe("#2523 slice 2 — clients/observed-mutation.ts#withBounds folded onto 
 		const attribution = await import("../../clients/mutation-attribution.js");
 		observed.resetObservedMutationNet();
 		attribution.resetMutationAttribution();
+		// Enabled only AFTER every dynamic import above has settled: vite-node's
+		// own module resolution leans on a real `setTimeout` internally
+		// (verified empirically — enabling fake timers before these imports
+		// made every run of this case hang to the suite ceiling instead of the
+		// occasional pre-existing flake), and faking it out from under an
+		// in-flight `import()` stalls the import itself rather than the
+		// production code this test means to bound.
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 		try {
-			const armed = await observed.armObservedMutation({
+			const armedPromise = observed.armObservedMutation({
 				toolCallId: "fold-probe-call",
 				toolName: "patch_file",
 				targetPath: "does-not-need-to-exist.ts",
@@ -213,10 +230,19 @@ describe("#2523 slice 2 — clients/observed-mutation.ts#withBounds folded onto 
 				sessionGeneration: 1,
 				turnIndex: 1,
 			});
+			// 10x the production `OBSERVED_CAPTURE_BUDGET_MS` (200ms) — enough
+			// virtual-time margin that the real (unfaked) filesystem work
+			// `collectObservationUniverse` does before reaching the gate cannot
+			// starve the advance, tight enough that a mutation which effectively
+			// removes the timeout (or multiplies the budget past this margin)
+			// still reds the case below (AGENTS.md screen #6).
+			await vi.advanceTimersByTimeAsync(2_000);
+			const armed = await armedPromise;
 			expect(armed).toMatchObject({ armed: false });
 			expect(lastExceededSubject(ledger)).toBe("tool_call:armObservedMutation");
 		} finally {
 			gate.release();
+			vi.useRealTimers();
 		}
 	});
 
