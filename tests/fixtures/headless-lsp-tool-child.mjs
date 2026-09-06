@@ -62,14 +62,22 @@ if (!tool) {
 	process.exit(2);
 }
 
-process.stdout.write("tool-start\n");
-const result = await tool.execute(
-	"headless-keepalive-probe",
-	{ paths: [path.join(root, "mod.py")], severity: "all", serverScope: "all" },
-	new AbortController().signal,
-	null,
-	{ cwd: root },
-);
-process.stdout.write(
-	`tool-resolved:${result?.details?.filesChecked ?? "unknown"}\n`,
-);
+// Driven from inside a function, not as a top-level await: an unsettled
+// top-level await makes Node exit 13 with a warning, and the reported defect
+// is a SILENT exit 0 — the fixture must not substitute its own exit code for
+// the one the issue is about.
+async function run() {
+	process.stdout.write("tool-start\n");
+	const result = await tool.execute(
+		"headless-keepalive-probe",
+		{ paths: [path.join(root, "mod.py")], severity: "all", serverScope: "all" },
+		new AbortController().signal,
+		null,
+		{ cwd: root },
+	);
+	process.stdout.write(
+		`tool-resolved:${result?.details?.filesChecked ?? "unknown"}\n`,
+	);
+}
+
+void run();
