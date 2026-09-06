@@ -108,6 +108,17 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the defect is wall-clock only (2^N globstar backtracking); a fake clock measures nothing",
 		},
+	// 2026-09-06 (#2619 review F1): the release-QA runner's children inherited
+	// the maintainer's real environment, putting 41 warm_loader_cache records
+	// into the real ~/.pi-lens/install.log. `os.homedir()` in the test process
+	// can only ever report the ambient home, so only a REAL child can show
+	// what a child resolves; an in-process assertion on the env object passed
+	// throughout the defect's life.
+	"real-process-spawn:scripts/release-qa.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject IS what a real child resolves for HOME/PI_LENS_INSTALL_LOG; an in-process check cannot see a child inheriting the ambient env",
+	},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */

@@ -71,7 +71,7 @@ Silently leaving a change unrowed is the failure this skill exists to prevent.
 ### 3. Run the runner
 
 ```
-npm run build:dist                                  # the runner packs the tree
+git status --porcelain                # must be empty; the runner packs a commit
 node scripts/release-qa.mjs --pi <path-to-pi>
 ```
 
@@ -89,16 +89,61 @@ Use the pi version `install-smoke.yml` pins (bump by hand, #731) and, when a
 newer line exists, repeat against the newest one. Both readings go in the
 report.
 
-The runner pins `HOME`, `PI_LENS_HOME` and `PILENS_DATA_DIR` inside its own
-scratch root. Never run any release probe without those pins — an unpinned probe
-writes into the maintainer's real `~/.pi` and `~/.pi-lens` (#2506).
+#### Exit codes — read them, do not infer from the log
+
+| code | verdict | what it means |
+| --- | --- | --- |
+| 0 | SHIP | every discovered row PASSED with a witness |
+| 1 | DO-NOT-SHIP | a row FAILED, or the candidate would not install or activate |
+| 2 | SHIP-WITH-CAVEATS | every witnessed row passed; some produced no witness |
+| 3 | BLOCKED or INCONCLUSIVE | no verdict: pi did not boot, or nothing was witnessed |
+| 4 | usage / self-check error | bad option, unparseable matrix, arithmetic mismatch |
+
+**2 is the EXPECTED verdict for a plain working-tree run** — `git-install-loads`
+is SKIPPED without `--git-ref`, and one SKIPPED row is a caveat by definition.
+Do not read a 2 as a failure, and do not read it as a clean bill either: name
+the caveat. A CI lane treats 2 as a warning and 1/3/4 as failures.
+
+#### What the run touches, and what it must not
+
+The runner pins `HOME`, `USERPROFILE`, `PI_LENS_HOME`, `PILENS_DATA_DIR`,
+`PI_LENS_INSTALL_LOG` and `npm_config_cache` inside its own scratch root, and
+passes that environment to **every** child — `pi`, the MCP server, `node`, and
+`npm`. All six matter. `PI_LENS_INSTALL_LOG` is the one that is easy to miss:
+`scripts/warm-loader-cache.mjs` (which `prepare` runs on every pack) keys its
+install log on THAT variable and falls back to `os.homedir()/.pi-lens/install.log`
+— `PI_LENS_HOME` does not redirect it. The runner's first six runs pinned the
+pi-lens home, passed no environment to `npm`, and put 41 `warm_loader_cache`
+records into the maintainer's real `~/.pi-lens/install.log` (#2619 review F1).
+
+The pack runs in a `git archive HEAD` export inside the scratch root, never in
+the live checkout, because `npm pack` fires our own `prepack`
+(`scripts/strip-dev-deps-for-pack.mjs` rewrites `package.json` AND
+`package-lock.json`, restored only by `postpack`, with no signal trap — an
+interrupted pack leaves the checkout stripped) and `prepare` (rebuilds `dist/`,
+downloads grammars over the network, reinstalls the git hooks). A dirty checkout
+is REFUSED rather than packed as its last commit, because a report whose "QA
+target" is not what the operator is looking at is the failure this runner
+exists to end.
+
+**Remaining side effects on the checkout: none that persist.** `git archive` and
+`git status` are reads. The runner writes `release-qa-report.md` and
+`release-qa-evidence/` into `--out` (the cwd by default; both are gitignored at
+the repo root). Everything else lands in the scratch root, which is removed
+unless `--keep`. Verify rather than trust: `git status --porcelain` before and
+after a run must be identical, and
+`wc -l ~/.pi-lens/install.log` must not change.
+
+Never run any release probe without those pins — an unpinned probe writes into
+the maintainer's real `~/.pi` and `~/.pi-lens` (#2506).
 
 ### 4. Report
 
 The runner writes `release-qa-report.md` and `release-qa-evidence/<row-id>.*`.
 The report you hand back carries, in this order:
 
-1. the verdict line — `ship` / `ship-with-caveats` / `don't ship` / `blocked`;
+1. the verdict line — `ship` / `ship-with-caveats` / `don't ship` / `blocked` /
+   `inconclusive` — with its exit code;
 2. the coverage arithmetic, quoted verbatim from the runner;
 3. every non-PASS row with its cause or reason;
 4. the pi version(s) driven and the QA target (`tree`, or the published version);

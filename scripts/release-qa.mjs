@@ -14,12 +14,25 @@
  *   1. Reads `docs/release-qa-baseline.md` — the matrix is the DOCUMENT, not a
  *      copy of it in here. Every row id there must have a probe below and vice
  *      versa (`tests/scripts/release-qa.test.ts` enforces the tie).
- *   2. Packs the working tree (`npm pack`) — or takes `--from npm:pi-lens@X` to
- *      QA a published release instead — and installs it into a SCRATCH project.
- *   3. Installs that package into a scratch `pi` (`HOME`, `PI_LENS_HOME` and
- *      `PILENS_DATA_DIR` all pinned inside the scratch root: this never touches
- *      the maintainer's real `~/.pi` or `~/.pi-lens` — AGENTS.md probe hygiene,
- *      #2506).
+ *   2. Exports the COMMITTED tree (`git archive HEAD`) into the scratch root and
+ *      packs THERE — or takes `--from npm:pi-lens@X` to QA a published release
+ *      instead — then installs the tarball into a SCRATCH project. The export
+ *      matters: `npm pack` runs our own `prepack` (which rewrites
+ *      `package.json` + `package-lock.json`, restored only by `postpack`, with
+ *      no signal trap) and `prepare` (rebuilds `dist/`, downloads grammars,
+ *      reinstalls git hooks), and none of that may happen in the live checkout.
+ *      A dirty checkout is REFUSED rather than silently packed as its last
+ *      commit.
+ *   3. Installs that package into a scratch `pi`. EVERY child process — `pi`,
+ *      the MCP server, `node`, and `npm` — runs under `scratchEnv()`, which
+ *      pins `HOME`, `USERPROFILE`, `PI_LENS_HOME`, `PILENS_DATA_DIR`,
+ *      `PI_LENS_INSTALL_LOG` and `npm_config_cache` inside the scratch root
+ *      (AGENTS.md probe hygiene, #2506). `PI_LENS_INSTALL_LOG` is listed
+ *      separately for a reason: `scripts/warm-loader-cache.mjs` keys its
+ *      install log on THAT variable, not on `PI_LENS_HOME`, and the first six
+ *      runs of this runner — which pinned the other three but passed no env to
+ *      `npm` at all — put 41 records into the maintainer's real
+ *      `~/.pi-lens/install.log` (#2619 review F1).
  *   4. Drives each row's entry point — the command or RPC a USER path takes,
  *      never a raw internal function — and writes `release-qa-report.md` plus
  *      one witness file per row under `release-qa-evidence/`.
@@ -29,11 +42,19 @@
  * SKIPPED(reason), and the four partition the discovered set — the report
  * asserts `discovered = pass + fail + untested + skipped`. An async row that
  * does not reach a terminal state before its polling cap expires UNTESTED,
- * never PASS. If pi cannot boot the run is BLOCKED and NO ship verdict is
- * issued.
+ * never PASS.
  *
- * Exit codes: 0 ship · 1 do not ship · 2 ship with caveats · 3 BLOCKED ·
- * 4 usage/self-check error.
+ * Two verdicts issue NO ship line at all:
+ *   - **BLOCKED** — `pi` itself did not boot, probed BEFORE anything is
+ *     installed. Nothing about the candidate was measured. A candidate that
+ *     will not install or activate while pi boots fine is DO-NOT-SHIP, not
+ *     BLOCKED: that is a result, not an untestable state.
+ *   - **INCONCLUSIVE** — pi booted, but not one row produced a witness. "No
+ *     row disagreed" is not evidence, so it never reads as ship-with-caveats.
+ *
+ * Exit codes: 0 ship · 1 do not ship · 2 ship with caveats (the EXPECTED
+ * working-tree verdict — the git-install row is SKIPPED without `--git-ref`) ·
+ * 3 BLOCKED or INCONCLUSIVE · 4 usage/self-check error.
  *
  * USAGE
  *   node scripts/release-qa.mjs [options]
@@ -81,6 +102,7 @@ export const BASELINE_COLUMNS = Object.freeze([
 	"pass criterion",
 	"witness",
 	"reuse",
+	"umbrella",
 ]);
 
 export const OUTCOME = Object.freeze({
@@ -140,6 +162,7 @@ export function parseBaselineRows(text) {
 			passCriterion: cells[index("pass criterion")] ?? "",
 			witness: cells[index("witness")] ?? "",
 			reuse: cells[index("reuse")] ?? "",
+			umbrella: cells[index("umbrella")] ?? "",
 		});
 	}
 	if (rows.length === 0 && errors.length === 0) {
@@ -283,6 +306,19 @@ export function shipVerdict(results, options = {}) {
 	const caveats = list.filter(
 		(r) => r.outcome === OUTCOME.UNTESTED || r.outcome === OUTCOME.SKIPPED,
 	);
+	// Nothing was witnessed. Not blocked (pi booted), not failed (nothing
+	// contradicted the criteria) — and therefore not shippable either, because
+	// "no row disagreed" is not evidence. SHIP-WITH-CAVEATS here would be the
+	// worst of the four: a green-shaped word over an empty measurement
+	// (#2619 review, decision b).
+	const passed = list.filter((r) => r.outcome === OUTCOME.PASS);
+	if (passed.length === 0) {
+		return {
+			verdict: "INCONCLUSIVE",
+			reason: `no row was witnessed (${list.length} discovered, 0 PASS)`,
+			caveats: caveats.map((r) => `${r.id} ${formatOutcome(r)}`),
+		};
+	}
 	if (caveats.length > 0) {
 		return {
 			verdict: "SHIP-WITH-CAVEATS",
@@ -297,7 +333,21 @@ export function shipVerdict(results, options = {}) {
 	};
 }
 
-/** Exit code per verdict. 4 is reserved for usage/self-check errors. */
+/**
+ * Exit code per verdict.
+ *
+ * | code | verdict | meaning |
+ * | --- | --- | --- |
+ * | 0 | SHIP | every discovered row PASSED with a witness |
+ * | 1 | DO-NOT-SHIP | a row FAILED, or the candidate would not install/activate |
+ * | 2 | SHIP-WITH-CAVEATS | every witnessed row passed, some produced no witness |
+ * | 3 | BLOCKED / INCONCLUSIVE | no verdict: pi did not boot, or nothing was witnessed |
+ * | 4 | usage or self-check error | bad option, unparseable baseline, arithmetic mismatch |
+ *
+ * **2 is the EXPECTED verdict for a working-tree run**: the `git-install` row
+ * is SKIPPED without `--git-ref`. A CI lane should treat 2 as a warning, and
+ * 1/3/4 as failures.
+ */
 export function verdictExitCode(verdict) {
 	switch (verdict) {
 		case "SHIP":
@@ -307,6 +357,7 @@ export function verdictExitCode(verdict) {
 		case "SHIP-WITH-CAVEATS":
 			return 2;
 		case "BLOCKED":
+		case "INCONCLUSIVE":
 			return 3;
 		default:
 			return 4;
@@ -338,7 +389,15 @@ export function renderReport({
 	if (verdict.verdict === "BLOCKED") {
 		lines.push("");
 		lines.push(
-			"No ship verdict is issued for a blocked run: nothing was witnessed.",
+			"No ship verdict is issued for a blocked run: pi itself did not boot, " +
+				"so nothing about the candidate was measured.",
+		);
+	}
+	if (verdict.verdict === "INCONCLUSIVE") {
+		lines.push("");
+		lines.push(
+			"No ship verdict is issued: pi booted, but not one row produced a " +
+				"witness. An unwitnessed run is not a passing run.",
 		);
 	}
 	for (const caveat of verdict.caveats) lines.push(`- ${caveat}`);
@@ -346,6 +405,15 @@ export function renderReport({
 	lines.push("```");
 	lines.push(renderCoverageLine(coverage));
 	lines.push("```");
+	lines.push("");
+	lines.push(
+		"Legend — `discovered`: rows in the baseline matrix. `rows`: of those, " +
+			"the ones this run actually DROVE a probe for; a row the runner has no " +
+			"probe for is not counted, and a BLOCKED run drives none, so `rows` " +
+			"reads 0. A SKIPPED row IS counted: its probe ran and decided the row " +
+			"unreachable. `untested`: rows that produced no witness. The four " +
+			"outcomes partition `discovered`, not `rows`.",
+	);
 	lines.push("");
 	lines.push("## Rows");
 	lines.push("");
@@ -380,6 +448,14 @@ const DEFAULT_POLL_CAP_MS = 120_000;
 const NPM_TIMEOUT_MS = 600_000;
 const RPC_TIMEOUT_MS = 60_000;
 const MCP_CALL_TIMEOUT_MS = 180_000;
+/**
+ * pi's own label for the registrar that put a skill on the session, as
+ * reported in `get_commands`' `sourceInfo.source`. `extension:index` is
+ * `index.ts`'s `resources_discover` handler (#205) — pi-lens registering its
+ * own skills — as opposed to a `pi.skills` manifest entry pi resolved itself.
+ * Read off live pi 0.80.10 and 0.85.1 responses, both identical.
+ */
+const EXPECTED_SKILL_REGISTRAR = "extension:index";
 
 export function parseArgs(argv) {
 	const opts = {
@@ -391,15 +467,33 @@ export function parseArgs(argv) {
 		gitRef: undefined,
 		keep: false,
 	};
+	// Every value-taking option reads its value through `value()`, which
+	// refuses a missing one. A trailing `--pi` used to leave `opts.pi`
+	// undefined and the run then died deep in a spawn; a trailing
+	// `--poll-cap-ms` produced `Number(undefined)` = NaN, and a NaN cap makes
+	// `pollToTerminal` expire on its first check — turning a polled row
+	// silently UNTESTED, which is precisely the "counted, not claimed"
+	// property this runner exists to hold.
+	const value = (i, flag) => {
+		const raw = argv[i];
+		if (raw === undefined) throw new Error(`${flag} requires a value`);
+		return raw;
+	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "--pi") opts.pi = argv[++i];
-		else if (arg === "--from") opts.from = argv[++i];
-		else if (arg === "--baseline") opts.baseline = argv[++i];
-		else if (arg === "--out") opts.out = argv[++i];
-		else if (arg === "--poll-cap-ms") opts.pollCapMs = Number(argv[++i]);
-		else if (arg === "--git-ref") opts.gitRef = argv[++i];
-		else if (arg === "--keep") opts.keep = true;
+		if (arg === "--pi") opts.pi = value(++i, arg);
+		else if (arg === "--from") opts.from = value(++i, arg);
+		else if (arg === "--baseline") opts.baseline = value(++i, arg);
+		else if (arg === "--out") opts.out = value(++i, arg);
+		else if (arg === "--git-ref") opts.gitRef = value(++i, arg);
+		else if (arg === "--poll-cap-ms") {
+			const raw = value(++i, arg);
+			const parsed = Number(raw);
+			if (!Number.isFinite(parsed) || parsed <= 0) {
+				throw new Error(`--poll-cap-ms must be a positive number, got ${raw}`);
+			}
+			opts.pollCapMs = parsed;
+		} else if (arg === "--keep") opts.keep = true;
 		else throw new Error(`unknown option: ${arg}`);
 	}
 	return opts;
@@ -409,22 +503,53 @@ function log(message) {
 	console.log(`[release-qa] ${message}`);
 }
 
-/** Shell-free `npm` with an argv array. */
-function npm(args, cwd) {
+/**
+ * Shell-free `npm` with an argv array, under the PINNED env.
+ *
+ * `env` is required, not optional (#2619 review F1). It used to be absent, so
+ * every `npm` child inherited the maintainer's real environment — and npm
+ * runs OUR lifecycle scripts: `prepare` invokes
+ * `scripts/warm-loader-cache.mjs`, whose install-log sink is
+ * `PI_LENS_INSTALL_LOG` or, failing that, `os.homedir()/.pi-lens/install.log`.
+ * It is keyed on that variable, NOT on `PI_LENS_HOME`, so pinning the pi-lens
+ * home alone was not enough: a review of the first six runs found 41
+ * `warm_loader_cache` records in the maintainer's real
+ * `~/.pi-lens/install.log`, timestamped across them.
+ */
+function npm(args, cwd, env) {
 	return execFileSync(NPM_BIN, args, {
 		cwd,
 		encoding: "utf8",
 		timeout: NPM_TIMEOUT_MS,
+		env,
 	});
 }
 
 /**
- * The scratch environment every child process below runs under. HOME steers
- * pi's own `~/.pi`; PI_LENS_HOME and PILENS_DATA_DIR steer pi-lens's logs,
- * ledgers and caches. All three land inside the scratch root, so a run can
- * never write into the maintainer's real dirs (#2506).
+ * The scratch environment EVERY child process below runs under — `pi`, the
+ * MCP server, `node`, and `npm` alike.
+ *
+ * Each pin exists because a specific writer reads it, and the set is what
+ * `tests/scripts/release-qa.test.ts`'s hermeticity canary asserts against a
+ * real child process:
+ *
+ * - `HOME` / `USERPROFILE` — `os.homedir()`, which is what pi resolves `~/.pi`
+ *   from and what every fallback sink below lands in when its own variable is
+ *   unset.
+ * - `PI_LENS_HOME` — pi-lens's logs, ledgers and caches.
+ * - `PILENS_DATA_DIR` — project-scoped pi-lens data.
+ * - `PI_LENS_INSTALL_LOG` — `scripts/warm-loader-cache.mjs`'s install log.
+ *   Keyed on this variable ALONE; `PI_LENS_HOME` does not redirect it. Pinning
+ *   the other three and not this one is exactly how the first six runs of this
+ *   runner put 41 records into the maintainer's real `~/.pi-lens/install.log`
+ *   (#2619 review F1).
+ * - `npm_config_cache` — npm's own cache, so a QA run cannot mutate the
+ *   developer's package cache either.
+ *
+ * `#2506` is the standing rule this implements: an ad-hoc probe against real
+ * code with no pins writes into the maintainer's real dirs.
  */
-function scratchEnv(scratchRoot, extra = {}) {
+export function scratchEnv(scratchRoot, extra = {}) {
 	const home = path.join(scratchRoot, "home");
 	return {
 		...process.env,
@@ -432,10 +557,83 @@ function scratchEnv(scratchRoot, extra = {}) {
 		USERPROFILE: home,
 		PI_LENS_HOME: path.join(home, ".pi-lens"),
 		PILENS_DATA_DIR: path.join(home, ".pilens-data"),
+		PI_LENS_INSTALL_LOG: path.join(home, ".pi-lens", "install.log"),
+		npm_config_cache: path.join(scratchRoot, "npm-cache"),
 		ANTHROPIC_API_KEY:
 			process.env.ANTHROPIC_API_KEY || "sk-ant-dummy-release-qa",
 		...extra,
 	};
+}
+
+/**
+ * Every environment variable `scratchEnv` pins inside the scratch root, and
+ * the writer each one steers. Exported so the hermeticity canary enumerates
+ * the same list the runner does instead of re-typing it — a second copy is
+ * how one of them goes missing (which is what F1 was).
+ */
+export const PINNED_ENV_KEYS = Object.freeze([
+	"HOME",
+	"USERPROFILE",
+	"PI_LENS_HOME",
+	"PILENS_DATA_DIR",
+	"PI_LENS_INSTALL_LOG",
+	"npm_config_cache",
+]);
+
+/**
+ * Export the committed tree into the scratch root and pack THERE (#2619
+ * review F1).
+ *
+ * `npm pack` runs our own `prepack` and `prepare`, and both write into the
+ * directory they run in: `scripts/strip-dev-deps-for-pack.mjs` rewrites
+ * `package.json` AND `package-lock.json` (restored only by `postpack`, with no
+ * signal trap, so an interrupted pack leaves the checkout stripped), and
+ * `prepare` rebuilds `dist/`, downloads grammars over the network, and
+ * reinstalls the git hooks. Running that in the live checkout makes a QA run a
+ * mutation of the thing under test. Exporting first makes the pack's blast
+ * radius the scratch root and nothing else.
+ *
+ * `git archive` emits the COMMITTED tree, so a dirty checkout would silently
+ * QA something other than what the operator is looking at. That is refused
+ * rather than warned about: a release is cut from a commit, and a report whose
+ * "QA target" does not name what was measured is the failure mode this whole
+ * runner exists to end. `--from npm:<spec>` needs no export and is unaffected.
+ *
+ * `setup-git-hooks.mjs` no-ops in the export (`if (!existsSync(".git")) return`),
+ * which is why a bare tree export is enough and a full clone is not needed.
+ */
+function exportHeadForPack(scratchRoot) {
+	const dirty = String(
+		gitExecFileSync(["status", "--porcelain"], {
+			cwd: REPO_ROOT,
+			encoding: "utf8",
+		}),
+	).trim();
+	if (dirty !== "") {
+		throw new Error(
+			"the checkout is dirty, so `git archive HEAD` would pack something " +
+				"other than what you are looking at. Commit first, or QA a " +
+				`published release with --from npm:<spec>. Uncommitted:\n${dirty}`,
+		);
+	}
+	const commit = String(
+		gitExecFileSync(["rev-parse", "HEAD"], {
+			cwd: REPO_ROOT,
+			encoding: "utf8",
+		}),
+	).trim();
+	const dir = path.join(scratchRoot, "export");
+	fs.mkdirSync(dir, { recursive: true });
+	const tar = path.join(scratchRoot, "export.tar");
+	gitExecFileSync(["archive", "--format=tar", `--output=${tar}`, "HEAD"], {
+		cwd: REPO_ROOT,
+	});
+	execFileSync("tar", ["-xf", tar, "-C", dir], {
+		timeout: NPM_TIMEOUT_MS,
+		env: scratchEnv(scratchRoot),
+	});
+	fs.rmSync(tar, { force: true });
+	return { dir, commit };
 }
 
 /**
@@ -775,13 +973,32 @@ const ROW_PROBES = {
 		const inPackage = skills.filter((c) =>
 			String(c.sourceInfo?.path ?? "").startsWith(ctx.installedPkgDir),
 		);
+		// The row pins WHICH path registered them, not merely that some path
+		// did (#2619 review F2). pi-lens has two independent registrars — the
+		// `pi.skills` manifest and `index.ts`'s own `resources_discover` handler
+		// (#205) — and #2587 is the proof that one half can be broken for four
+		// releases while the other silently covers for it. `sourceInfo.source`
+		// is pi's own label for the registrar (`extension:index` for the
+		// handler); verified identical on pi 0.80.10 and 0.85.1. The observed
+		// values are printed either way, so a pi-side rename reads as a
+		// diagnosable mismatch rather than a mystery.
+		const registrars = [
+			...new Set(skills.map((c) => String(c.sourceInfo?.source ?? "(none)"))),
+		];
+		const byHandler = skills.filter(
+			(c) => c.sourceInfo?.source === EXPECTED_SKILL_REGISTRAR,
+		);
 		const shows =
 			`${skills.length} skill command(s): ` +
 			`${skills.map((c) => c.name).join(", ") || "(none)"}; ` +
-			`${inPackage.length} resolved inside the installed package`;
+			`${inPackage.length} resolved inside the installed package; ` +
+			`registrar(s): ${registrars.join(", ") || "(none)"} ` +
+			`(${byHandler.length}/${skills.length} via ${EXPECTED_SKILL_REGISTRAR})`;
 		return {
 			status:
-				skills.length >= 4 && inPackage.length === skills.length
+				skills.length >= 4 &&
+				inPackage.length === skills.length &&
+				byHandler.length === skills.length
 					? "pass"
 					: "fail",
 			detail: shows,
@@ -810,10 +1027,15 @@ const ROW_PROBES = {
 			status: lens.length >= 1 && errors.length === 0 ? "pass" : "fail",
 			detail: shows,
 			shows,
+			// The witness is the RAW get_commands response plus the raw
+			// extension_error events — the thing the baseline promises — not the
+			// filtered list, which is this probe's own conclusion and would agree
+			// with itself no matter what pi said (#2619 review F3). The derived
+			// counts live in `shows`.
 			witness: {
 				ext: "json",
 				content: JSON.stringify(
-					{ lensCommands: lens, extensionErrors: errors },
+					{ response: capture.raw ?? null, extensionErrors: errors },
 					null,
 					2,
 				),
@@ -847,7 +1069,11 @@ const ROW_PROBES = {
 			status: missing.length === 0 && misnamed.length === 0 ? "pass" : "fail",
 			detail: shows,
 			shows,
-			witness: { ext: "json", content: JSON.stringify(names, null, 2) },
+			// Raw tools/list result, not the extracted names (#2619 review F3).
+			witness: {
+				ext: "json",
+				content: JSON.stringify(listed.result ?? null, null, 2),
+			},
 		};
 	},
 
@@ -1084,6 +1310,8 @@ async function main() {
 
 	let blocked = false;
 	let blockedReason = "";
+	let candidateFailure = "";
+	let exportedCommit = "";
 	let packListing = null;
 	let installedPkgDir = "";
 	let rpc = null;
@@ -1091,18 +1319,39 @@ async function main() {
 	let mcpTools = null;
 	let installSource = opts.from;
 
+	// BLOCKED is about the HOST, not the candidate (#2619 review, decision a).
+	// This probe runs BEFORE anything is installed: a pi that cannot start a
+	// bare RPC session tells us nothing about the release, so the run is
+	// BLOCKED and no verdict is issued. Once pi has answered here, every later
+	// failure — the pack, the install, `pi install`, a candidate that stops pi
+	// from booting — is the CANDIDATE's failure, and a candidate that will not
+	// install or activate is a do-not-ship result, not an untestable one.
+	setUpFixture(projectDir);
+	log("boot probe: pi --mode rpc with no candidate installed");
+	const bootProbe = await captureGetCommands({
+		piBin: opts.pi,
+		cwd: projectDir,
+		env,
+	});
+	if (!bootProbe.ok) {
+		blocked = true;
+		blockedReason = `pi could not boot without the candidate: ${bootProbe.reason}`;
+	}
+
 	try {
-		setUpFixture(projectDir);
+		if (blocked) throw new Error(blockedReason);
 
 		if (opts.from === "tree") {
-			log("packing the working tree (npm pack --json)");
-			// --pack-destination keeps the tarball out of the checkout (a stray
-			// .tgz in the repo root is a dirty tree the next agent inherits), and
-			// the JSON is sliced from the first `[` because the `prepare` script
+			const exported = exportHeadForPack(scratchRoot);
+			exportedCommit = exported.commit;
+			log(`packing the exported ${exported.commit} (npm pack --json)`);
+			// --pack-destination keeps the tarball out of the export too, and the
+			// JSON is sliced from the first `[` because the `prepare` script
 			// legitimately writes progress to stdout ahead of it (#376's break).
 			const packJson = npm(
 				["pack", "--json", "--pack-destination", scratchRoot],
-				REPO_ROOT,
+				exported.dir,
+				env,
 			);
 			const jsonStart = packJson.indexOf("[");
 			if (jsonStart < 0) throw new Error("npm pack --json printed no JSON");
@@ -1125,7 +1374,7 @@ async function main() {
 				path.join(REPO_ROOT, "scripts", "supply-host-provided-deps.mjs"),
 				"--install-args",
 			],
-			{ encoding: "utf8" },
+			{ encoding: "utf8", env },
 		)
 			.trim()
 			.split(/\s+/)
@@ -1143,6 +1392,7 @@ async function main() {
 		npm(
 			["install", "--no-audit", "--no-fund", installSource, ...supplyArgs],
 			projectDir,
+			env,
 		);
 		installedPkgDir = path.join(projectDir, "node_modules", "pi-lens");
 		if (!fs.existsSync(installedPkgDir)) {
@@ -1166,18 +1416,20 @@ async function main() {
 			timeout: 600_000,
 		});
 
-		log("driving pi --mode rpc (get_commands)");
+		log("driving pi --mode rpc (get_commands) with the candidate installed");
 		rpc = await captureGetCommands({ piBin: opts.pi, cwd: projectDir, env });
 		if (!rpc.ok) {
-			blocked = true;
-			blockedReason = `pi could not boot: ${rpc.reason}`;
+			// pi answered the boot probe moments ago, so this is the candidate
+			// breaking it, not an unbootable host.
+			candidateFailure = `pi booted bare but not with the candidate installed: ${rpc.reason}`;
 		}
 	} catch (err) {
-		blocked = true;
-		blockedReason = `setup failed: ${err?.message || err}`;
+		if (!blocked) {
+			candidateFailure = `candidate could not be installed or activated: ${err?.message || err}`;
+		}
 	}
 
-	if (!blocked) {
+	if (!blocked && !candidateFailure) {
 		const serverJs = path.join(installedPkgDir, "dist", "mcp", "server.js");
 		try {
 			mcp = new McpSession(serverJs, projectDir, env);
@@ -1198,6 +1450,7 @@ async function main() {
 				: {
 						ok: true,
 						names: (listed.result?.tools ?? []).map((t) => t.name),
+						result: listed.result,
 					};
 			// One dispatch through the real per-edit path, so the diagnostics and
 			// health rows below have a session to report on.
@@ -1234,6 +1487,8 @@ async function main() {
 		} else if (blocked) {
 			attempted = false;
 			raw = { status: "blocked", detail: blockedReason };
+		} else if (candidateFailure) {
+			raw = { status: "fail", detail: candidateFailure };
 		} else {
 			log(`row ${row.id}`);
 			try {
@@ -1270,8 +1525,10 @@ async function main() {
 		coverage,
 		verdict,
 		context: {
-			"QA target": installSource,
-			pi: describePi(opts.pi),
+			"QA target": exportedCommit
+				? `${installSource} (packed from exported ${exportedCommit})`
+				: installSource,
+			pi: describePi(opts.pi, env),
 			baseline: path.relative(REPO_ROOT, opts.baseline).replaceAll("\\", "/"),
 			"scratch root": scratchRoot,
 			"polling cap": `${opts.pollCapMs}ms`,
@@ -1321,9 +1578,12 @@ function listInstalledFiles(root) {
 	return out;
 }
 
-function describePi(piBin) {
+function describePi(piBin, env) {
 	try {
-		return `${piBin} ${execFileSync(piBin, ["--version"], { encoding: "utf8" }).trim()}`;
+		return `${piBin} ${execFileSync(piBin, ["--version"], {
+			encoding: "utf8",
+			env,
+		}).trim()}`;
 	} catch (err) {
 		return `${piBin} (version unreadable: ${err?.message || err})`;
 	}

@@ -1,3 +1,9 @@
+// flake-shape: real-process-spawn — the hermeticity canary (#2619 review F1)
+// spawns a REAL child under scratchEnv() and reads back what that child
+// resolved. The defect it pins is precisely that a child inherited the
+// ambient environment; an in-process assertion on the env object would have
+// passed while npm() ignored it, which is how 41 records reached the
+// maintainer's real ~/.pi-lens/install.log.
 /**
  * #2606 — the release-QA runner's pure core.
  *
@@ -24,6 +30,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import * as os from "node:os";
 import {
 	BASELINE_COLUMNS,
 	classifyRowOutcome,
@@ -32,7 +40,9 @@ import {
 	implementedRowIds,
 	parseArgs,
 	parseBaselineRows,
+	PINNED_ENV_KEYS,
 	pollToTerminal,
+	scratchEnv,
 	renderCoverageLine,
 	renderReport,
 	shipVerdict,
@@ -66,7 +76,25 @@ describe("release-QA baseline matrix parsing (#2606)", () => {
 			expect(parsed.passCriterion).not.toBe("");
 			expect(parsed.witness).not.toBe("");
 			expect(parsed.reuse).not.toBe("");
+			expect(parsed.umbrella).not.toBe("");
 		}
+	});
+
+	// The maintainer's instruction on #2606: the matrix must say where it
+	// overlaps the already-filed smoke umbrellas rather than re-litigating them
+	// row by row. These four rows are the overlap; a blank or wrong citation
+	// reds here.
+	it.each([
+		["install-selftest", "#1605"],
+		["commands-registered", "#1605"],
+		["mcp-turn-end", "#1605"],
+		["degradation-visible", "#1605"],
+		["mcp-lsp-navigation", "#1829"],
+	])("row %s cites umbrella %s", (id, umbrella) => {
+		const { rows } = parseBaselineRows(baselineText());
+		const parsed = rows.find((r) => r.id === id);
+		expect(parsed, `row ${id} is missing from the matrix`).toBeDefined();
+		expect(parsed?.umbrella).toContain(umbrella);
 	});
 
 	it("covers at least three distinct modalities", () => {
@@ -107,6 +135,7 @@ describe("release-QA baseline matrix parsing (#2606)", () => {
 			"pass criterion",
 			"witness",
 			"reuse",
+			"umbrella",
 		]);
 	});
 });
@@ -303,6 +332,16 @@ describe("release-QA ship verdict (#2606)", () => {
 		expect(verdictExitCode(verdict.verdict)).toBe(2);
 	});
 
+	it("issues no ship verdict when pi booted but nothing was witnessed", () => {
+		const verdict = shipVerdict([
+			row("a", "UNTESTED", "cap expired"),
+			row("b", "SKIPPED", "no --git-ref"),
+		]);
+		expect(verdict.verdict).toBe("INCONCLUSIVE");
+		expect(verdict.reason).toContain("0 PASS");
+		expect(verdictExitCode(verdict.verdict)).toBe(3);
+	});
+
 	it("ships only when every discovered row PASSED", () => {
 		const verdict = shipVerdict([row("a", "PASS"), row("b", "PASS")]);
 		expect(verdict.verdict).toBe("SHIP");
@@ -321,6 +360,7 @@ describe("release-QA report rendering (#2606)", () => {
 				passCriterion: "p",
 				witness: "w",
 				reuse: "r",
+				umbrella: "—",
 			},
 		];
 		const results = [
@@ -359,6 +399,7 @@ describe("release-QA report rendering (#2606)", () => {
 				passCriterion: "p",
 				witness: "w",
 				reuse: "r",
+				umbrella: "—",
 			},
 		];
 		const report = renderReport({
@@ -379,7 +420,94 @@ describe("release-QA report rendering (#2606)", () => {
 			verdict: shipVerdict([], { blocked: true, blockedReason: "no pi" }),
 		});
 		expect(report).toContain("## Verdict: BLOCKED");
-		expect(report).toContain("No ship verdict is issued for a blocked run");
+		expect(report).toContain("pi itself did not boot");
+	});
+
+	it("says plainly that an unwitnessed run gets no ship verdict either", () => {
+		const results = [row("a", "UNTESTED", "cap expired")];
+		const report = renderReport({
+			rows: [
+				{
+					id: "a",
+					feature: "f",
+					modality: "mcp-stdio",
+					entryPoint: "e",
+					passCriterion: "p",
+					witness: "w",
+					reuse: "r",
+					umbrella: "—",
+				},
+			],
+			results,
+			coverage: coverageArithmetic(results, 1),
+			verdict: shipVerdict(results),
+		});
+		expect(report).toContain("## Verdict: INCONCLUSIVE");
+		expect(report).toContain("An unwitnessed run is not a passing run");
+	});
+
+	it("defines the coverage triple beneath the arithmetic", () => {
+		const results = [row("a", "PASS")];
+		const report = renderReport({
+			rows: [],
+			results,
+			coverage: coverageArithmetic(results, 1),
+			verdict: shipVerdict(results),
+		});
+		expect(report).toContain("Legend — `discovered`");
+		expect(report).toContain("A SKIPPED row IS counted");
+	});
+});
+
+describe("release-QA scratch hermeticity (#2619 review F1)", () => {
+	// The receipt this canary exists for: the runner's first six runs pinned
+	// PI_LENS_HOME but passed NO env to `npm`, and `npm pack` runs our own
+	// `prepare` -> `scripts/warm-loader-cache.mjs`, whose install-log sink is
+	// PI_LENS_INSTALL_LOG or `os.homedir()/.pi-lens/install.log`. 41
+	// `warm_loader_cache` records landed in the maintainer's real file.
+	const scratchRoot = path.join(os.tmpdir(), "release-qa-hermeticity-fixture");
+
+	it("pins every variable a pi-lens or npm child could write through", () => {
+		const env = scratchEnv(scratchRoot);
+		for (const key of PINNED_ENV_KEYS) {
+			expect(env[key], `${key} is not pinned`).toBeDefined();
+			expect(
+				String(env[key]).startsWith(scratchRoot),
+				`${key} = ${env[key]} escapes the scratch root`,
+			).toBe(true);
+		}
+		// The one that was missing. Named explicitly as well as swept, because
+		// a sweep over a list cannot notice the list itself lost an entry.
+		expect(env.PI_LENS_INSTALL_LOG).toBe(
+			path.join(scratchRoot, "home", ".pi-lens", "install.log"),
+		);
+	});
+
+	it("gives a REAL child a home and an install log inside the scratch root", () => {
+		// A real child, not an in-process assertion: the bug was a child
+		// inheriting the ambient environment, and `os.homedir()` in THIS process
+		// can only ever report the ambient one.
+		const probe = [
+			"-e",
+			"console.log(JSON.stringify({" +
+				"homedir: require('node:os').homedir()," +
+				"installLog: process.env.PI_LENS_INSTALL_LOG ?? null," +
+				"piLensHome: process.env.PI_LENS_HOME ?? null," +
+				"npmCache: process.env.npm_config_cache ?? null}))",
+		];
+		const stdout = execFileSync(process.execPath, probe, {
+			encoding: "utf8",
+			env: scratchEnv(scratchRoot),
+			timeout: 30_000,
+		});
+		const seen = JSON.parse(stdout);
+		expect(seen.homedir).toBe(path.join(scratchRoot, "home"));
+		expect(seen.homedir).not.toBe(os.homedir());
+		expect(seen.installLog).toBe(
+			path.join(scratchRoot, "home", ".pi-lens", "install.log"),
+		);
+		expect(seen.piLensHome).toBe(path.join(scratchRoot, "home", ".pi-lens"));
+		expect(seen.npmCache).toBe(path.join(scratchRoot, "npm-cache"));
 	});
 });
 
@@ -395,5 +523,26 @@ describe("release-QA argument parsing (#2606)", () => {
 
 	it("rejects an unknown option instead of ignoring it", () => {
 		expect(() => parseArgs(["--wat"])).toThrow(/unknown option: --wat/);
+	});
+
+	it("refuses a non-numeric polling cap rather than running with NaN", () => {
+		// A NaN cap makes pollToTerminal expire on its first check, so the polled
+		// row goes silently UNTESTED — a typo quietly shrinking the witnessed set
+		// is the exact opposite of "coverage counted, not claimed".
+		expect(() => parseArgs(["--poll-cap-ms", "abc"])).toThrow(
+			/--poll-cap-ms must be a positive number, got abc/,
+		);
+		expect(() => parseArgs(["--poll-cap-ms", "0"])).toThrow(
+			/--poll-cap-ms must be a positive number/,
+		);
+		expect(parseArgs(["--poll-cap-ms", "5000"]).pollCapMs).toBe(5000);
+	});
+
+	it("refuses a trailing value-taking flag rather than carrying undefined", () => {
+		expect(() => parseArgs(["--pi"])).toThrow(/--pi requires a value/);
+		expect(() => parseArgs(["--out"])).toThrow(/--out requires a value/);
+		expect(() => parseArgs(["--git-ref"])).toThrow(
+			/--git-ref requires a value/,
+		);
 	});
 });

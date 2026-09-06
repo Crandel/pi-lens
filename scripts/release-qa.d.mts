@@ -11,6 +11,7 @@ export interface BaselineRow {
 	passCriterion: string;
 	witness: string;
 	reuse: string;
+	umbrella: string;
 }
 
 export interface ParsedBaseline {
@@ -43,7 +44,12 @@ export interface Coverage {
 }
 
 export interface Verdict {
-	verdict: "SHIP" | "SHIP-WITH-CAVEATS" | "DO-NOT-SHIP" | "BLOCKED";
+	verdict:
+		| "SHIP"
+		| "SHIP-WITH-CAVEATS"
+		| "DO-NOT-SHIP"
+		| "BLOCKED"
+		| "INCONCLUSIVE";
 	reason: string;
 	caveats: string[];
 }
@@ -85,7 +91,34 @@ export function shipVerdict(
 	results: ReadonlyArray<RowResult>,
 	options?: { blocked?: boolean; blockedReason?: string },
 ): Verdict;
+/**
+ * The runner's exit-code contract.
+ *
+ * | code | verdict | meaning |
+ * | --- | --- | --- |
+ * | 0 | SHIP | every discovered row PASSED with a witness |
+ * | 1 | DO-NOT-SHIP | a row FAILED, or the candidate would not install/activate |
+ * | 2 | SHIP-WITH-CAVEATS | every witnessed row passed, some produced no witness |
+ * | 3 | BLOCKED / INCONCLUSIVE | no verdict: pi did not boot, or nothing was witnessed |
+ * | 4 | usage or self-check error | bad option, unparseable baseline, arithmetic mismatch |
+ *
+ * **2 is the EXPECTED verdict for a plain working-tree run** — `git-install`
+ * is SKIPPED without `--git-ref`. A CI lane treats 2 as a warning, 1/3/4 as
+ * failures.
+ */
 export function verdictExitCode(verdict: string): number;
+
+/**
+ * The pinned scratch environment every child process runs under. Its keys are
+ * enumerated by `PINNED_ENV_KEYS`.
+ */
+export function scratchEnv(
+	scratchRoot: string,
+	extra?: Record<string, string>,
+): NodeJS.ProcessEnv;
+
+/** Every variable `scratchEnv` pins inside the scratch root. */
+export const PINNED_ENV_KEYS: readonly string[];
 export function renderReport(input: {
 	rows: ReadonlyArray<BaselineRow>;
 	results: ReadonlyArray<RowResult>;
