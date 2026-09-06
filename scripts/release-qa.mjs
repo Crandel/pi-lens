@@ -989,7 +989,14 @@ const ROW_PROBES = {
 			}),
 		);
 		const env = { ...ctx.env, HOME: home, USERPROFILE: home };
-		const source = `git:github.com/apmantza/pi-lens#${ctx.gitRef}`;
+		// pi separates the ref with `@`, NOT `#` — read from its own parser,
+		// `splitRef` in `@earendil-works/pi-coding-agent` `dist/utils/git.js`
+		// (0.80.10, identical in 0.85.1): the non-URL branch takes
+		// `pathWithMaybeRef.indexOf("@")` as the separator, so a `#ref` form is
+		// carried into the clone URL verbatim and `git clone` fails. Verified
+		// live: `#fix/2606-release-qa` produced
+		// `git clone https://github.com/apmantza/pi-lens#fix/2606-release-qa`.
+		const source = `git:github.com/apmantza/pi-lens@${ctx.gitRef}`;
 		let installLog = "";
 		try {
 			installLog = execFileSync(ctx.piBin, ["install", source], {
