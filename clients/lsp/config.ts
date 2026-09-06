@@ -241,9 +241,46 @@ const CONFIG_RESOLVED_PHASE = "config_resolved";
  * claim recorded the FIRST root's documents and nothing else — project B's
  * legacy config document never reached a row, so the
  * "legacy-document-with-no-records" smell structurally could not fire for it.
- * `normalizeFilePath` keys it, the repo-wide rule for every path-keyed map
- * (#210): a `/`-vs-`\` spelling of one root must not buy a second row.
+ * `configResolutionKey` keys it (fold, canonicalize, fold — see below), the
+ * repo-wide rule for every path-keyed map (#210): a `/`-vs-`\` spelling of
+ * one root must not buy a second row.
  */
+/**
+ * THE (session, root) key of every config-resolution record: the
+ * `config_resolution_pending` mark, the `config_resolved` row and claim, and
+ * the release of that claim when the root is evicted.
+ *
+ * Fold separators, THEN canonicalize, then fold again — in that order, and
+ * neither step alone is enough (#2518 review F6). `normalizeFilePath` folds
+ * separators and Windows casing but is the IDENTITY on a POSIX path that
+ * merely needs canonicalizing, so `"/proj/"` and `"/proj"` produced two
+ * different claim keys. `path.resolve` fixes that and nothing else — and it
+ * cannot run first: on POSIX a backslash is an ordinary filename character,
+ * so resolving `"/proj\\sub"` before folding yields
+ * `<process.cwd()>/proj\sub`, a different root entirely. That is the #2526 R2
+ * spelling case (`tests/clients/config-resolved-phase.test.ts`, "a /-vs-\
+ * spelling of one root does not buy a second row"), which caught exactly this
+ * ordering while it was wrong. Resolving here rather than at
+ * each caller is what makes the keys identical BY CONSTRUCTION: the callers
+ * do not agree today (`initLSPConfig` passes its registry-resolved cwd,
+ * `clients/runtime-session.ts`'s two warm-path `loadLSPConfig` calls pass the
+ * session cwd verbatim, and `analysisRoot` from `.pi-lens.json` can carry a
+ * trailing slash), and a per-caller normalization is exactly the shape 1
+ * defect this key keeps being bitten by — the write form and the read form
+ * diverging because two sites each folded the path their own way.
+ *
+ * It is also the key `clients/lsp/session-roots.ts` stores its roots under,
+ * once composed: the registry key is `path.resolve(cwd)`, and this function
+ * applied to it is idempotent, so `forgetConfigResolvedClaims` releases
+ * exactly the claim `recordConfigResolved` took.
+ */
+function configResolutionKey(cwd: string): string {
+	// Fold first (separators, Windows casing), canonicalize second (trailing
+	// separators, relative segments), fold again so the result keeps the
+	// forward-slash shape every producer and the analyzer already compare on.
+	return normalizeFilePath(path.resolve(normalizeFilePath(cwd)));
+}
+
 /**
  * Announce, at the instant a resolution is actually about to be attempted,
  * that THIS session expects a `config_resolved` row (#2526 review round 3,
@@ -283,43 +320,6 @@ const CONFIG_RESOLVED_PHASE = "config_resolved";
  * row, which the analyzer's join reads as "expected and never happened"
  * rather than silently matching "never expected at all".
  *
-/**
- * THE (session, root) key of every config-resolution record: the
- * `config_resolution_pending` mark, the `config_resolved` row and claim, and
- * the release of that claim when the root is evicted.
- *
- * Fold separators, THEN canonicalize, then fold again — in that order, and
- * neither step alone is enough (#2518 review F6). `normalizeFilePath` folds
- * separators and Windows casing but is the IDENTITY on a POSIX path that
- * merely needs canonicalizing, so `"/proj/"` and `"/proj"` produced two
- * different claim keys. `path.resolve` fixes that and nothing else — and it
- * cannot run first: on POSIX a backslash is an ordinary filename character,
- * so resolving `"/proj\\sub"` before folding yields
- * `<process.cwd()>/proj\sub`, a different root entirely. That is the #2526 R2
- * spelling case (`tests/clients/config-resolved-phase.test.ts`, "a /-vs-\
- * spelling of one root does not buy a second row"), which caught exactly this
- * ordering while it was wrong. Resolving here rather than at
- * each caller is what makes the keys identical BY CONSTRUCTION: the callers
- * do not agree today (`initLSPConfig` passes its registry-resolved cwd,
- * `clients/runtime-session.ts`'s two warm-path `loadLSPConfig` calls pass the
- * session cwd verbatim, and `analysisRoot` from `.pi-lens.json` can carry a
- * trailing slash), and a per-caller normalization is exactly the shape 1
- * defect this key keeps being bitten by — the write form and the read form
- * diverging because two sites each folded the path their own way.
- *
- * It is also the key `clients/lsp/session-roots.ts` stores its roots under,
- * once composed: the registry key is `path.resolve(cwd)`, and this function
- * applied to it is idempotent, so `forgetConfigResolvedClaims` releases
- * exactly the claim `recordConfigResolved` took.
- */
-function configResolutionKey(cwd: string): string {
-	// Fold first (separators, Windows casing), canonicalize second (trailing
-	// separators, relative segments), fold again so the result keeps the
-	// forward-slash shape every producer and the analyzer already compare on.
-	return normalizeFilePath(path.resolve(normalizeFilePath(cwd)));
-}
-
-/**
  * Carries `root=<configResolutionKey(cwd)>` (#2552 review round 4, MEDIUM): the
  * warm MCP server keeps ONE session id for the life of the process but calls
  * this once per SERVED ROOT (`ensureReady` per root, `mcp/server.ts`) — a

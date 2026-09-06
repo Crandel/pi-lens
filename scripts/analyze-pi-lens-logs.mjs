@@ -1007,8 +1007,9 @@ function iso(date) {
  * OTHER root's deficit under the same session id. `root` is whatever string
  * the producer already wrote (the pending mark's `root=`, or the row's own
  * `filePath` — both come from the SAME `configResolutionKey(cwd)` call in
- * `clients/lsp/config.ts`, which is `path.resolve` then `normalizeFilePath`
- * (#2518 review F6), so they compare equal without this script re-deriving any
+ * `clients/lsp/config.ts`, which folds separators, canonicalizes, then folds
+ * again — `normalizeFilePath(path.resolve(normalizeFilePath(cwd)))`, in that
+ * order (#2518 review F6; resolving first breaks POSIX backslash names), so they compare equal without this script re-deriving any
  * path normalization of its own).
  */
 function configJoinKey(sessionId, root) {
