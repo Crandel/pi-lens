@@ -110,6 +110,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { lineContentHash } from "../../clients/read-guard.js";
 import { toPosix } from "../../clients/path-utils.js";
+// Re-exported for test doubles/helpers so the test side has ONE import to
+// reach for instead of hand-copying the escaping body (#2558). This is the
+// ONE test-side re-export; the runtime copy lives in clients/string-utils.ts.
+export { escapeRegExp } from "../../clients/string-utils.js";
 
 // ── 1. Source scanning ──────────────────────────────────────────────────────
 

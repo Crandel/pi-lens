@@ -106,11 +106,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"observes the script's real stdout bytes (newline- vs. space-delimited); no in-process double is faithful",
 	},
-	// 2026-09-06 (#2591 review round 2, F1): the defect is 2^N regex
+	// 2026-09-06 (#2603, was #2591 review round 2, F1): the defect is 2^N regex
 	// backtracking through detectPythonEnvironment — the ANSWER was always
 	// right, only the time was wrong, so no non-clock assertion separates
 	// fixed from broken; header on the file states why.
-	"elapsed-time-assertion:clients/workspace-glob-globstar-collapse-budget.test.ts":
+	"elapsed-time-assertion:clients/workspace-glob-nonbacktracking-budget.test.ts":
 		{
 			detector: "elapsed-time-assertion",
 			reason:

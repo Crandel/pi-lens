@@ -158,10 +158,14 @@ operator's private notes, so a different orchestrator can run the same train.
   dogfood, release gate) and which layer SHOULD have caught it earlier and at
   what cost. If that layer does not exist, file it as an issue with the bug as
   its named recurrence — the same standard shapes are held to. The ledger
-  carries a `caught by / should have been caught by` column. Record: #2587
-  shipped for four releases with zero skills loading; the shape lesson went
-  into AGENTS.md the same day, the layer lesson (no witnessed real-pi pass,
-  #2606) surfaced only because the maintainer brought an outside skill in.
+  carries a `caught by / should have been caught by` column. Record: #2587's
+  manifest entry escaped the package for four releases; a second registration
+  path masked it, so the shipped defect was foreign-tree adoption, not absence
+  — and no check ever asked a real pi which SOURCE a skill came from. The
+  shape lesson went into AGENTS.md the same day; the layer lesson (a witnessed
+  real-pi pass asserting source and path, #2606) surfaced only because the
+  maintainer brought an outside skill in, and the first runner's count-only
+  row would have passed the broken release.
 - **Harvest every reviewer's "Could not verify" and "Named output".** Those
   sections hold the structural insights the probes could not close (a
   runIf-conditional guard, a smoke section that never ran on a real runner, a

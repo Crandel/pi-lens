@@ -1101,6 +1101,17 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvExclude: false,
 	},
 	{
+		// The separator alone is not the component: `crates/**` compiled to
+		// `^crates/.+$`, so the `.+` (one character, then any number) has to
+		// survive the step split that put the `/` in its own step (#2603).
+		axis: "a TRAILING `**` is not satisfied by the separator alone",
+		pattern: "crates/**",
+		relativePath: "crates/",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
 		axis: "an INTERIOR `**` may consume zero components",
 		pattern: "a/**/b",
 		relativePath: "a/b",
@@ -1236,14 +1247,15 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvMembers: true,
 		uvExclude: true,
 	},
-	// #2591 review round 2, F1: consecutive `**` components collapse to one
-	// (`rust-lang/glob@cfa2a58f2e44373573f657ec25b3621e44714dee`,
-	// `src/lib.rs:672-684`). Collapsing is semantics-preserving, so these three
-	// rows must read exactly like the single-`**` rows above — the equivalence
-	// half of the fix; its cost half is the budget in
-	// `workspace-glob-globstar-collapse-budget.test.ts`.
+	// Adjacent `**` components denote exactly what a single one does, so these
+	// three rows must read exactly like the single-`**` rows above. #2591 review
+	// round 2 leaned on that to COLLAPSE them before compiling, the way upstream
+	// does (`rust-lang/glob@cfa2a58f2e44373573f657ec25b3621e44714dee`,
+	// `src/lib.rs:672-684`); #2603 DELETED the collapse — it was a speed
+	// normalization, and the step table the matcher now fills is linear with or
+	// without it — so these rows are what keeps that deletion honest.
 	{
-		axis: "chained `**` collapse: interior, consuming zero components",
+		axis: "chained `**`: interior, consuming zero components",
 		pattern: "a/**/**/**/b",
 		relativePath: "a/b",
 		cargo: false,
@@ -1251,7 +1263,7 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvExclude: true,
 	},
 	{
-		axis: "chained `**` collapse: interior, consuming several components",
+		axis: "chained `**`: interior, consuming several components",
 		pattern: "a/**/**/**/b",
 		relativePath: "a/x/y/b",
 		cargo: false,
@@ -1259,9 +1271,66 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvExclude: true,
 	},
 	{
-		axis: "chained `**` collapse: a trailing chain still requires one component",
+		axis: "chained `**`: a trailing chain still requires one component",
 		pattern: "a/**/**/**",
 		relativePath: "a",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	// #2603: INTERLEAVED `**` chains — a `**` per link, separated by a `*`
+	// component, which is the shape no consecutive-`**` collapse can reach. The
+	// answers are the ordinary globstar answers; the cost half is the budget in
+	// `workspace-glob-nonbacktracking-budget.test.ts`.
+	{
+		axis: "interleaved `**/*` chain, every `**` consuming zero components",
+		pattern: "**/*/**/*/zzz",
+		relativePath: "a/b/zzz",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "interleaved `**/*` chain, the `**`s consuming components",
+		pattern: "**/*/**/*/zzz",
+		relativePath: "a/b/c/d/e/zzz",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "interleaved `**/*` chain against a path with no matching tail",
+		pattern: "**/*/**/*/zzz",
+		relativePath: "a/b/c/d/e",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "a `*` interleaved with `**` still crosses `/` only in uv exclude",
+		pattern: "**/a*c/zzz",
+		relativePath: "x/a/b/c/zzz",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: true,
+	},
+	// A separator-CROSSING wildcard is `.`, not "any character": the regex the
+	// step table replaced spelled `**` as `.+`, and minimatch's globstar is
+	// `.`-based too, so neither has ever matched across a line terminator inside
+	// a directory name. The pair below is the positive control and the pin —
+	// widening the crossing predicate to "any character" reds the second row.
+	{
+		axis: "`**` crosses an ordinary directory name",
+		pattern: "**/c",
+		relativePath: "ab/c",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "`**` does NOT cross a newline inside a directory name (`.`, not any char)",
+		pattern: "**/c",
+		relativePath: "a\nb/c",
 		cargo: false,
 		uvMembers: false,
 		uvExclude: false,
@@ -1403,6 +1472,13 @@ const UV_DIFFERENTIAL_PATTERNS = [
 	"?",
 	"??",
 	"*-*",
+	// #2603: interleaved `**` chains — a `**` per link separated by a `*`
+	// component, the shape the consecutive-`**` collapse could never reach and
+	// the one the step table had to be built for.
+	"**/*/**/*/zzz",
+	"**/*/**",
+	"*/**/*/**",
+	"a/**/*/**/b",
 ] as const;
 
 const UV_DIFFERENTIAL_PATHS = [
@@ -1447,6 +1523,12 @@ const UV_DIFFERENTIAL_PATHS = [
 	"packages/x/y/z",
 	"a-c",
 	"a/x/c",
+	// #2603: tails the interleaved patterns above can and cannot reach, and a
+	// directory name carrying a line terminator — the character a
+	// separator-crossing wildcard has never been able to cross.
+	"a/b/zzz",
+	"a/b/c/d/zzz",
+	"a\nb/c",
 ] as const;
 
 /**
@@ -1466,12 +1548,25 @@ const UV_MINIMATCH_DIVERGENCES = new Map<string, string>([
 	["packages/[]ab] packages//a", "path-side //, unreachable via path.relative"],
 	["./packages/* packages//a", "path-side //, unreachable via path.relative"],
 	["packages/./a packages//a", "path-side //, unreachable via path.relative"],
+	["*/**/*/** packages//a", "path-side //, unreachable via path.relative"],
 	// Brace expansion is a minimatch extension the pre-fold uv path inherited by
 	// accident. uv compiles members with rust `glob::Pattern` at the pinned SHA,
 	// which has no brace syntax at all, so `a{b,c}` names a directory literally
 	// called `a{b,c}` upstream. The fold moves uv TOWARD upstream here.
 	["a{b,c} ab", "minimatch-only brace expansion; rust glob has none"],
 	["a{b,c} a{b,c}", "minimatch-only brace expansion; rust glob has none"],
+	// minimatch short-circuits a pattern that is NOTHING BUT `**` to
+	// match-everything; every other spelling of it goes through a `.`-based
+	// group, as did the regex this matcher replaced, and `.` excludes the four
+	// line terminators. So a bare `**` matches a directory name containing a
+	// `\n` in minimatch and not here. INHERITED, not introduced: the pre-fold
+	// minimatch call and the #2591 regex disagreed the same way, and #2591's
+	// corpus simply carried no such path. Upstream rust `glob` is char-based and
+	// would match, so this is a recorded limitation rather than a choice; it
+	// needs a real directory whose name contains a newline to observe.
+	["** a\nb/c", "minimatch's bare-`**` match-everything short-circuit"],
+	["**/** a\nb/c", "minimatch's bare-`**` match-everything short-circuit"],
+	["**/**/** a\nb/c", "minimatch's bare-`**` match-everything short-circuit"],
 ]);
 
 describe("the uv-members dialect reproduces the pre-fold minimatch answers (#2591)", () => {
