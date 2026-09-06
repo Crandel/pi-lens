@@ -818,7 +818,17 @@ export type DegradationKind =
 	 * Same informational treatment: the next deferral or in-band analysis
 	 * re-observes the file.
 	 */
-	| "actionable-warnings-deferred-superseded";
+	| "actionable-warnings-deferred-superseded"
+	/**
+	 * #2626: `resources_discover` (#205) resolved `<packageRoot>/skills` to a
+	 * directory that is absent, unreadable, or holds no `SKILL.md` — pi then
+	 * registers zero skills with no extension error and no stderr. Fires on
+	 * an installed copy missing `skills/`, or on the entry file having been
+	 * copied out of the package tree by a managed extension cache (so the
+	 * nearest `package.json` is the cache's own). Subject is the resolved
+	 * `skills/` path; see `clients/skills-resolver.ts`.
+	 */
+	| "skills-dir-missing";
 
 export interface DegradationRecord {
 	kind: unknown;

@@ -305,6 +305,15 @@ two mutation-inert branches under a ticked checklist box; #2595 r1 shipped an
 axis no manifest can reach. #2599 is the positive case — four `omit` entries
 deleted before reporting because the mutation showed they did nothing.
 
+Two more checks before the report, both from the same day:
+- **Re-run every prior round's mutation set on the new head**, not only the
+  new mutations. #2583 r3's home-ceiling test went vacuous the moment the new
+  gate subsumed its fixture; only the re-run caught it. A guard that was live
+  last round is not assumed live this round.
+- **The closing keyword lives in the PR BODY.** GitHub ignores `closes #N` in
+  a title; four 2026-09-06 PRs needed hand-closing. `closes` only when every
+  acceptance box is met, else `refs` plus the remainder comment.
+
 ## Report format
 
 Outcome first: branch, PR URL, then root cause in two sentences, red-run

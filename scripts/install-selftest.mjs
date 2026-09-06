@@ -49,6 +49,7 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOST_PROVIDED_PACKAGES } from "./lib/host-provided-deps.mjs";
+import { collectSkillEntryPaths } from "./lib/skills-predicate.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, "..");
@@ -254,21 +255,13 @@ record("tree-sitter grammars", "asset", hasCoreGrammar, grammarDetail);
 // FromManifestEntries` in `@earendil-works/pi-coding-agent`
 // `dist/core/package-manager.js`: a non-glob entry is `resolve(packageRoot, entry)`
 // (verified identical in 0.78.1 / 0.84.1 / 0.85.1).
-/** How many SKILL.md files live under `dir` (0 if it does not exist). */
-function countSkillFiles(dir) {
-	let n = 0;
-	let entries;
-	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return 0;
-	}
-	for (const e of entries) {
-		if (e.isDirectory()) n += countSkillFiles(path.join(dir, e.name));
-		else if (e.name === "SKILL.md") n++;
-	}
-	return n;
-}
+//
+// #2626 review round 2 (F2): the "does this dir have a skill" walk used to be
+// a hand-rolled `countSkillFiles` here AND a second, differently-wrong one in
+// `clients/skills-resolver.ts`. Both now derive from the ONE structural
+// predicate in `./lib/skills-predicate.mjs`, which replicates pi's actual
+// `loadSkillsFromDirInternal` walk (see that module's header for the exact
+// discovery rules and the two documented scope gaps).
 {
 	const pkgJson = JSON.parse(
 		fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8"),
@@ -290,7 +283,7 @@ function countSkillFiles(dir) {
 			record(label, "manifest", false, `escapes the package: ${resolved}`);
 			continue;
 		}
-		const found = countSkillFiles(resolved);
+		const found = collectSkillEntryPaths(resolved).length;
 		record(
 			label,
 			"manifest",
