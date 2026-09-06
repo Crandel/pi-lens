@@ -170,6 +170,12 @@ while hiding an inversion (#2119 r2). Fix rounds introduce defects at the
 same rate they remove them here. Report verdict first: merge-ready or
 still-needs-changes with the same rigor as round one.
 
+**Every verify round re-runs the previous rounds' mutation set** on the new
+head before it re-runs the new claims. A fix round can silently retire a guard
+(#2583 r3: the new `isStartDir` gate subsumed the home-ceiling fixture and its
+test went green under its own mutation); the fixer is asked to do the same, and
+the reviewer does not take that on trust.
+
 ## Materiality bar
 
 A finding must matter. Do not report: stylistic-consistency preferences,

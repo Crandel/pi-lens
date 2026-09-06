@@ -49,8 +49,12 @@ instructions say so.
    merge-order implications in your PR body.
    Directory isolation is non-negotiable (#2007): you work in YOUR OWN
    worktree, never a checkout another session may share. Create it as
-   `.claude/worktrees/agent-<your agent id>` under the main checkout — that
-   is the only path the SubagentStop / SessionStart reaper sweeps. Never
+   `.claude/worktrees/agent-<issue>-<8 random hex>` under the main checkout
+   (e.g. `agent-2345-$(openssl rand -hex 4)` — generate the suffix, never
+   reuse a name you have seen, never use the SESSION id: on 2026-09-06 two
+   fixers both chose `agent-6a12353d` and one destroyed the other's
+   uncommitted edits). That prefix is the only path the SubagentStop /
+   SessionStart reaper sweeps. Never
    under `~/Desktop`, the scratchpad, or any ad-hoc `pi-lens-wt-*` name: on
    2026-09-06 ten such trees accumulated outside the sweep and had to be
    removed by hand. Never switch
@@ -59,6 +63,20 @@ instructions say so.
    unrecoverable. If you find yourself in a shared checkout, stop and cut a
    worktree instead. The runtime `--lens-checkout-guard` is a net, not the
    rule; the rule is you never get near it.
+   Set the tree up before the first test run: `ln -s <main checkout>/node_modules
+   node_modules` (worktrees start without one, and every fixer on 2026-09-06
+   then reported `pi-host-contract` and `console-capture-window-coverage` red
+   as "environment"; once that label hid a real regression, #2654's
+   `sweep-floor-coverage` red). A red is environmental ONLY when the same
+   file is red on `origin/master` in the same tree — run it there and quote
+   both results, or treat it as yours.
+   Commit after every proven step, on your branch, before the next probe. Two
+   trees lost uncommitted work the same day: #2358's was removed by a prune
+   that saw a branch with no commits, and #2518 r2's edits died under a
+   `git checkout --` meant for a mutation. `git checkout --` only ever
+   targets committed state (`git checkout HEAD -- <file>`), and never
+   `git reset --soft origin/master` while master moves — it staged a revert
+   of #2646 into #2662's tree.
 3. Reuse the repo's existing machinery — availability-policy latches,
    degradation ledger, established seams — rather than hand-rolling parallel
    state. A hand-maintained list that mirrors a registry is a defect
@@ -304,6 +322,45 @@ r1 shipped 28 laundered call sites and dead `keys` plumbing; #2583 r2 shipped
 two mutation-inert branches under a ticked checklist box; #2595 r1 shipped an
 axis no manifest can reach. #2599 is the positive case — four `omit` entries
 deleted before reporting because the mutation showed they did nothing.
+
+Two more checks before the report, both from the same day:
+- **Re-run every prior round's mutation set on the new head**, not only the
+  new mutations. #2583 r3's home-ceiling test went vacuous the moment the new
+  gate subsumed its fixture; only the re-run caught it. A guard that was live
+  last round is not assumed live this round.
+- **The reviewer's first five.** On the evening of 2026-09-06 every one of
+  five production PRs (#2642 #2643 #2647 #2649 #2654) went back for a round,
+  and each round was made of the same five shapes. Run them on your own diff
+  before opening the PR; each costs minutes here and a fixer round plus a
+  verify there.
+  1. *Observability is a quoted row, not a sentence.* Every record the
+     Observability section names must appear in a test assertion in this
+     diff, quoted in the body. #2642 named a `config_resolved` row a
+     once-per-session claim swallowed; #2649's only record was the failure
+     path; #2654 wrote a per-touched-file row on seven healthy languages;
+     #2647 quoted a `durationMs` that excluded the spawn it added.
+  2. *Mutate the guard both ways.* `if (x)` → `if (true)` AND `if (false)`;
+     the dangerous direction is the one where real failures stop blocking.
+     #2643's git-guard gate, #2647's ladder position and #2644's allow
+     reason were all green under the inverse. The new test must be the ONLY
+     red under at least one mutation, or it has no signature of its own.
+  3. *Sweep by shape, not by symbol.* Grep the expression (`failed === 0 &&
+     error`, the classify/report pair, the path constant), not the function
+     name. #2643 missed a third predicate twenty lines from the new helper;
+     #2654 rebuilt machinery `skills-resolver.ts` already had.
+  4. *Every behavioural sentence maps to a test or a probe.* A docstring
+     invariant (#2643: "`failed` is 0 whenever `error` is set" — the pytest
+     parser sets them independently), a memo that does not exist (#2654), a
+     registry justification your own diff obsoleted (#2642). Delete the
+     sentence or add the proof.
+  5. *Position and lifetime.* Where in the ladder does the new rung sit, and
+     what happens to the new state at `session_start`? #2654's ast-grep row
+     was wiped by `resetDegradationLedger()` and never re-recorded; #2649's
+     failsafe was anchored to the first hold's epoch and released every
+     later healthy call.
+- **The closing keyword lives in the PR BODY.** GitHub ignores `closes #N` in
+  a title; four 2026-09-06 PRs needed hand-closing. `closes` only when every
+  acceptance box is met, else `refs` plus the remainder comment.
 
 ## Report format
 
