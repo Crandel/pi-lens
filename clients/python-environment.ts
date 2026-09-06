@@ -6,8 +6,15 @@ import {
 	hasTomlTable,
 	parseTomlStringArray,
 } from "./cargo-manifest.js";
-import { minimatch } from "./deps/minimatch.js";
-import { isAtOrAboveHomeDir, toPosix, walkUpDirs } from "./path-utils.js";
+import {
+	isAtOrAboveHomeDir,
+	matchesWorkspaceMemberPattern,
+	toPosix,
+	UV_WORKSPACE_EXCLUDE_DIALECT,
+	UV_WORKSPACE_MEMBERS_DIALECT,
+	walkUpDirs,
+	type WorkspaceMemberGlobDialect,
+} from "./path-utils.js";
 
 export type PythonEnvironmentSource =
 	| "virtual-env"
@@ -109,25 +116,23 @@ async function findUvWorkspace(
  * environment. The workspace root is always a member; descendants must match
  * a declared member glob and must not match an exclusion glob.
  *
- * The glob dialect is pinned to uv 3c979abda4530fe9bf3d92e9bcf5c5575e3b3126,
- * `crates/uv-workspace/src/workspace.rs` `is_included_in_workspace`: patterns
- * are normalized first (`normalize_path`, so a leading `./` is not part of the
- * pattern) and matched with `MatchOptions { require_literal_separator: true,
- * ..MatchOptions::new() }` — case-SENSITIVE on every platform, `*`/`?` confined
- * to one path component, and no literal-leading-dot requirement. minimatch's
- * defaults are that dialect exactly once `dot: true` is set, so no options
- * beyond `dot` are passed: a `nocase` flag here would diverge from uv on
- * Windows rather than match it.
+ * The glob dialects are pinned to uv 3c979abda4530fe9bf3d92e9bcf5c5575e3b3126,
+ * `crates/uv-workspace/src/workspace.rs`, and live beside the ONE shared
+ * workspace-member matcher (#2591) instead of as a minimatch options block
+ * here: `UV_WORKSPACE_MEMBERS_DIALECT` for `members`
+ * (`is_included_in_workspace` — `MatchOptions { require_literal_separator:
+ * true, ..MatchOptions::new() }`) and `UV_WORKSPACE_EXCLUDE_DIALECT` for
+ * `exclude` (`WorkspaceExclusions::matches` — `Pattern::matches_path`, i.e.
+ * `MatchOptions::new()` defaults, where `require_literal_separator` is FALSE
+ * and a `*` therefore crosses `/`). Both normalize the pattern first
+ * (`normalize_path`, so a leading `./` is not part of the pattern) and are
+ * case-SENSITIVE on every platform with no literal-leading-dot requirement.
  *
- * KNOWN LIMITATION (documented rather than implemented, same shape as
- * `matchesCargoWorkspacePattern`'s `**` note): uv matches `exclude` with
- * `Pattern::matches_path`, i.e. `MatchOptions::new()` defaults, where
- * `require_literal_separator` is FALSE and a `*` therefore crosses `/`.
- * minimatch cannot express that, so an exclusion glob relying on a
- * separator-crossing `*` (`exclude = ['packages/a*c']` for `packages/a/b/c`)
- * under-excludes: the project keeps its own environment instead of being
- * excluded from a workspace it was already not going to inherit. Both
- * outcomes fall back to the project's own `.venv`.
+ * That `exclude` option set used to be a documented limitation rather than
+ * behavior: minimatch cannot express a separator-crossing `*`, so
+ * `exclude = ['packages/a*c']` did not exclude `packages/a/b/c`. A dialect
+ * object can, so #2591 implements it — the one intentional answer change in
+ * that fold.
  */
 function isUvWorkspaceMember(
 	workspace: UvWorkspace,
@@ -152,9 +157,14 @@ function isUvWorkspaceMember(
 		return false;
 	}
 
-	const matches = (pattern: string): boolean =>
-		minimatch(relative, path.posix.normalize(toPosix(pattern)), { dot: true });
-	return !workspace.exclude.some(matches) && workspace.members.some(matches);
+	const matches =
+		(dialect: WorkspaceMemberGlobDialect) =>
+		(pattern: string): boolean =>
+			matchesWorkspaceMemberPattern(pattern, relative, dialect);
+	return (
+		!workspace.exclude.some(matches(UV_WORKSPACE_EXCLUDE_DIALECT)) &&
+		workspace.members.some(matches(UV_WORKSPACE_MEMBERS_DIALECT))
+	);
 }
 
 /**

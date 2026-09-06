@@ -590,6 +590,91 @@ describe("pytest project environment", () => {
 		expect(options.env?.VIRTUAL_ENV).toBe(expected.root);
 	});
 
+	// uv matches `exclude` with `Pattern::matches_path` — `MatchOptions::new()`
+	// defaults, `require_literal_separator: false` — so a `*` in an EXCLUSION
+	// crosses `/`, unlike one in `members`
+	// (astral-sh/uv@3c979abda4530fe9bf3d92e9bcf5c5575e3b3126,
+	// `crates/uv-workspace/src/workspace.rs`, `WorkspaceExclusions::matches` vs
+	// `is_included_in_workspace`). minimatch could not express that, so pi-lens
+	// documented it as a limitation and UNDER-excluded; #2591's dialect object
+	// implements it. Driven through the real runner → detectPythonEnvironment
+	// path, not through the matcher, so the resolver's own answer is asserted.
+	it("excludes a nested member through a separator-crossing exclusion `*` (#2591)", async () => {
+		const workspace = createProject(false);
+		fs.writeFileSync(
+			path.join(workspace.root, "pyproject.toml"),
+			"[tool.uv.workspace]\nmembers = ['packages/**']\nexclude = ['packages/a*c']\n",
+		);
+		createEnvironment(path.join(workspace.root, ".venv"));
+
+		const nested = path.join(workspace.root, "packages", "a", "b", "c");
+		const nestedTestFile = createTestFile(nested);
+		fs.writeFileSync(
+			path.join(nested, "pyproject.toml"),
+			"[project]\nname='nested'\n",
+		);
+		const expected = createEnvironment(path.join(nested, ".venv"));
+
+		const { command, options } = await runPytest(nestedTestFile, nested);
+
+		expect(command).toBe(expected.pythonPath);
+		expect(options.env?.VIRTUAL_ENV).toBe(expected.root);
+	});
+
+	// The companion to the vector above: the SAME glob shape in `members` must
+	// NOT cross `/`, because `is_included_in_workspace` passes
+	// `require_literal_separator: true`. One tool, two option sets — the reason
+	// the fold takes a dialect object rather than a flag. Without the workspace
+	// `.venv` this would pass vacuously, so the workspace environment IS
+	// materialized: the assertion is that the resolver declines to use it.
+	it("does not admit a nested project through a members `*` that would have to cross `/` (#2591)", async () => {
+		const workspace = createProject(false);
+		fs.writeFileSync(
+			path.join(workspace.root, "pyproject.toml"),
+			"[tool.uv.workspace]\nmembers = ['packages/a*c']\n",
+		);
+		createEnvironment(path.join(workspace.root, ".venv"));
+
+		const nested = path.join(workspace.root, "packages", "a", "b", "c");
+		const nestedTestFile = createTestFile(nested);
+		fs.writeFileSync(
+			path.join(nested, "pyproject.toml"),
+			"[project]\nname='nested'\n",
+		);
+		const expected = createEnvironment(path.join(nested, ".venv"));
+
+		const { command, options } = await runPytest(nestedTestFile, nested);
+
+		expect(command).toBe(expected.pythonPath);
+		expect(options.env?.VIRTUAL_ENV).toBe(expected.root);
+	});
+
+	// A `**` in `members` DOES cross components — the axis on which uv and cargo
+	// genuinely disagree, and the reason folding cargo onto uv's dialect (or the
+	// reverse) was rejected in #2583. Same fixture as the exclusion vector above
+	// with the exclusion removed, so the two differ only on the axis under test.
+	it("admits a deeply nested project through a members `**` (#2591)", async () => {
+		const workspace = createProject(false);
+		fs.writeFileSync(
+			path.join(workspace.root, "pyproject.toml"),
+			"[tool.uv.workspace]\nmembers = ['packages/**']\n",
+		);
+		const expected = createEnvironment(path.join(workspace.root, ".venv"));
+
+		const nested = path.join(workspace.root, "packages", "a", "b", "c");
+		const nestedTestFile = createTestFile(nested);
+		fs.writeFileSync(
+			path.join(nested, "pyproject.toml"),
+			"[project]\nname='nested'\n",
+		);
+		createEnvironment(path.join(nested, ".venv"));
+
+		const { command, options } = await runPytest(nestedTestFile, nested);
+
+		expect(command).toBe(expected.pythonPath);
+		expect(options.env?.VIRTUAL_ENV).toBe(expected.root);
+	});
+
 	it("labels pytest usage errors and interruptions by their real exit codes", () => {
 		const client = new TestRunnerClient(false) as any;
 		// The label is derived from pytest's status enum, so keep output empty and

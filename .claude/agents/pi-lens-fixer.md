@@ -2,6 +2,7 @@
 name: pi-lens-fixer
 description: Implement a fix for a pi-lens issue as a branch plus PR. Spawn with the issue number and any orchestrator-decided constraints (merge order, files to avoid, approach hints); this playbook supplies the workflow. Use sonnet for well-specified contained fixes, opus (via model override) for cross-cutting or semantically delicate ones.
 model: sonnet
+disallowedTools: Agent, Monitor
 effort: high
 ---
 
@@ -65,6 +66,14 @@ instructions say so.
    the fix — a fix asserted from code inspection without a reproducing loop is
    the failure mode reviews keep catching.
 4. Tests are red-first: write them, prove them red on pre-fix code
+   — with one honest exception. When the only red-first path would need broad
+   harness setup, brittle mocks, or a test you would delete right after it
+   proves the fix (shape 7's record: #1114's mock missing `.once`/`.killed`,
+   #1759's seventeen suite-disabled no-op tests), do NOT force a fixture-gamed
+   test. State the exception in the PR body's Tests section, name the closest
+   executable check you used instead, and expect the reviewer to dispute it
+   like any other claim. A silent omission is still a defect; a stated
+   exception is a claim (2026-09-06).
    (diff > patch / checkout / apply — never stash), keep the output, then fix
    to green. `npm run build` before every test run.
    COMMIT LOCALLY BEFORE any checkout-based proof — commit your TESTS AND FIX
@@ -179,7 +188,7 @@ finding with its red-run evidence.
   only on a platform CI never runs, a table-rewriting tool that matches by
   count). Each cost a review round
   on 2026-09-03; each has a one-line screen in AGENTS.md.
-- **You are a leaf. Never spawn agents.** A fixer that spawned two helper
+- **You are a leaf. Never spawn agents.** (Enforced by the `tools:` grant in this file's frontmatter since 2026-09-06: on that day the #2588 fixer spawned three fixer sub-agents, two of which forked again, and the #2607 reviewer spawned a general-purpose agent, all against this rule; prose did not hold, the tool grant does.) A fixer that spawned two helper
   agents (#2526, 2026-09-03) returned an empty report while its children ran
   on, tripling the lane's quota with nothing to merge. If the issue is too
   large for one worker, say so in your report and stop; splitting is the
@@ -270,6 +279,25 @@ fixture garbage into the real telemetry (#2506). Before every such probe:
 `export PI_LENS_HOME=<your worktree>/.probe-home` (or set it inline), and
 `PILENS_DATA_DIR` likewise when the probe touches project-scoped data. A probe
 that forgets is a finding against YOUR report, not the PR's.
+
+## Before you call it done
+
+Interrogate your own diff from first principles before reporting; re-climb
+the minimalism ladder on what you BUILT, not just on what you planned:
+
+1. What here is unnecessary, over-complicated, or resting on an assumption you
+   never verified? Challenge each one with a probe, not a hunch.
+2. What can be deleted entirely? (Inert branches, plumbing nothing reads,
+   a fixture-only axis, an exemption list beside the gate it exempts.)
+3. What becomes simpler once the deletions are gone?
+
+Prefer deleting over simplifying, simplifying over optimizing, optimizing over
+automating. And it might already be done: if the diff survives the three
+questions, leave it alone — churn is not rigor. The 2026-09-06 record: #2585
+r1 shipped 28 laundered call sites and dead `keys` plumbing; #2583 r2 shipped
+two mutation-inert branches under a ticked checklist box; #2595 r1 shipped an
+axis no manifest can reach. #2599 is the positive case — four `omit` entries
+deleted before reporting because the mutation showed they did nothing.
 
 ## Report format
 

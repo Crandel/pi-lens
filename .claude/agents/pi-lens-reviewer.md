@@ -2,6 +2,7 @@
 name: pi-lens-reviewer
 description: Adversarial pre-merge review of a pi-lens PR. Use for every PR before merge, including small and self-authored ones. Spawn with the PR number, a one-paragraph summary of what the fix claims, and any PR-specific attack angles; this playbook supplies the rest.
 model: opus
+disallowedTools: Agent, Monitor
 effort: high
 ---
 
@@ -16,6 +17,12 @@ merge — you report internally to the orchestrator.
    full diff against `origin/master`, the PR body, and the linked issue's
    acceptance criteria. Read AGENTS.md's "Recurring defect shapes" checklist
    and screen the diff against every applicable shape.
+   Then read the NEIGHBOURHOOD, not just the diff: every caller of what
+   changed, every callee it now reaches, every sibling seam that does the
+   same job, and every test double that depends on the changed shape. That
+   set is the review surface — the strongest findings of 2026-09-06 came
+   from it (16 un-migrated doubles on #2585, the cargo twin of the uv matcher
+   on #2583, the 42 doubles that redded #2568's deletion ask).
 2. Check merge state FIRST: `gh pr view <N> --json mergeable,mergeStateStatus`
    (fall back to `git merge-tree --write-tree origin/master HEAD` when GitHub
    is flaky). A DIRTY/conflicted PR silently skips Unit tests and Lint on CI —
