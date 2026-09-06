@@ -36,7 +36,7 @@ import {
 } from "../path-utils.js";
 import { collectProjectSourceFilesWithBudgetAsync } from "../project-scan-policy.js";
 import { getReviewGraphMaxFilesDerived } from "../project-scale.js";
-import { compareOrdinal } from "../string-utils.js";
+import { compareOrdinal, escapeRegExp } from "../string-utils.js";
 import { BoundedLruCache } from "../bounded-cache.js";
 import {
 	jsTsCandidatePaths,
@@ -1112,10 +1112,6 @@ function makeCtx(
 		hasTool: async () => false,
 		log: () => {},
 	};
-}
-
-function escapeRegExp(string: string): string {
-	return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function createEmptyGraph(): ReviewGraph {

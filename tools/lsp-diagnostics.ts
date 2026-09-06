@@ -696,8 +696,8 @@ type DiagnosticsCollectionResult = {
 	 * were computed against current disk. `boundToCurrentDisk === false` means the
 	 * server's view diverged from disk; the caller demotes such a result to
 	 * "unconfirmed" so a stale-but-fresh-looking result never re-cements the
-	 * widget (#1092). Undefined when the touch path wasn't taken (openFile-only /
-	 * warm-attach / getDiagnostics fallback) → treated as "unknown" (no demotion).
+	 * widget (#1092). Undefined when no touch produced one (warm-attach /
+	 * getDiagnostics fallback) → treated as "unknown" (no demotion).
 	 */
 	binding?: DiagnosticBinding;
 };
@@ -713,13 +713,17 @@ async function collectDiagnosticsForFile(
 	// `touchFile` is the authoritative collection boundary for every scope: it
 	// preserves per-touch timeout, content-binding, and silent-clean confirmation
 	// metadata while returning diagnostics from only the requested clients. The
-	// legacy openFile/getDiagnostics path remains only for an older/mock service
-	// without touchFile, or when touchFile cannot resolve any clients.
+	// getDiagnostics fallback below remains for the two states a REAL service
+	// still reaches: the file read threw (no content to touch with), or the
+	// touch resolved no clients and returned `undefined` (clients/lsp/index.ts
+	// `touchFile`'s `no_clients`/`destroyed` returns). #2598 deleted the third
+	// reason — "an older/mock service without touchFile" — because the real
+	// `LSPService` has always defined the method unconditionally, so that arm
+	// was reachable only from a partial test double (AGENTS.md shape 7).
 	// #1179: the result is an explicit wrapper so side-channel fields survive
 	// array copies; confirmation was added when Marksman's lower-level clean verdict
 	// proved that a successful empty collection also needs explicit provenance.
 	let touched: TouchFileResult | undefined;
-	let usedTouch = false;
 	try {
 		content = fs.readFileSync(absPath, "utf-8");
 		if (isWarmAttached()) {
@@ -771,49 +775,26 @@ async function collectDiagnosticsForFile(
 				};
 			}
 		}
-		const serviceWithTouch = lspService as NonNullable<
-			ReturnType<typeof getLSPService>
-		> & {
-			touchFile?: (
-				filePath: string,
-				content: string,
-				options: {
-					diagnostics: "document";
-					collectDiagnostics: true;
-					maxClientWaitMs?: number;
-					source: string;
-					clientScope: "all" | "primary";
-				},
-			) => Promise<TouchFileResult | undefined>;
-		};
-		if (typeof serviceWithTouch.touchFile === "function") {
-			usedTouch = true;
-			touched = await serviceWithTouch.touchFile(absPath, content, {
-				diagnostics: "document",
-				collectDiagnostics: true,
-				maxClientWaitMs: waitMs,
-				source: "lsp_diagnostics",
-				clientScope: serverScope,
-			});
-			timedOut = touched?.inconclusive === true;
-		} else {
-			await lspService.openFile(absPath, content, {
-				preserveDiagnostics: false,
-			});
-		}
+		touched = await lspService.touchFile(absPath, content, {
+			diagnostics: "document",
+			collectDiagnostics: true,
+			maxClientWaitMs: waitMs,
+			source: "lsp_diagnostics",
+			clientScope: serverScope,
+		});
+		timedOut = touched?.inconclusive === true;
 	} catch {
 		// Non-fatal: getDiagnostics may still have stale/health information.
 	}
 
 	// Only fall through to the unscoped getDiagnostics() read when the touch
-	// branch wasn't taken (openFile-only path, which never collected anything
-	// and genuinely needs the follow-up call) or couldn't resolve any clients
-	// at all (touched stays undefined despite usedTouch). When touched IS
-	// defined it's already the answer — reusing it is what makes
-	// serverScope:"primary" actually skip auxiliary scanners and drops the
-	// common case back to a single LSP round trip instead of two.
+	// produced nothing to read — it threw, the file read threw before it ran, or
+	// it resolved no clients at all. When touched IS defined it's already the
+	// answer — reusing it is what makes serverScope:"primary" actually skip
+	// auxiliary scanners and drops the common case back to a single LSP round
+	// trip instead of two.
 	const diagnostics =
-		usedTouch && touched !== undefined
+		touched !== undefined
 			? touched.diags
 			: await lspService.getDiagnostics(
 					absPath,
@@ -834,26 +815,25 @@ async function collectDiagnosticsForFile(
 					fileRole: detectFileRole(absPath, content),
 				})
 			: diagnostics;
-	// #1095: surface the touch's content binding (only the touch path carries
-	// one; the openFile-only / getDiagnostics fallback leaves it undefined →
+	// #1095: surface the touch's content binding (only a touch that resolved
+	// clients carries one; the getDiagnostics fallback leaves it undefined →
 	// "unknown", no demotion).
-	const binding = usedTouch ? touched?.binding : undefined;
+	const binding = touched?.binding;
 	// #1470: `"partial"` counts here. `confirmedByTouch` feeds
 	// `canTrustTouchConfirmation`, which asks about the PRIMARY's own verdict —
 	// and a partial touch is one whose primary confirmed while an auxiliary was
 	// cut off. Excluding it would render "Primary LSP: unconfirmed" for a primary
 	// that did confirm. The coverage gap is carried separately, below.
-	const confirmedByTouch =
-		usedTouch && touchCompletedConfirmationPolicy(touched);
+	const confirmedByTouch = touchCompletedConfirmationPolicy(touched);
 	return {
 		diagnostics: filtered,
 		timedOut,
 		skipReason: touched?.skipReason,
 		confirmedByTouch,
-		// #1470: only a touch actually contributes a coverage gap; the
-		// openFile+getDiagnostics fallback never reports one, which is honest —
-		// that path claims no confirmation at all.
-		unconfirmedServerIds: usedTouch ? touchCoverageGap(touched) : [],
+		// #1470: only a touch that resolved clients contributes a coverage gap;
+		// the getDiagnostics fallback never reports one, which is honest — that
+		// path claims no confirmation at all.
+		unconfirmedServerIds: touchCoverageGap(touched),
 		content,
 		binding,
 	};

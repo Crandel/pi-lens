@@ -319,14 +319,18 @@ const wallClockBudgetInclude = [
 	"tests/clients/cascade-turn-merge.test.ts",
 	"tests/clients/read-expansion-enrichment.test.ts",
 	"tests/clients/pipeline-lsp-sync.test.ts",
-	// #2591 review round 2, F1: the globstar-collapse budget asserts a real
-	// elapsed-time bound through detectPythonEnvironment; the defect it pins is
-	// wall-clock (2^N regex backtracking), so a fake clock measures nothing.
-	"tests/clients/workspace-glob-globstar-collapse-budget.test.ts",
+	// #2603 (was #2591 review round 2, F1): the workspace-member matcher's
+	// budget asserts a real elapsed-time bound through detectPythonEnvironment;
+	// the defect it pins is wall-clock (2^N regex backtracking on an interleaved
+	// `**` chain), so a fake clock measures nothing.
+	"tests/clients/workspace-glob-nonbacktracking-budget.test.ts",
 	// #2358: the flat-server discriminator asserts the real outstanding wedge
 	// window. Keep child-process CPU sampling and this wall-clock lower bound in
 	// the fully serialized, dead-last phase.
 	"tests/clients/lsp/service-notify-cpu-liveness.test.ts",
+	// #2586 review F1: proves the ACTUAL stdout bytes supply-host-provided-deps.mjs
+	// prints (real child process, flake-shape admission).
+	"tests/scripts/supply-host-provided-deps.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL

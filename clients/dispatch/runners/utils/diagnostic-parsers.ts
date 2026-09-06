@@ -6,6 +6,7 @@
  */
 
 import { stripAnsi } from "../../../sanitize.js";
+import { escapeRegExp } from "../../../string-utils.js";
 import { getAutofixCapability } from "../../../tool-policy.js";
 import type { DefectClass, Diagnostic } from "../../types.js";
 
@@ -216,8 +217,4 @@ export function createSimpleParser(
 
 		return diagnostics;
 	};
-}
-
-function escapeRegExp(string: string): string {
-	return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

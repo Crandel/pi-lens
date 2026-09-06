@@ -19,6 +19,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { safeSpawn } from "../../clients/safe-spawn.js";
+import { escapeRegExp } from "../../clients/string-utils.js";
 
 export const SELF_SCAN_CATEGORY = "pi-lens-self-scan";
 
@@ -53,10 +54,6 @@ function readMetadataCategory(text) {
 	if (!m) return undefined;
 	const inner = m[1].match(/^[ \t]*category:\s*(.+)$/m);
 	return inner ? inner[1].trim().replace(/^['"]|['"]$/g, "") : undefined;
-}
-
-function escapeRegex(s) {
-	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Every rule ID whose YAML declares `metadata: { category: pi-lens-self-scan }`.
@@ -102,7 +99,7 @@ export function runSelfScan({
 			`[astgrep-self-scan] no rules tagged category: ${SELF_SCAN_CATEGORY} under ${rulesDir(root)} -- nothing to run. If every self-scan rule was intentionally removed, delete this script and its CI wiring instead of letting it report a silent "clean" scan.`,
 		);
 	}
-	const filterRegex = `^(${ids.map(escapeRegex).join("|")})$`;
+	const filterRegex = `^(${ids.map(escapeRegExp).join("|")})$`;
 	const result = safeSpawn(
 		"ast-grep",
 		[

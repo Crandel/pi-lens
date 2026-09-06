@@ -98,11 +98,19 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"observes the real npm pack lifecycle (prepack/postpack); no in-process double is faithful",
 	},
-	// 2026-09-06 (#2591 review round 2, F1): the defect is 2^N regex
+	// 2026-09-06 (#2586 review F1): proves the actual delimiter
+	// supply-host-provided-deps.mjs prints in its own stdout bytes; an
+	// in-process double would just re-assert the test author's assumption.
+	"real-process-spawn:scripts/supply-host-provided-deps.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"observes the script's real stdout bytes (newline- vs. space-delimited); no in-process double is faithful",
+	},
+	// 2026-09-06 (#2603, was #2591 review round 2, F1): the defect is 2^N regex
 	// backtracking through detectPythonEnvironment — the ANSWER was always
 	// right, only the time was wrong, so no non-clock assertion separates
 	// fixed from broken; header on the file states why.
-	"elapsed-time-assertion:clients/workspace-glob-globstar-collapse-budget.test.ts":
+	"elapsed-time-assertion:clients/workspace-glob-nonbacktracking-budget.test.ts":
 		{
 			detector: "elapsed-time-assertion",
 			reason:
