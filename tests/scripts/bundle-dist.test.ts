@@ -84,9 +84,9 @@ describe("resolveBundleExecPrefix (#2590)", () => {
 			const tmp = fs.realpathSync(os.tmpdir());
 			for (const dir of [first, second]) {
 				const real = fs.realpathSync(dir);
-				expect(
-					real === tmp || !path.relative(tmp, real).startsWith(".."),
-				).toBe(true);
+				expect(real === tmp || !path.relative(tmp, real).startsWith("..")).toBe(
+					true,
+				);
 			}
 		} finally {
 			fs.rmSync(first, { recursive: true, force: true });
@@ -121,9 +121,7 @@ describe("buildEsbuildExecInvocation (#2594 review F2)", () => {
 			expect(prefixIndex).toBeGreaterThanOrEqual(0);
 			const prefixArg = argv[prefixIndex + 1];
 			expect(prefixArg).not.toBe(root);
-			expect(path.relative(root, prefixArg ?? "").startsWith("..")).toBe(
-				true,
-			);
+			expect(path.relative(root, prefixArg ?? "").startsWith("..")).toBe(true);
 		} finally {
 			fs.rmSync(execPrefix, { recursive: true, force: true });
 		}
