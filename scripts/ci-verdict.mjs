@@ -259,7 +259,14 @@ export function computeVerdict(
 		// mistake) on the static advisory allowlist.
 		const gating = requiredNameSet.has(name) || !isAdvisoryCheck(name);
 		if (!run) {
-			return { name, present: false, status: null, conclusion: null, url: null, gating };
+			return {
+				name,
+				present: false,
+				status: null,
+				conclusion: null,
+				url: null,
+				gating,
+			};
 		}
 		return {
 			name,

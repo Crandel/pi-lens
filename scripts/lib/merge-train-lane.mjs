@@ -35,7 +35,12 @@ import {
 // the definitions to ci-checks.mjs, the shared module, so ci-verdict.mjs can
 // use the SAME advisory/blocking policy instead of a second hand-rolled
 // copy -- see ci-checks.mjs for the reasoning and the live-probe evidence).
-export { ADVISORY_CHECKS, ADVISORY_SUFFIX, BLOCKING_CONCLUSIONS, isAdvisoryCheck };
+export {
+	ADVISORY_CHECKS,
+	ADVISORY_SUFFIX,
+	BLOCKING_CONCLUSIONS,
+	isAdvisoryCheck,
+};
 import { commentMarkerExists, paginate } from "./github-paging.mjs";
 import {
 	classifyActionFailure,

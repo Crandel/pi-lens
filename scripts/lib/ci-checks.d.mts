@@ -3,7 +3,9 @@ export declare const ADVISORY_SUFFIX: string;
 export declare const ADVISORY_CHECKS: Set<string>;
 export declare function isAdvisoryCheck(name: string): boolean;
 export declare const BLOCKING_CONCLUSIONS: Set<string>;
-export declare function isBlockingConclusion(conclusion: string | null | undefined): boolean;
+export declare function isBlockingConclusion(
+	conclusion: string | null | undefined,
+): boolean;
 
 export interface CheckRunRecord {
 	name: string;

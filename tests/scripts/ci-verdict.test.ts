@@ -562,7 +562,9 @@ describe("resolveRequiredCheckNames — live branch-protection read (#2609)", ()
 				"repos/acme/repo/branches/master/protection",
 			]);
 			return JSON.stringify({
-				required_status_checks: { contexts: ["Unit tests", "Lint & type-check"] },
+				required_status_checks: {
+					contexts: ["Unit tests", "Lint & type-check"],
+				},
 			});
 		};
 		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toEqual([
@@ -617,9 +619,9 @@ describe("run — prints the gating source and uses a live branch-protection rea
 			stderr: () => {},
 		});
 		expect(exitCode).toBe(EXIT_SUCCESS);
-		expect(stdoutLines.some((l) => l.startsWith("Gating source: branch protection"))).toBe(
-			true,
-		);
+		expect(
+			stdoutLines.some((l) => l.startsWith("Gating source: branch protection")),
+		).toBe(true);
 	});
 
 	it("falls back to the advisory-allowlist wording when branch protection is unreadable", async () => {
@@ -641,7 +643,9 @@ describe("run — prints the gating source and uses a live branch-protection rea
 		});
 		expect(exitCode).toBe(EXIT_SUCCESS);
 		expect(
-			stdoutLines.some((l) => l.startsWith("Gating source: advisory allowlist only")),
+			stdoutLines.some((l) =>
+				l.startsWith("Gating source: advisory allowlist only"),
+			),
 		).toBe(true);
 	});
 });
