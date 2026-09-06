@@ -950,6 +950,23 @@ describe("a real ephemeral test fixture is never a shared checkout (#2345)", () 
 				fixture,
 			);
 			expect(decision).toEqual({ block: false });
+			// `block: false` alone doesn't say WHY: `resolveGitToplevel` failing
+			// (fixture judged not-a-worktree) allows too, via `not_a_git_worktree`
+			// — a different, unrelated escape hatch that would mask a REAL
+			// regression in the peer-detection path this test exists to pin.
+			// Assert the specific reason category the incident's fix depends on:
+			// zero registered peers, not a broken toplevel probe. MUTATION PROOF:
+			// stub `resolveToplevel` to always return `undefined` and this reds
+			// with `not_a_git_worktree` in place of `no_peer_session`, even though
+			// `decision.block` above stays `false`.
+			const allow = phaseCalls("shared_checkout_guard_allow").filter(
+				(entry) => entry.filePath === normalizeFilePath(fixture),
+			);
+			expect(
+				allow.map(
+					(e) => (e.metadata as { reasonCategory: string }).reasonCategory,
+				),
+			).toEqual(["no_peer_session"]);
 		} finally {
 			fs.rmSync(fixture, { recursive: true, force: true });
 		}
