@@ -137,9 +137,10 @@ jobs:
               LAYER_A_LINE+=" moved/renamed the file, or the install itself"
               LAYER_A_LINE+=" failed). NOT a confirmed contract regression —"
               LAYER_A_LINE+=" see the run log for which candidates were"
-              LAYER_A_LINE+=" tried, then add the new location to"
-              LAYER_A_LINE+=" \`scripts/compat-contracts.mjs\`'s"
-              LAYER_A_LINE+=" \`CONTRACT_SOURCE_LOCATIONS\`."
+              LAYER_A_LINE+=" tried, then append the new location to that"
+              LAYER_A_LINE+=" contract's \`parts\` in"
+              LAYER_A_LINE+=" \`scripts/lib/compat-contracts.mjs\`'s"
+              LAYER_A_LINE+=" \`CONTRACTS\` list."
               ;;
             verified)
               LAYER_A_LINE="verified — passed (this alert fired because of"

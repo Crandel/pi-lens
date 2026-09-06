@@ -210,95 +210,132 @@ export function checkTintinwebInProcessBind(source) {
 }
 
 /**
- * Single source of truth for "which contract, which package, which input,
- * which check function" — both `runAllContractChecks` below and
- * scripts/compat-contracts.mjs's per-contract file locator (#2581) key off
- * this list, so a contract's id/package/description is never hand-duplicated
- * between the pure checks here and the orchestration script that resolves
- * their source files.
- *
- * `inputKey` names the field of the `inputs` object `runAllContractChecks`
- * reads the (already-resolved) source text from.
+ * Single source of truth for "which contract, which npm package, which
+ * on-disk file(s), which check function" (#2680 F2). `package` IS the exact
+ * npm package name (not a lookup key into a second table) — the orchestrator
+ * derives its install list from `[...new Set(CONTRACTS.map(c => c.package))]`
+ * rather than maintaining a separate name registry that could drift out of
+ * sync with this one. `parts` names the candidate-path list(s)
+ * `compat-contract-resolution.mjs`'s `resolveAndCheckContracts` resolves
+ * (via `compat-contract-locator.mjs`) before calling `check` with the
+ * concatenated source — a contract needing more than one file (nicobailon's
+ * const + assignment split, #2581) lists more than one part. There used to
+ * be a second table (`CONTRACT_SOURCE_LOCATIONS`) keyed by this same `id`
+ * string with no parity guard between the two; folding `parts` in here
+ * makes that join structurally impossible to desync.
  */
 export const CONTRACTS = [
 	{
 		id: "nicobailon.child-env",
 		package: "pi-subagents",
 		description: "PI_SUBAGENT_CHILD env var set on every child-hosting process",
-		inputKey: "nicobailonPiArgsSource",
 		check: checkNicobailonChildEnv,
+		parts: [
+			{
+				name: "constants",
+				candidates: [
+					{ path: "src/runs/shared/pi-args.ts", observedAt: "0.34.0" },
+					{
+						path: "src/runs/shared/child-runtime-config.ts",
+						observedAt: "0.65.0",
+					},
+				],
+			},
+			{
+				name: "assignment",
+				candidates: [
+					{ path: "src/runs/shared/pi-args.ts", observedAt: "0.34.0" },
+					{
+						path: "src/runs/background/subagent-runner.ts",
+						observedAt: "0.65.0",
+					},
+				],
+			},
+		],
 	},
 	{
 		id: "avtc.child-env",
 		package: "avtc-pi-subagent",
 		description:
 			"PI_SUBAGENT_CHILD_AGENT + PI_SUBAGENT_PARENT_PID pair set on every spawned child",
-		inputKey: "avtcProcessRunnerSource",
 		check: checkAvtcChildEnv,
+		parts: [
+			{
+				name: "source",
+				candidates: [{ path: "src/process-runner.ts", observedAt: "1.0.3" }],
+			},
+		],
 	},
 	{
 		id: "sdk.extension-cache",
 		package: "@earendil-works/pi-coding-agent",
 		description: "process-global extensionCache Map in the extension loader",
-		inputKey: "sdkLoaderSource",
 		check: checkSdkExtensionCache,
+		parts: [
+			{
+				name: "source",
+				candidates: [
+					{ path: "dist/core/extensions/loader.js", observedAt: "0.80.6" },
+				],
+			},
+		],
 	},
 	{
 		id: "sdk.bind-extensions-session-start",
 		package: "@earendil-works/pi-coding-agent",
 		description:
 			"bindExtensions() unconditionally emits a session_start-typed event",
-		inputKey: "sdkAgentSessionSource",
 		check: checkSdkBindExtensionsEmitsSessionStart,
+		parts: [
+			{
+				name: "source",
+				candidates: [
+					{ path: "dist/core/agent-session.js", observedAt: "0.80.6" },
+				],
+			},
+		],
 	},
 	{
 		id: "sdk.invalidate-called",
 		package: "@earendil-works/pi-coding-agent",
 		description:
 			"invalidate() called from the sequential session-replacement path",
-		inputKey: "sdkAgentSessionSource",
 		check: checkSdkInvalidateCalled,
+		parts: [
+			{
+				name: "source",
+				candidates: [
+					{ path: "dist/core/agent-session.js", observedAt: "0.80.6" },
+				],
+			},
+		],
 	},
 	{
 		id: "sdk.stale-ctx-message",
 		package: "@earendil-works/pi-coding-agent",
 		description:
 			'stale-ctx error message contains "stale after session replacement"',
-		inputKey: "sdkAgentSessionSource",
 		check: checkSdkStaleCtxMessage,
+		parts: [
+			{
+				name: "source",
+				candidates: [
+					{ path: "dist/core/agent-session.js", observedAt: "0.80.6" },
+				],
+			},
+		],
 	},
 	{
 		id: "tintinweb.in-process-bind",
 		package: "@tintinweb/pi-subagents",
 		description:
 			"constructs DefaultResourceLoader + calls bindExtensions() in-process",
-		inputKey: "tintinwebAgentRunnerSource",
 		check: checkTintinwebInProcessBind,
+		parts: [
+			{
+				name: "source",
+				candidates: [{ path: "src/agent-runner.ts", observedAt: "0.13.0" }],
+			},
+		],
 	},
 ];
-
-/**
- * Run every contract check and return a combined report. Each entry name
- * matches what the workflow step / alert-issue body prints, so a failure is
- * traceable straight back to a specific dependency + source file.
- *
- * @param {{
- *   nicobailonPiArgsSource: string,
- *   avtcProcessRunnerSource: string,
- *   sdkLoaderSource: string,
- *   sdkAgentSessionSource: string,
- *   tintinwebAgentRunnerSource: string,
- * }} inputs
- */
-export function runAllContractChecks(inputs) {
-	const results = CONTRACTS.map(
-		({ id, package: pkg, description, inputKey, check }) => ({
-			id,
-			package: pkg,
-			description,
-			...check(inputs[inputKey]),
-		}),
-	);
-	const allPass = results.every((r) => r.pass);
-	return { results, allPass };
-}

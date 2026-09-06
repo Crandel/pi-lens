@@ -17,7 +17,6 @@ import {
 	checkSdkInvalidateCalled,
 	checkSdkStaleCtxMessage,
 	checkTintinwebInProcessBind,
-	runAllContractChecks,
 } from "../../scripts/lib/compat-contracts.mjs";
 
 describe("checkNicobailonChildEnv", () => {
@@ -47,16 +46,30 @@ env[SUBAGENT_CHILD_ENV] = "1";
 		expect(result.pass).toBe(false);
 	});
 
-	// #2581: pi-subagents@0.65.0's native-AgentSession rewrite removed
-	// PI_SUBAGENT_RUN_ID / PI_SUBAGENT_CHILD_AGENT from the whole package —
-	// child identity moved to an in-process object, not env vars. pi-lens's
-	// getSubagentIdentity() already treats their absence as best-effort
-	// undefined (tests/clients/subagent-mode.test.ts), so this is no longer
-	// a contract failure — only the child flag itself gates pi-lens behavior.
-	it("passes even when the (now-removed upstream) identity consts are absent", () => {
-		const result = checkNicobailonChildEnv(GOOD);
-		expect(GOOD).not.toContain("PI_SUBAGENT_RUN_ID");
-		expect(GOOD).not.toContain("PI_SUBAGENT_CHILD_AGENT");
+	// #2581/#2680 F4: pi-subagents@0.65.0's native-AgentSession rewrite
+	// removed PI_SUBAGENT_RUN_ID / PI_SUBAGENT_CHILD_AGENT from the whole
+	// package AND split the const definition and the assignment across two
+	// files (child-runtime-config.ts + subagent-runner.ts) that used to be
+	// co-located in one pi-args.ts. This fixture reproduces that REAL
+	// 0.66.0-shaped concatenation (what the orchestrator's
+	// locateContractSources actually hands the check, not the single-file
+	// GOOD snippet above) so this case has its own signature — re-adding
+	// the run-id requirement would red this AND the plain GOOD case above;
+	// a regression that only broke cross-file concatenation would red only
+	// this one.
+	it("passes against a real 0.66.0-shaped concatenation (const + assignment in different files, no identity consts)", () => {
+		const constantsFile = `
+export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
+export const SUBAGENT_PARENT_SESSION_ENV = "PI_SUBAGENT_PARENT_SESSION";
+`;
+		const assignmentFile = `
+import { SUBAGENT_CHILD_ENV } from "../shared/child-runtime-config.ts";
+process.env[SUBAGENT_CHILD_ENV] = "1";
+`;
+		const concatenated = `${constantsFile}\n${assignmentFile}`;
+		expect(concatenated).not.toContain("PI_SUBAGENT_RUN_ID");
+		expect(concatenated).not.toContain("PI_SUBAGENT_CHILD_AGENT");
+		const result = checkNicobailonChildEnv(concatenated);
 		expect(result.pass).toBe(true);
 	});
 
@@ -246,58 +259,9 @@ await session.bindExtensions({ onError });
 	});
 });
 
-describe("runAllContractChecks", () => {
-	it("aggregates all seven checks and reports allPass=false on any single failure", () => {
-		const inputs = {
-			nicobailonPiArgsSource: "export const X = 1;", // fails
-			avtcProcessRunnerSource: `
-if (agent.name) subagentEnv.PI_SUBAGENT_CHILD_AGENT = agent.name;
-subagentEnv.PI_SUBAGENT_PARENT_PID = String(process.pid);
-`,
-			sdkLoaderSource: "const extensionCache = new Map();",
-			sdkAgentSessionSource: `
-    async bindExtensions(bindings) {
-        await this._extensionRunner.emit({ type: "session_start" });
-    }
-    invalidate() { this._extensionRunner.invalidate("stale after session replacement"); }
-`,
-			tintinwebAgentRunnerSource: `
-const loader = new DefaultResourceLoader({ cwd });
-await session.bindExtensions({});
-`,
-		};
-		const { results, allPass } = runAllContractChecks(inputs);
-		expect(results).toHaveLength(7);
-		expect(allPass).toBe(false);
-		const failed = results.filter((r) => !r.pass);
-		expect(failed.map((r) => r.id)).toEqual(["nicobailon.child-env"]);
-	});
-
-	it("reports allPass=true when every check passes", () => {
-		const inputs = {
-			nicobailonPiArgsSource: `
-export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
-export const SUBAGENT_RUN_ID_ENV = "PI_SUBAGENT_RUN_ID";
-export const SUBAGENT_CHILD_AGENT_ENV = "PI_SUBAGENT_CHILD_AGENT";
-env[SUBAGENT_CHILD_ENV] = "1";
-`,
-			avtcProcessRunnerSource: `
-if (agent.name) subagentEnv.PI_SUBAGENT_CHILD_AGENT = agent.name;
-subagentEnv.PI_SUBAGENT_PARENT_PID = String(process.pid);
-`,
-			sdkLoaderSource: "const extensionCache = new Map();",
-			sdkAgentSessionSource: `
-    async bindExtensions(bindings) {
-        await this._extensionRunner.emit({ type: "session_start" });
-    }
-    invalidate() { this._extensionRunner.invalidate("stale after session replacement"); }
-`,
-			tintinwebAgentRunnerSource: `
-const loader = new DefaultResourceLoader({ cwd });
-await session.bindExtensions({});
-`,
-		};
-		const { allPass } = runAllContractChecks(inputs);
-		expect(allPass).toBe(true);
-	});
-});
+// Aggregation across all seven contracts (formerly `runAllContractChecks`,
+// which only ever fed a resolved-source map nothing in production actually
+// built — #2680 F3) now lives at the seam that ships:
+// `resolveAndCheckContracts` in scripts/lib/compat-contract-resolution.mjs,
+// covered by tests/scripts/compat-contract-resolution.test.ts against a
+// real on-disk fixture (verified/drift/infra together).

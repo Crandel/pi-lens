@@ -76,9 +76,10 @@ success/failure) and exit code:
   investigating (see "What to do when the nightly alerts" below).
 - **infra** (exit 2, when nothing drifted but at least one contract hit
   this) — the contract's source file could not be located at ANY of its
-  known candidate paths (`scripts/compat-contracts.mjs`'s
-  `CONTRACT_SOURCE_LOCATIONS`, resolved via `compat-contract-locator.mjs`),
-  or the `npm install` of the four packages itself failed. This means Layer A
+  known candidate paths (each `CONTRACTS` entry's `parts` field in
+  `scripts/lib/compat-contracts.mjs`, resolved via
+  `compat-contract-locator.mjs` and `compat-contract-resolution.mjs`), or
+  the `npm install` of the four packages itself failed. This means Layer A
   has NOT actually re-checked that contract's content at all — it is
   distinct from drift and must never be reported as one. #2581: before this
   three-way split, a single relocated file (`pi-subagents@0.65.0` moving
@@ -89,11 +90,18 @@ success/failure) and exit code:
   only becomes "infra" when ITS candidate paths are all missing; every other
   contract is still resolved and checked independently in the same run.
 
-When a candidate path list needs a NEW entry (the package relocated the file
-again), add it to `CONTRACT_SOURCE_LOCATIONS` in `scripts/compat-contracts.mjs`
-— oldest-observed-layout first, each with the version it was last confirmed
-at — rather than replacing the old entry, so the check keeps working against
-whichever version happens to be installed.
+Candidate paths are walked NEWEST-observed-layout first, not oldest (#2680
+F1) — a stale leftover file at an old path (left behind by a partial
+publish, or an npm install that added files without pruning ones the
+package's current `files` list no longer references) must never outrank the
+package's actual current layout. When a candidate path list needs a NEW
+entry (the package relocated the file again), APPEND it to that contract's
+`parts` in the `CONTRACTS` list (`scripts/lib/compat-contracts.mjs`) —
+oldest-observed-layout first in how the list reads, rather than replacing
+the old entry — the locator resolves the newest EXISTING one regardless of
+authored order, so older installs stay covered too. `parts` and `package`
+live directly on each `CONTRACTS` entry, not a second table keyed by a
+string id (#2680 F2) — there is nowhere else to update.
 
 ### Layer B — real-pi behavioral smoke (`scripts/compat-smoke-behavioral.mjs`)
 
@@ -187,12 +195,13 @@ create-or-updates it, never duplicates.
    match or couldn't be found.
 2. **If Layer A says infra**: the run log's `INFRA` line names every
    candidate path tried for that contract. Read the installed package at the
-   printed version and find where the file actually lives now, then add it
-   to that contract's entry in `CONTRACT_SOURCE_LOCATIONS`
-   (`scripts/compat-contracts.mjs`) — newest observed layout appended, don't
-   replace the old one. This is a relocation, not a confirmed content
-   change; only move to step 3 once the check actually runs against the
-   relocated file.
+   printed version and find where the file actually lives now, then append
+   it to that contract's `parts` in the `CONTRACTS` list
+   (`scripts/lib/compat-contracts.mjs`) — don't replace the old candidate,
+   the locator resolves whichever existing one is newest regardless of
+   authored order (#2680 F1), so older installs stay covered too. This is a
+   relocation, not a confirmed content change; only move to step 3 once the
+   check actually runs against the relocated file.
 3. **If Layer A says drift**: find the failed check's row in the
    pinned-contracts table above and read the current third-party source at
    the referenced file — the semantic shape genuinely changed upstream (a

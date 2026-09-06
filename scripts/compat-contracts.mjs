@@ -15,16 +15,27 @@
  * credentials, so this is the layer that runs even when Layer B
  * (compat-smoke-behavioral.mjs) can't.
  *
- * Each contract is resolved and checked INDEPENDENTLY (#2581): every pinned
- * contract's source file(s) are located via an ordered candidate-path list
- * (scripts/lib/compat-contract-locator.mjs), tried oldest-to-newest observed
- * layout. A contract whose file can't be found at ANY known candidate gets
- * its own "infra" outcome (we haven't actually re-checked its content) —
- * this no longer blinds verification of every OTHER contract the way a
- * single top-level ENOENT used to (pi-subagents@0.65.0 relocated
+ * Each contract is resolved and checked INDEPENDENTLY (#2581) by
+ * `scripts/lib/compat-contract-resolution.mjs`'s `resolveAndCheckContracts`,
+ * which locates every contract's source file(s) via an ordered
+ * candidate-path list (scripts/lib/compat-contract-locator.mjs, walked
+ * NEWEST-observed-layout first, #2680 F1 — a stale leftover file at an old
+ * path must never outrank the package's current layout) and runs its check
+ * function once resolved. A contract whose file can't be found at ANY known
+ * candidate gets its own "infra" outcome (we haven't actually re-checked its
+ * content) — this no longer blinds verification of every OTHER contract the
+ * way a single top-level ENOENT used to (pi-subagents@0.65.0 relocated
  * `pi-args.ts`; the previous version of this script threw on that one
  * `readSource()` call and exited 2 without ever reading the other four
  * files, all of which were fine).
+ *
+ * The CONTRACTS registry (scripts/lib/compat-contracts.mjs) is the single
+ * source of truth for both "which files back this contract" (`parts`) and
+ * "which npm package" (`package` — the exact install spec, not a lookup
+ * key): this script's install list is DERIVED from that registry rather
+ * than a hand-maintained parallel table, so the two can never desync
+ * (#2680 F2 — a prior version kept a second `CONTRACT_SOURCE_LOCATIONS`
+ * table joined to CONTRACTS by a bare string id with no parity guard).
  *
  * Overall exit code / GITHUB_OUTPUT `outcome`:
  *   0 / "verified" — every contract located AND its content matched.
@@ -51,109 +62,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { CONTRACTS } from "./lib/compat-contracts.mjs";
-import { locateContractSources } from "./lib/compat-contract-locator.mjs";
-
-const PACKAGES = {
-	sdk: "@earendil-works/pi-coding-agent",
-	nicobailon: "pi-subagents",
-	avtc: "avtc-pi-subagent",
-	tintinweb: "@tintinweb/pi-subagents",
-};
-
-// Per-contract file location(s), oldest-observed-layout first. A contract
-// needing more than one file (nicobailon.child-env: the const definition and
-// the assignment site split apart in pi-subagents@0.65.0's native-session
-// rewrite, #2581) lists each as its own "part" — locateContractSources
-// requires ALL parts to resolve before concatenating them for the check.
-const CONTRACT_SOURCE_LOCATIONS = {
-	"nicobailon.child-env": {
-		packageKey: "nicobailon",
-		parts: [
-			{
-				name: "constants",
-				candidates: [
-					{ path: "src/runs/shared/pi-args.ts", observedAt: "0.34.0" },
-					{
-						path: "src/runs/shared/child-runtime-config.ts",
-						observedAt: "0.65.0",
-					},
-				],
-			},
-			{
-				name: "assignment",
-				candidates: [
-					{ path: "src/runs/shared/pi-args.ts", observedAt: "0.34.0" },
-					{
-						path: "src/runs/background/subagent-runner.ts",
-						observedAt: "0.65.0",
-					},
-				],
-			},
-		],
-	},
-	"avtc.child-env": {
-		packageKey: "avtc",
-		parts: [
-			{
-				name: "source",
-				candidates: [{ path: "src/process-runner.ts", observedAt: "1.0.3" }],
-			},
-		],
-	},
-	"sdk.extension-cache": {
-		packageKey: "sdk",
-		parts: [
-			{
-				name: "source",
-				candidates: [
-					{ path: "dist/core/extensions/loader.js", observedAt: "0.80.6" },
-				],
-			},
-		],
-	},
-	"sdk.bind-extensions-session-start": {
-		packageKey: "sdk",
-		parts: [
-			{
-				name: "source",
-				candidates: [
-					{ path: "dist/core/agent-session.js", observedAt: "0.80.6" },
-				],
-			},
-		],
-	},
-	"sdk.invalidate-called": {
-		packageKey: "sdk",
-		parts: [
-			{
-				name: "source",
-				candidates: [
-					{ path: "dist/core/agent-session.js", observedAt: "0.80.6" },
-				],
-			},
-		],
-	},
-	"sdk.stale-ctx-message": {
-		packageKey: "sdk",
-		parts: [
-			{
-				name: "source",
-				candidates: [
-					{ path: "dist/core/agent-session.js", observedAt: "0.80.6" },
-				],
-			},
-		],
-	},
-	"tintinweb.in-process-bind": {
-		packageKey: "tintinweb",
-		parts: [
-			{
-				name: "source",
-				candidates: [{ path: "src/agent-runner.ts", observedAt: "0.13.0" }],
-			},
-		],
-	},
-};
+import { resolveAndCheckContracts } from "./lib/compat-contract-resolution.mjs";
 
 function parseArgs(argv) {
 	const opts = { keep: false, dir: undefined };
@@ -177,7 +86,9 @@ function installPackages(dir) {
 			),
 		);
 	}
-	const specs = Object.values(PACKAGES);
+	// Derived from CONTRACTS, not a hand-maintained parallel list (#2680 F2) —
+	// three of the seven contracts share the SDK package, so dedupe.
+	const specs = [...new Set(CONTRACTS.map((c) => c.package))];
 	console.log(`installing ${specs.join(", ")} into ${dir} ...`);
 	// Windows `npm` is a `.cmd` shim that only runs under shell mode (same
 	// reasoning as safeSpawnAsync — see AGENTS.md "Runner process model").
@@ -202,42 +113,6 @@ function installedVersion(dir, pkgName) {
 	}
 }
 
-/**
- * Resolve and run every contract in CONTRACTS independently, returning one
- * result per contract with an `outcome` of "verified" | "drift" | "infra".
- * A contract's source not being locatable never stops the others from being
- * checked (#2581) — each iteration is its own try, not a shared one.
- */
-function resolveAndCheckContracts(installDir) {
-	return CONTRACTS.map((contract) => {
-		const location = CONTRACT_SOURCE_LOCATIONS[contract.id];
-		const packageName = PACKAGES[location.packageKey];
-		const packageDir = path.join(installDir, "node_modules", packageName);
-		const resolved = locateContractSources(packageDir, location.parts);
-		if (!resolved.found) {
-			const triedList = resolved.tried
-				.map((c) => `${c.path} (observed at ${c.observedAt})`)
-				.join(", ");
-			return {
-				id: contract.id,
-				package: contract.package,
-				description: contract.description,
-				outcome: "infra",
-				pass: false,
-				detail: `INFRA — expected source not found for "${resolved.part}" (package layout changed?): tried ${triedList}`,
-			};
-		}
-		const checkResult = contract.check(resolved.source);
-		return {
-			id: contract.id,
-			package: contract.package,
-			description: contract.description,
-			outcome: checkResult.pass ? "verified" : "drift",
-			...checkResult,
-		};
-	});
-}
-
 async function main() {
 	const opts = parseArgs(process.argv.slice(2));
 	const dir =
@@ -253,15 +128,10 @@ async function main() {
 		infraFailure = err instanceof Error ? err.message : String(err);
 	}
 
-	const versions = {
-		"@earendil-works/pi-coding-agent": installedVersion(
-			dir,
-			"@earendil-works/pi-coding-agent",
-		),
-		"pi-subagents": installedVersion(dir, "pi-subagents"),
-		"avtc-pi-subagent": installedVersion(dir, "avtc-pi-subagent"),
-		"@tintinweb/pi-subagents": installedVersion(dir, "@tintinweb/pi-subagents"),
-	};
+	const packageNames = [...new Set(CONTRACTS.map((c) => c.package))];
+	const versions = Object.fromEntries(
+		packageNames.map((name) => [name, installedVersion(dir, name)]),
+	);
 	console.log("\nversions installed:");
 	for (const [name, version] of Object.entries(versions)) {
 		console.log(`  ${name}@${version}`);
