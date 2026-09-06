@@ -46,8 +46,8 @@ reviewed, zero unreviewed merges). Apply it to each PR in the queue.
    under it is expected to be rebuilt each round, not preserved. Do not set
    `--keep-agent-tree` / `PILENS_HYGIENE_KEEP_AGENT_TREES=1` merely to dodge
    this — that decision stays off by default (see step 2).
-4. **Merge gate.** Merge only when: verdict is merge-ready; Unit tests and
-   Lint genuinely EXECUTED and passed on the exact head SHA
+4. **Merge gate.** Merge only when: verdict is merge-ready; every gating check
+   genuinely EXECUTED and passed on the exact head SHA
    (`node scripts/ci-verdict.mjs <pr-number|sha>` — a DIRTY PR silently skips
    them, absent is not green); every failing check
    was read and judged (infra failures — codeload 429/503, SARIF-upload
