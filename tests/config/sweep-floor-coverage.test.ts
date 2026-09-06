@@ -73,6 +73,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"rule precedence fixtures, not a production population sweep",
 	"tests/clients/atomic-write.test.ts":
 		"atomic-write behavior cases, not a production population sweep",
+	"tests/clients/bundled-resource-health.test.ts":
+		"mocks node:fs's readdirSync for one EACCES fault-injection case and asserts notify/degradation counts with toHaveLength(0); not a registered-or-fail production population sweep (#2636, same shape as skills-resolver.test.ts below)",
 	"tests/clients/bus-producer-coverage.test.ts":
 		"bus contract cases, not a registered-or-fail population sweep",
 	"tests/clients/coderabbit-ast-grep-rules.test.ts":
@@ -132,6 +134,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"mocks node:fs's readdirSync for one EACCES fault-injection case and asserts notify/degradation counts with toHaveLength(0); not a registered-or-fail production population sweep",
 	"tests/clients/tree-sitter-879-post-filters.test.ts":
 		"tree-sitter behavior cases, not a production population sweep",
+	"tests/clients/tree-sitter-query-loader.test.ts":
+		"mocks node:fs's readdirSync to fault-inject the bundled tree-sitter-queries root and asserts notify/degradation counts with toHaveLength(0); not a registered-or-fail production population sweep (#2636, same shape as skills-resolver.test.ts)",
 	"tests/clients/tree-sitter-cache-stats-astgrep-coverage.test.ts":
 		"tree-sitter behavior cases, not a production population sweep",
 	"tests/host-sdk-type-only.test.ts":
