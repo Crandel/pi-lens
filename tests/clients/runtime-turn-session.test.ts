@@ -2391,6 +2391,235 @@ describe("turn_end test runner — a runner-error-only batch does not itself blo
 			env.cleanup();
 		}
 	});
+
+	/**
+	 * #2532 review round 1, T1: `if (!runnerErrorOnly)` neutered to
+	 * `if (false)` — the merge call NEVER fires, so a --lens-guard blocker
+	 * for a REAL failure can never be created — left the whole `tests/clients`
+	 * suite green. `runnerErrorOnly` is a BATCH-level flag (false the moment
+	 * any one result has `failed > 0`), so the missing case was a MIXED batch:
+	 * one runner-error file plus one genuinely failing file in the same
+	 * turn_end fire, both settled and cached, with the real failure still
+	 * reaching git-guard.
+	 */
+	it("blocks git-guard for a mixed batch (one runner error, one real failure)", async () => {
+		const env = setupTestEnvironment("pi-lens-test-guard-mixed-batch-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "guard-mixed-session" });
+			const cacheManager = new CacheManager(false);
+
+			const errorSrcFile = path.join(env.tmpDir, "src/flaky.go");
+			const failSrcFile = path.join(env.tmpDir, "src/broken.go");
+			fs.mkdirSync(path.dirname(errorSrcFile), { recursive: true });
+			fs.writeFileSync(errorSrcFile, "package main\n");
+			fs.writeFileSync(failSrcFile, "package main\n");
+			cacheManager.addModifiedRange(
+				errorSrcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"guard-mixed-session",
+			);
+			cacheManager.addModifiedRange(
+				failSrcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"guard-mixed-session",
+			);
+
+			expect(evaluateGitGuard(runtime, cacheManager, env.tmpDir).block).toBe(
+				false,
+			);
+
+			const errorTestFile = path.join(env.tmpDir, "src/flaky_test.go");
+			const failTestFile = path.join(env.tmpDir, "src/broken_test.go");
+			fs.writeFileSync(errorTestFile, "package main\n");
+			fs.writeFileSync(failTestFile, "package main\n");
+			const resultByTestFile = new Map<
+				string,
+				{
+					file: string;
+					sourceFile: string;
+					runner: string;
+					passed: number;
+					failed: number;
+					skipped: number;
+					failures: unknown[];
+					duration: number;
+					error?: string;
+				}
+			>([
+				[
+					errorTestFile,
+					{
+						file: errorTestFile,
+						sourceFile: errorSrcFile,
+						runner: "go",
+						passed: 0,
+						failed: 0,
+						skipped: 0,
+						failures: [],
+						duration: 1,
+						error: "Runner go exited with 1",
+					},
+				],
+				[
+					failTestFile,
+					{
+						file: failTestFile,
+						sourceFile: failSrcFile,
+						runner: "go",
+						passed: 0,
+						failed: 1,
+						skipped: 0,
+						failures: [{ name: "TestBroken", message: "expected 1 to be 2" }],
+						duration: 1,
+					},
+				],
+			]);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					getFlag: (flag: string) => flag === "lens-guard",
+					testRunnerClient: {
+						getTestRunTarget: (abs: string) => {
+							const testFile =
+								path.basename(abs) === path.basename(errorSrcFile)
+									? errorTestFile
+									: failTestFile;
+							return {
+								testFile,
+								runner: "go",
+								config: {} as any,
+								strategy: "related" as const,
+							};
+						},
+						runTestFileAsync: async (testFile: string) => {
+							const result = resultByTestFile.get(testFile);
+							if (!result) throw new Error(`unexpected test file ${testFile}`);
+							return result;
+						},
+						formatResult: (r: {
+							error?: string;
+							passed: number;
+							failed: number;
+						}) =>
+							r.error && r.passed === 0 && r.failed === 0
+								? `[Tests] ⚠ Could not run tests: ${r.error}`
+								: `[Tests] ✗ ${r.failed} failed`,
+					},
+				}),
+			);
+			await new Promise((resolve) => setImmediate(resolve));
+
+			// Both entries actually settled and were cached — this is a real
+			// mixed batch, not a single-target run that happens to pass.
+			const persisted = cacheManager.readCache<{
+				results?: Array<{ file: string }>;
+				runnerErrorOnly?: boolean;
+			}>("test-runner-findings", env.tmpDir)?.data;
+			expect(persisted?.results?.map((r) => r.file).sort()).toEqual(
+				[errorTestFile, failTestFile].sort(),
+			);
+			expect(persisted?.runnerErrorOnly).toBe(false);
+
+			// The real failure must still reach git-guard even though the SAME
+			// batch also contains a runner error the merge call must ignore.
+			expect(evaluateGitGuard(runtime, cacheManager, env.tmpDir).block).toBe(
+				true,
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #2532 review round 1, T2: the skip was pull-only — nothing PUSHED
+	 * records that a runner-error-only batch was deliberately kept off the
+	 * --lens-guard blocker. Same `test-runner-delivery` ledger/phase the
+	 * rejected-promise path already uses.
+	 */
+	it("records a bounded telemetry event when a runner-error-only batch is kept off the --lens-guard blocker", async () => {
+		const env = setupTestEnvironment("pi-lens-test-guard-runner-error-obs-");
+		const previousTestMode = process.env.PI_LENS_TEST_MODE;
+		process.env.PI_LENS_TEST_MODE = "0";
+		try {
+			resetDegradationLedger();
+			resetBoundedTelemetry();
+			clearLatencyLog();
+			await flushLatencyLog();
+
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "guard-obs-session" });
+			const cacheManager = new CacheManager(false);
+
+			const srcFile = path.join(env.tmpDir, "src/main.go");
+			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+			fs.writeFileSync(srcFile, "package main\n");
+			cacheManager.addModifiedRange(
+				srcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"guard-obs-session",
+			);
+
+			const goTestFile = path.join(env.tmpDir, "src/main_test.go");
+			fs.writeFileSync(goTestFile, "package main\n");
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					getFlag: (flag: string) => flag === "lens-guard",
+					testRunnerClient: {
+						getTestRunTarget: () => ({
+							testFile: goTestFile,
+							runner: "go",
+							config: {} as any,
+							strategy: "related" as const,
+						}),
+						runTestFileAsync: async () => ({
+							file: goTestFile,
+							sourceFile: srcFile,
+							runner: "go",
+							passed: 0,
+							failed: 0,
+							skipped: 0,
+							failures: [],
+							duration: 1,
+							error: "Runner go exited with 1",
+						}),
+						formatResult: (r: {
+							error?: string;
+							passed: number;
+							failed: number;
+						}) =>
+							r.error && r.passed === 0 && r.failed === 0
+								? `[Tests] ⚠ Could not run tests: ${r.error}`
+								: "",
+					},
+				}),
+			);
+			await new Promise((resolve) => setImmediate(resolve));
+			await flushLatencyLog();
+
+			const log = fs.readFileSync(getLatencyLogPath(), "utf8");
+			expect(log).toContain('"phase":"test_runner_delivery"');
+			expect(log).toContain('"outcome":"runner-error-only-not-blocking"');
+		} finally {
+			if (previousTestMode === undefined) {
+				delete process.env.PI_LENS_TEST_MODE;
+			} else {
+				process.env.PI_LENS_TEST_MODE = previousTestMode;
+			}
+			env.cleanup();
+		}
+	});
 });
 
 // ── #1479: the turn-end line must not print a measurement it does not have ────
@@ -2401,70 +2630,73 @@ describe("turn_end test runner — a runner-error-only batch does not itself blo
 // unmeasured case and silently relabel a real zero, which is the mistake this
 // issue is about, one layer up.
 
-describe("turn_end test runner — unmeasured duration is not printed as 0ms", () => {
-	async function logLineFor(
-		durationField: Record<string, unknown>,
-		tmpPrefix: string,
-	): Promise<string> {
-		const env = setupTestEnvironment(tmpPrefix);
-		try {
-			const runtime = new RuntimeCoordinator();
-			runtime.setTelemetryIdentity({ sessionId: "duration-session" });
-			const cacheManager = new CacheManager(false);
+// Shared by the #1479 duration-formatting cases below AND the #2532 review
+// S1 dbg-summary cases (`resultOverrides` replaces/extends the base clean
+// 2-passed result, exactly like the duration-only callers already do).
+async function logLineFor(
+	resultOverrides: Record<string, unknown>,
+	tmpPrefix: string,
+): Promise<string> {
+	const env = setupTestEnvironment(tmpPrefix);
+	try {
+		const runtime = new RuntimeCoordinator();
+		runtime.setTelemetryIdentity({ sessionId: "duration-session" });
+		const cacheManager = new CacheManager(false);
 
-			const srcFile = path.join(env.tmpDir, "src/foo.ts");
-			const testFile = materializeTestFile(
-				path.join(env.tmpDir, "src/foo.test.ts"),
-			);
-			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
-			fs.writeFileSync(srcFile, "export const x = 1;\n");
-			fs.writeFileSync(testFile, "test('x', () => {});\n");
-			cacheManager.addModifiedRange(
-				srcFile,
-				{ start: 1, end: 1 },
-				false,
-				env.tmpDir,
-				"duration-session",
-			);
+		const srcFile = path.join(env.tmpDir, "src/foo.ts");
+		const testFile = materializeTestFile(
+			path.join(env.tmpDir, "src/foo.test.ts"),
+		);
+		fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+		fs.writeFileSync(srcFile, "export const x = 1;\n");
+		fs.writeFileSync(testFile, "test('x', () => {});\n");
+		cacheManager.addModifiedRange(
+			srcFile,
+			{ start: 1, end: 1 },
+			false,
+			env.tmpDir,
+			"duration-session",
+		);
 
-			const lines: string[] = [];
-			await handleTurnEnd(
-				makeTurnEndDeps(runtime, cacheManager, {
-					ctxCwd: env.tmpDir,
-					dbg: (msg: string) => {
-						lines.push(msg);
-					},
-					testRunnerClient: {
-						getTestRunTarget: () => ({
-							testFile,
-							runner: "vitest",
-							config: {} as any,
-							strategy: "related" as const,
-						}),
-						runTestFileAsync: async () => ({
-							file: testFile,
-							sourceFile: srcFile,
-							runner: "vitest",
-							passed: 2,
-							failed: 0,
-							skipped: 0,
-							failures: [],
-							...durationField,
-						}),
-						formatResult: () => "",
-					},
-				}),
-			);
-			await new Promise((resolve) => setImmediate(resolve));
+		const lines: string[] = [];
+		await handleTurnEnd(
+			makeTurnEndDeps(runtime, cacheManager, {
+				ctxCwd: env.tmpDir,
+				dbg: (msg: string) => {
+					lines.push(msg);
+				},
+				testRunnerClient: {
+					getTestRunTarget: () => ({
+						testFile,
+						runner: "vitest",
+						config: {} as any,
+						strategy: "related" as const,
+					}),
+					runTestFileAsync: async () => ({
+						file: testFile,
+						sourceFile: srcFile,
+						runner: "vitest",
+						passed: 2,
+						failed: 0,
+						skipped: 0,
+						failures: [],
+						...resultOverrides,
+					}),
+					formatResult: () => "",
+				},
+			}),
+		);
+		await new Promise((resolve) => setImmediate(resolve));
 
-			const line = lines.find((l) => l.includes("turn_end: test vitest"));
-			expect(line).toBeDefined();
-			return line as string;
-		} finally {
-			env.cleanup();
-		}
+		const line = lines.find((l) => l.includes("turn_end: test vitest"));
+		expect(line).toBeDefined();
+		return line as string;
+	} finally {
+		env.cleanup();
 	}
+}
 
+describe("turn_end test runner — unmeasured duration is not printed as 0ms", () => {
 	it("prints (unmeasured) when the runner reported no duration", async () => {
 		// No `duration` key at all — an emptyResult, a runner error, or a JSON
 		// payload with no readable suite timestamps all arrive in this shape.
@@ -2489,6 +2721,32 @@ describe("turn_end test runner — unmeasured duration is not printed as 0ms", (
 
 		expect(line).toContain("PASS 2p/0f (137ms)");
 		expect(line).not.toContain("unmeasured");
+	});
+});
+
+// #2532 review round 1, S1: the turn_end dbg summary used the same local
+// `error && passed === 0 && failed === 0` spelling `formatResult` did,
+// missing a runner error reported alongside partial passes and printing a
+// clean "PASS Np/0f" line that silently dropped the interruption.
+describe("turn_end test runner — dbg summary folds onto isRunnerErrorResult (#2532 review S1)", () => {
+	it("prints the error and the partial pass count instead of a clean PASS line", async () => {
+		const line = await logLineFor(
+			{ passed: 3, failed: 0, error: "Pytest interrupted" },
+			"pi-lens-turn-partial-error-",
+		);
+
+		expect(line).toContain("error: Pytest interrupted (3 passed before)");
+		expect(line).not.toContain("PASS 3p/0f");
+	});
+
+	it("still prints the plain error line when nothing passed first", async () => {
+		const line = await logLineFor(
+			{ passed: 0, failed: 0, error: "Pytest interrupted" },
+			"pi-lens-turn-plain-error-",
+		);
+
+		expect(line).toContain("error: Pytest interrupted");
+		expect(line).not.toContain("passed before");
 	});
 });
 

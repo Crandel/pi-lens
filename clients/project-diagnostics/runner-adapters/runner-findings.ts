@@ -200,6 +200,11 @@ export function testResultToProjectDiagnostics(
 		];
 	}
 
+	// #2532 review S3: a counted failure stays blocking even when `error` is
+	// ALSO set (pytest exit 2 "Interrupted" after `2 failed, 1 passed` — see
+	// `isRunnerErrorResult`'s doc). The pre-fix message mentioned `error`
+	// here via a ternary this PR's first version dropped; restored so the
+	// interruption is not silently lost from a still-blocking finding.
 	return [
 		{
 			filePath: result.file,
@@ -208,7 +213,9 @@ export function testResultToProjectDiagnostics(
 			tool: "test-runner",
 			runner: result.runner,
 			rule: `test:${result.runner}`,
-			message: `${stalePrefix}${result.failed} test(s) failed`,
+			message: `${stalePrefix}${result.failed} test(s) failed${
+				result.error ? ` (runner also reported: ${result.error})` : ""
+			}`,
 			source: "project-scan",
 		},
 	];
