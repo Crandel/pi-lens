@@ -6,6 +6,7 @@ import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import type { TreeSitterClient } from "../../clients/tree-sitter-client.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 // handleToolCall calls getLSPService() directly (not via DI, matching the
 // pattern already used by runtime-session.ts). Stub it so tests never spin up
@@ -14,10 +15,11 @@ import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 const touchFileMock = vi.fn().mockResolvedValue(undefined);
 const getWarmClientForFileMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		touchFile: touchFileMock,
-		getWarmClientForFile: getWarmClientForFileMock,
-	}),
+	getLSPService: () =>
+		makeLspServiceDouble({
+			touchFile: touchFileMock,
+			getWarmClientForFile: getWarmClientForFileMock,
+		}),
 	resetLSPService: () => {},
 }));
 

@@ -12,6 +12,7 @@ import { handleSessionStart } from "../../clients/runtime-session.js";
 import { _resetSlowFsForTests } from "../../clients/slow-fs.js";
 import { _resetSubagentModeForTests } from "../../clients/subagent-mode.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 /** A pid guaranteed dead on this machine, for orphan-staging-file tests
  *  (mirrors tests/clients/atomic-write-stage-gc.test.ts's helper). */
@@ -33,10 +34,12 @@ function findDeadPid(): number {
 const mockTouchFile = vi.fn(async () => undefined);
 vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
-	getLSPService: vi.fn(() => ({
-		supportsLSP: () => false,
-		touchFile: mockTouchFile,
-	})),
+	getLSPService: vi.fn(() =>
+		makeLspServiceDouble({
+			supportsLSP: () => false,
+			touchFile: mockTouchFile,
+		}),
+	),
 }));
 
 // #1767: every test in this file drives `handleSessionStart`, which does

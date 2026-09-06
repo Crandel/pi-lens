@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the lsp tools seam, burn-down tracked in #2592
 /**
  * #1645 review F3: `lsp_diagnostics` writes the SAME widget store as
  * `lens_diagnostics mode=full`. One store, one demotion rule — otherwise an

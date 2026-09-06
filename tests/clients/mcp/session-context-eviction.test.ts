@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the MCP session seam, burn-down tracked in #2592
 /**
  * #1570: `getMcpSessionContext`'s `contextPromise ??= (async () => {...})()`
  * memo used to cache a REJECTED promise for the process lifetime. A single
