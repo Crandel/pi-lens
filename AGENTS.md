@@ -2996,6 +2996,8 @@ pi installs git extensions with **`npm install --omit=dev`** (and omits peers). 
 
 ## Release notes: per-entry files roll up into CHANGELOG.md
 
+**A release is cut only after the `release-qa` skill (`.claude/skills/release-qa/SKILL.md`, which drives `docs/release-qa-baseline.md` through `scripts/release-qa.mjs` against a real pi) reports `ship` — or `ship-with-caveats` with every caveat named in the release notes (#2606, guarding the #2587 recurrence).**
+
 The GitHub release body is derived from the curated `CHANGELOG.md` section for that version — **not** an auto-generated PR-title list. The version-bump PR runs `npm run changelog:release`, so the rolled CHANGELOG and deleted entry files pass normal CI and required checks before merge. At tag time, `release.yml` only verifies that the version heading exists and `.changelog/` has no pending entries, then runs `scripts/changelog-extract.mjs "$VERSION" --summary` and posts it via `gh release create --notes-file`; it never mutates or pushes changelog state. Contributor credits are appended immediately afterward.
 
 - **Add one `.changelog/<branch-or-slug>-<short-desc>.md` entry IN the PR, not after merge.** Use YAML front matter with any Keep a Changelog category (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`) and exactly one top-level `-` or `*` entry; bold/plain, em-dash/period/no-separator styles and multiline continuation content are accepted. See [.changelog/README.md](.changelog/README.md). Entry files are the PR-time authoring seam; `CHANGELOG.md` remains the release source of truth after bump-time rollup.

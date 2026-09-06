@@ -116,6 +116,21 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the defect is wall-clock only (2^N globstar backtracking); a fake clock measures nothing",
 		},
+	// 2026-09-06 (#2619 review F1, then N1/N3 in round 3): three real spawns,
+	// each pinning something no in-process double can reach. (1) a `node -e`
+	// child reports what IT resolved for HOME/PI_LENS_INSTALL_LOG — `os.homedir()`
+	// in the test process can only ever report the ambient home. (2) `npm pack`
+	// of a two-line fixture package whose `prepare` writes through
+	// `os.homedir()`: the runner's defect was npm IGNORING the env it was
+	// handed, which an assertion on the env object cannot see. (3) the real
+	// release-qa CLI run out of a throwaway dirty tree, because main()'s call to
+	// the dirty-checkout refusal — as opposed to the pure refusal itself — is
+	// only reachable through the process entry point.
+	"real-process-spawn:scripts/release-qa.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"npm ignoring a handed env, a child's own os.homedir(), and main()'s CLI exit code are each unobservable in-process",
+	},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */

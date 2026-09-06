@@ -324,6 +324,12 @@ const wallClockBudgetInclude = [
 	// the defect it pins is wall-clock (2^N regex backtracking on an interleaved
 	// `**` chain), so a fake clock measures nothing.
 	"tests/clients/workspace-glob-nonbacktracking-budget.test.ts",
+	// #2619 review F1: the release-QA hermeticity canary spawns a REAL child
+	// under scratchEnv() and reads back what that child resolved. The defect it
+	// pins is a child inheriting the ambient environment, which an in-process
+	// assertion on the env object cannot see (it passed while npm() ignored the
+	// env entirely).
+	"tests/scripts/release-qa.test.ts",
 	// #2358: the flat-server discriminator asserts the real outstanding wedge
 	// window. Keep child-process CPU sampling and this wall-clock lower bound in
 	// the fully serialized, dead-last phase.
