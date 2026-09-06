@@ -171,7 +171,8 @@ describe("the installer records what its attempt did (#1500)", () => {
 	it("a genuine pip install failure records the real pip error, not a generic fallback", async () => {
 		const pipFailed = {
 			stdout: "",
-			stderr: "ERROR: Could not find a version that satisfies the requirement cmake-language-server",
+			stderr:
+				"ERROR: Could not find a version that satisfies the requirement cmake-language-server",
 			status: 1,
 		};
 		safeSpawnAsync.mockResolvedValue(pipFailed);

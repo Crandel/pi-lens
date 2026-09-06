@@ -1413,7 +1413,8 @@ export function passFloorBreach(rows, minPass) {
 // toolchain" or "the installer has a defect" (#2661 review F2). E5xx covers
 // the registry's own 5xx responses; the rest are Node's own connect-failure
 // errno strings.
-const TRANSIENT_NETWORK_PATTERN = /ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN|E5\d\d/;
+const TRANSIENT_NETWORK_PATTERN =
+	/ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN|E5\d\d/;
 
 /**
  * The first non-empty line of `text`, capped at 200 chars — the same bound
