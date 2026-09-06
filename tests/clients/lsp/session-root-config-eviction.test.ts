@@ -48,23 +48,31 @@ let previousHome: string | undefined;
 let previousTestMode: string | undefined;
 
 /**
- * The `config_resolved` rows this process wrote for `root` — the positive
+ * Every `config_resolved` row this process wrote NAMING `root` — the positive
  * record that a resolution HAPPENED, which `recordConfigResolved`
  * (`clients/lsp/config.ts`) claims once per (session, root). Read from the
- * real latency log, keyed with the same `normalizeFilePath` the row is
- * stamped with.
+ * real latency log.
+ *
+ * Trailing separators are trimmed off BOTH sides before comparing, so a row
+ * written under a non-canonical spelling of the same root still counts. That
+ * is the whole point (review F6): an exact-match filter would silently hide a
+ * duplicate row written under `"/proj/"` while the canonical `"/proj"` row was
+ * counted, and the count is what these cases assert.
  */
 async function configResolvedRowsFor(root: string): Promise<unknown[]> {
 	await flushLatencyLog();
 	const file = getLatencyLogPath();
 	const text = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-	const wanted = normalizeFilePath(root);
+	const trimTrailing = (value: string) => value.replace(/[\\/]+$/, "");
+	const wanted = trimTrailing(normalizeFilePath(root));
 	return text
 		.split(/\r?\n/)
 		.filter(Boolean)
 		.map((line) => JSON.parse(line) as Record<string, unknown>)
 		.filter(
-			(entry) => entry.phase === "config_resolved" && entry.filePath === wanted,
+			(entry) =>
+				entry.phase === "config_resolved" &&
+				trimTrailing(String(entry.filePath ?? "")) === wanted,
 		);
 }
 
