@@ -49,8 +49,12 @@ instructions say so.
    merge-order implications in your PR body.
    Directory isolation is non-negotiable (#2007): you work in YOUR OWN
    worktree, never a checkout another session may share. Create it as
-   `.claude/worktrees/agent-<your agent id>` under the main checkout — that
-   is the only path the SubagentStop / SessionStart reaper sweeps. Never
+   `.claude/worktrees/agent-<issue>-<8 random hex>` under the main checkout
+   (e.g. `agent-2345-$(openssl rand -hex 4)` — generate the suffix, never
+   reuse a name you have seen, never use the SESSION id: on 2026-09-06 two
+   fixers both chose `agent-6a12353d` and one destroyed the other's
+   uncommitted edits). That prefix is the only path the SubagentStop /
+   SessionStart reaper sweeps. Never
    under `~/Desktop`, the scratchpad, or any ad-hoc `pi-lens-wt-*` name: on
    2026-09-06 ten such trees accumulated outside the sweep and had to be
    removed by hand. Never switch
