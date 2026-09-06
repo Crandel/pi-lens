@@ -24,6 +24,7 @@ import {
 } from "../../../path-utils.js";
 import {
 	ensureTool,
+	findManagedToolBinary,
 	getInstallAttempt,
 	getLastEnsureResolutionSource,
 	getToolInstallStrategy,
@@ -165,9 +166,10 @@ type ManagedVerdictMemo =
  * Verification verdicts for managed shims, keyed by path + mtime + size, so a
  * reinstall re-verifies and a session start re-arms.
  *
- * A plain `Map`, not a `PathKeyedMap`: `managedNodeToolCandidates` is the ONLY
- * producer of these paths, so the write and read forms are the same string by
- * construction and cannot diverge on case or separator.
+ * A plain `Map`, not a `PathKeyedMap`: every path keyed here is produced by
+ * `path.join` from one of two producers — `managedNodeToolCandidates` and the
+ * installer's `findManagedToolBinary` (#2140) — so the write and read forms are
+ * the same string by construction and cannot diverge on case or separator.
  */
 const managedBinaryVerdicts = new Map<string, ManagedVerdictMemo>();
 /**
@@ -334,6 +336,35 @@ export async function findManagedNodeToolBinary(
 	return null;
 }
 
+/**
+ * The release-managed binary for a tool (`~/.pi-lens/bin/<tool>`), or null when
+ * the registry does not put this tool there / nothing on disk actually runs.
+ *
+ * `findManagedToolBinary` is the INSTALLER's own lookup — the one `getToolPath`
+ * runs before PATH for every github/maven/archive-strategy tool, and the one
+ * `getToolEnvironment` puts at the front of a spawn's PATH. Calling it here is
+ * what makes probe and spawn resolve through a single definition instead of two
+ * (#2140): before this, the probe fell straight to the bare command name, missed
+ * PATH, and latched `missing` — while the install fallback a few hundred ms
+ * later handed the caller the very binary sitting in that directory. Every
+ * session, for every tool the user already had (7 unavailable/available pairs in
+ * one 3h dogfood window).
+ *
+ * Verification is the same `verifyManagedCandidate` the npm-shim rung above
+ * uses, for the same reason (#1657): `findManagedToolBinary` answers from a bare
+ * `fs.access`, and an on-disk binary that cannot run must not shadow a working
+ * PATH binary — it falls through instead.
+ */
+async function findManagedReleaseBinary(
+	tool: string,
+	verificationArgs: string[] = ["--version"],
+): Promise<string | null> {
+	const candidate = await findManagedToolBinary(tool);
+	if (!candidate) return null;
+	const verdict = await verifyManagedCandidate(candidate, verificationArgs);
+	return verdict === "ok" || verdict === "unverified" ? candidate : null;
+}
+
 // =============================================================================
 // VENV-AWARE COMMAND FINDER
 // =============================================================================
@@ -385,6 +416,12 @@ export function createVenvFinder(
 		// shadowing a working binary (#1657).
 		const managed = await findManagedNodeToolBinary(command, verificationArgs);
 		if (managed) return managed;
+
+		// Release-managed install (`~/.pi-lens/bin/<command>`) — where `ensureTool`
+		// puts every github/maven/archive-strategy tool. Same rung, same reason as
+		// the npm shim above, for the other half of the managed families (#2140).
+		const release = await findManagedReleaseBinary(command, verificationArgs);
+		if (release) return release;
 
 		// Fall back to global
 		return command;
@@ -701,6 +738,34 @@ function sourceTagForToolId(toolId: string): ProbeEvidence["source"] {
 			// a guessed one.
 			return undefined;
 	}
+}
+
+/**
+ * `binary`/`source` for a probe that resolved through pi-lens's OWN release-
+ * managed install (`~/.pi-lens/bin`) rather than through PATH (#2140). A reader
+ * of latency.log could otherwise not tell the two apart, and the whole point of
+ * the fix is that the managed directory now answers where PATH used to miss.
+ *
+ * The question is put to `findManagedToolBinary` — the same function that
+ * produced the path — and settled by string identity, NOT by a path-prefix
+ * predicate over the managed directory: a second opinion about which paths are
+ * managed is exactly the parallel-list drift `sourceTagForToolId` exists to
+ * avoid, and it would answer differently for case or separator variants.
+ *
+ * A PATH/venv resolution returns no keys at all, so `source` present IS the
+ * managed-dir hit. `binary` is a BASENAME, never the absolute path — same rule
+ * as every other evidence field (#1568 review).
+ */
+async function describeManagedResolution(
+	tool: string,
+	resolved: string,
+): Promise<ProbeEvidence> {
+	if ((await findManagedToolBinary(tool)) !== resolved) return {};
+	const source = sourceTagForToolId(tool);
+	return {
+		binary: path.basename(resolved),
+		...(source !== undefined && { source }),
+	};
 }
 
 /**
@@ -1120,7 +1185,10 @@ export function createAvailabilityChecker(
 					elapsedMs,
 					hostStallMs,
 					classifiedBy: probeJoined ? "joined" : "probe",
-					evidence: describeProbeEvidence(result),
+					evidence: {
+						...describeProbeEvidence(result),
+						...(await describeManagedResolution(command, cmd)),
+					},
 				});
 				return true;
 			}
