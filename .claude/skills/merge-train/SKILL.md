@@ -68,7 +68,11 @@ reviewed, zero unreviewed merges). Apply it to each PR in the queue.
 6. **After each merge.** Master moved: check other open PRs for BEHIND/DIRTY,
    check in-flight agents for file overlap with the merged diff and nudge
    affected ones to merge origin/master before their next push.
-   Then prune the lane: `git worktree remove` every tree on the merged
+   Then prune the lane — and ONLY the lane: the merged-ness test is "this
+   tree's branch is the head of the PR just merged" (`gh pr view <n> --json
+   headRefName`), never `merge-base --is-ancestor`: a live fixer's branch
+   with no commits yet passes the ancestor test, and on 2026-09-06 that
+   removed #2358's tree with its uncommitted work. `git worktree remove` every tree on the merged
    branch (fixer AND reviewer trees, wherever they were created) and delete
    the merged local branch. A lane's tree lives until its PR merges, not
    after — the orchestrator owns this step; the reaper only sees
@@ -151,8 +155,21 @@ operator's private notes, so a different orchestrator can run the same train.
 - **Round routing.** Fix rounds that only apply a reviewer-prescribed remedy
   with quoted reds merge on green (CI read on the exact head, both required
   checks, mergeable state). Rounds that add mechanism, touch session or
-  lifecycle semantics, or rewrite a guard get a fresh verify. A verify that
+  lifecycle semantics, or rewrite a guard get a fresh verify. Classify the
+  round by its worst finding, not its count: a round whose findings are all
+  contract (body text, docstrings, a record added WITH its test, a test
+  added for an existing behaviour) merges on green — #2647 r2 is that shape;
+  a round with one behaviour finding (a verdict, a guard direction, a
+  lifecycle hook, a failsafe) gets the same-reviewer verify — #2649 r2 and
+  #2654 r2. Say which in the fixer brief so the reviewer is not re-armed by
+  reflex. A verify that
   reports a NEW defect triggers the round-count rail above.
+- **Retargeting a PR's base does not re-arm CI.** `ci.yml` fires on
+  `opened`/`synchronize`/`reopened`; `gh pr edit --base` is an `edited`
+  event, so the required checks stay ABSENT and `ci-verdict` reports "absent,
+  treating as pending" with exit 0 (#2664). After a retarget, push a commit
+  or close/reopen, and never read exit 0 as green — the merge loop keys on
+  the literal "every gating check concluded success" line.
 - **Maintainer trailing commits** are for intent-free deltas only (a literal
   NUL byte, a false comment, a missing PR-body heading); anything that changes
   what code MEANS goes through a fix round.

@@ -216,6 +216,22 @@ describe("host-provided packages are not vendored (#1926)", () => {
 		expect(selftest).toContain("lib/host-provided-deps.mjs");
 	});
 
+	it("ships scripts/lib/skills-predicate.mjs, because install-selftest.mjs imports it too (#2626)", () => {
+		// Same shape as host-provided-deps.mjs above, one module later: the
+		// shared skill-discovery predicate (#2626 review round 2, F2) folds
+		// `install-selftest.mjs`'s manifest-resolution probe AND
+		// `clients/skills-resolver.ts`'s health check onto ONE walk. If this
+		// file is missing from files[], the installed selftest's import throws
+		// in the tarball, same failure mode #1926 guards for the sibling list.
+		const files = pkg.files ?? [];
+		expect(files).toContain("scripts/lib/skills-predicate.mjs");
+		const selftest = fs.readFileSync(
+			path.join(root, "scripts", "install-selftest.mjs"),
+			"utf8",
+		);
+		expect(selftest).toContain("lib/skills-predicate.mjs");
+	});
+
 	it("splits host-provided packages into runtime and type-only, with no overlap", () => {
 		// CI installs the RUNTIME half before a bare `node dist/index.js` smoke
 		// check, because bare node is not pi. It must never install the type-only
@@ -551,6 +567,13 @@ describe("tsconfig.dist.json", () => {
 		// relative specifier lands.
 		expect(dist.compilerOptions?.allowJs).toBe(true);
 		expect(dist.include ?? []).toContain("scripts/lib/process-scan.mjs");
+	});
+
+	it("compiles the shared skills predicate into dist so esbuild can inline it (#2626)", () => {
+		// Same failure mode as process-scan.mjs above: `clients/skills-resolver.ts`
+		// imports `../scripts/lib/skills-predicate.mjs`, and without this entry
+		// `bundle:dist` dies trying to resolve it from `dist/clients/`.
+		expect(dist.include ?? []).toContain("scripts/lib/skills-predicate.mjs");
 	});
 
 	it("keeps tsconfig.dist.json parseable as strict JSON", () => {
