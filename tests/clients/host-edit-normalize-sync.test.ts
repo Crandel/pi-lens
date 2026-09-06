@@ -40,6 +40,18 @@ function hostEditDiffSource(): string {
 	);
 }
 
+// 0.85.1 extracted the BOM split/strip primitive out of edit-diff.js into a
+// shared utils module (edit-diff.js now imports `splitBom` from here instead
+// of inlining `content.startsWith(BOM)`). Read separately so the BOM
+// assertion below tracks wherever the host actually defines the primitive,
+// not wherever it happened to live when this guard was written.
+function hostTextUtilsSource(): string {
+	return fs.readFileSync(
+		path.join(hostPackageDir(), "dist/utils/text.js"),
+		"utf-8",
+	);
+}
+
 // Re-encode a code point the way the host hard-codes it: \uXXXX, 4 hex digits,
 // uppercase letters (matches the host source, e.g. ‚,  , ﻿).
 const esc = (codePoint: number) =>
@@ -93,11 +105,23 @@ describe("host-edit-normalize sync (host source drift guard)", () => {
 		expect(HOST_SPECIAL_SPACES).toEqual(expected);
 	});
 
-	it("host still exports the line-ending + BOM primitives we vendored", () => {
+	it("host still exports the line-ending primitives we vendored", () => {
 		expect(src).toContain("export function detectLineEnding");
 		expect(src).toContain("export function normalizeToLF");
 		expect(src).toContain("export function restoreLineEndings");
-		expect(src).toContain(`startsWith("${esc(HOST_BOM_CODE_POINT)}")`);
+	});
+
+	it("host still delegates BOM stripping to splitBom, and splitBom matches our vendored copy", () => {
+		// edit-diff.js no longer inlines the BOM check itself (0.85.1 extracted
+		// it into utils/text.js's `splitBom`) — assert the delegation still
+		// exists, so a future host version that inlines something DIFFERENT
+		// here (rather than keeping the shared primitive) still fails this
+		// guard, then assert the actual code-point check against wherever
+		// splitBom is now defined.
+		expect(src).toMatch(/import\s*\{[^}]*\bsplitBom\b[^}]*\}\s*from/);
+		expect(src).toContain("splitBom(");
+		const textUtilsSrc = hostTextUtilsSource();
+		expect(textUtilsSrc).toContain(`startsWith("${esc(HOST_BOM_CODE_POINT)}")`);
 	});
 
 	it("host match decision is still exact-then-fuzzy, counted in fuzzy space", () => {
