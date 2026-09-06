@@ -3,7 +3,7 @@
 // imports; an in-process call can't reproduce "which fixture registered a
 // session root first" without literally being the script under test.
 /**
- * #2369. The nightly `--lsp` lane's auxiliary rows (opengrep, ast-grep,
+ * #2369/#2655. The nightly `--lsp` lane's auxiliary rows (opengrep, ast-grep,
  * zizmor, typos, ast-grep-baseline) went to zero on every run from 2026-08-26
  * onward. Root cause: `scripts/smoke-tools.mjs` called `initLSPConfig(workspace)`
  * (which registers the workspace as a served session root, #2052) ONLY inside
@@ -13,20 +13,33 @@
  * `clients/lsp/session-roots.ts`) to non-empty, and every LATER fixture that
  * never registered its own fresh temp workspace was declined by
  * `isOutsideAllSessionRoots` — silently, with zero diagnostics, indistinguishable
- * from the tool genuinely finding nothing.
+ * from the tool genuinely finding nothing. The exact same shape independently
+ * affected `characterize-lsp.mjs`, `probe-clean-signal.mjs`, and
+ * `server-capabilities.mjs` (#2655) — all four scripts' guards now share ONE
+ * implementation, `scripts/lib/lsp-fixture-session-guard.mjs`.
  *
- * This spawns the REAL harness (the exact nightly entry point, not a stand-in)
- * against two fixtures that reproduce the ordering dependency without any
- * network access or `--install`: `expert` (a `disableServers` fixture that
- * registers a workspace) followed by `ast-grep` (a plain auxiliary fixture,
- * whose tool ships in `node_modules/@ast-grep/cli-linux-x64-gnu` so it never
- * needs installing). `expert`'s own tool binary is never installed here, so
- * its row fails for an unrelated, pre-existing reason (no warm client) — that
- * failure is not this guard's business and the test does not assert on it.
+ * This file has two layers:
  *
- * Uses `spawnSync`'s native `timeout` option rather than a raw
- * `setTimeout`/kill-timer, so the child's own bounded wait is Node's
- * child_process timeout handling, not a hand-rolled one.
+ * 1. A REAL spawn of `smoke-tools.mjs --lsp` (the exact nightly entry point,
+ *    not a stand-in) against two fixtures that reproduce the ordering
+ *    dependency without any network access or `--install`: `expert` (a
+ *    `disableServers` fixture that registers a workspace) followed by
+ *    `ast-grep` (a plain auxiliary fixture, whose tool ships in
+ *    `node_modules/@ast-grep/cli-linux-x64-gnu` so it never needs
+ *    installing). `expert`'s own tool binary is never installed here, so its
+ *    row fails for an unrelated, pre-existing reason (no warm client) — not
+ *    this guard's business. Uses `spawnSync`'s native `timeout` option
+ *    rather than a raw `setTimeout`/kill-timer, so the child's own bounded
+ *    wait is Node's child_process timeout handling, not a hand-rolled one.
+ * 2. An in-process unit test of the shared guard module itself
+ *    (`assertFixtureWorkspaceRegistered`), covering it ONCE rather than
+ *    spawning a real child process per sibling script that imports it —
+ *    the fixture-ordering defect is already pinned end-to-end by layer 1;
+ *    layer 2 only needs to prove the EXTRACTED function's own two branches
+ *    (registered → resolves, unregistered → throws naming both issues)
+ *    against the REAL `dist/clients/lsp/session-roots.js` module the helper
+ *    itself imports — not a mock of it, so a real signature drift in either
+ *    module is what this test would catch.
  *
  * PI_LENS_HOME/PILENS_DATA_DIR are pinned to a throwaway per-test directory —
  * never the maintainer's real `~/.pi-lens` (#2506).
@@ -35,8 +48,8 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -118,5 +131,66 @@ describe("smoke-tools --lsp: every fixture registers its own session root (#2369
 		// `--verbose` logs this to stderr as `aux=ast-grep matched=0/0 sources=[]`.
 		expect(stderr).not.toMatch(/aux=ast-grep matched=0\/0/);
 		expect(stderr).toMatch(/aux=ast-grep matched=1\/1/);
+	});
+});
+
+describe("assertFixtureWorkspaceRegistered: the guard shared by all four LSP harness scripts (#2369/#2655)", () => {
+	const guardEntry = path.join(
+		repoRoot,
+		"scripts",
+		"lib",
+		"lsp-fixture-session-guard.mjs",
+	);
+	const sessionRootsEntry = path.join(
+		repoRoot,
+		"dist",
+		"clients",
+		"lsp",
+		"session-roots.js",
+	);
+
+	let assertFixtureWorkspaceRegistered: (
+		lang: string,
+		workspace: string,
+	) => Promise<void>;
+	let registerSessionRoot: (cwd: string) => void;
+	let resetSessionRootsForTests: () => void;
+
+	beforeEach(async () => {
+		// Both modules are loaded from the SAME dist/ path the real harness
+		// scripts use, in the SAME process, so this exercises the actual
+		// production module the guard reads from — not a mock standing in for
+		// it. Fresh dynamic import each run (module cache is process-lifetime,
+		// but the registry itself is reset below) matches how every one of the
+		// four calling scripts loads it.
+		({ assertFixtureWorkspaceRegistered } = await import(
+			pathToFileURL(guardEntry).href
+		));
+		({ registerSessionRoot, resetSessionRootsForTests } = await import(
+			pathToFileURL(sessionRootsEntry).href
+		));
+		resetSessionRootsForTests();
+	});
+
+	it("resolves once the workspace has been registered", async () => {
+		const workspace = "/tmp/pi-lens-guard-test-registered";
+		registerSessionRoot(workspace);
+		await expect(
+			assertFixtureWorkspaceRegistered("some-lang", workspace),
+		).resolves.toBeUndefined();
+	});
+
+	it("throws naming both issues when the workspace was never registered", async () => {
+		// A DIFFERENT root is registered (as a real multi-fixture run would
+		// have one from an earlier fixture) — this is exactly the pre-#2369
+		// failure shape: SOME root is served, but not this one.
+		registerSessionRoot("/tmp/pi-lens-guard-test-foreign-root");
+		const workspace = "/tmp/pi-lens-guard-test-unregistered";
+		await expect(
+			assertFixtureWorkspaceRegistered("some-lang", workspace),
+		).rejects.toThrow(/#2369\/#2655/);
+		await expect(
+			assertFixtureWorkspaceRegistered("some-lang", workspace),
+		).rejects.toThrow(workspace);
 	});
 });

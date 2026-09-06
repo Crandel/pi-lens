@@ -47,6 +47,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
+import { assertFixtureWorkspaceRegistered } from "./lib/lsp-fixture-session-guard.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -1490,16 +1491,6 @@ async function runLspHandshake({ langs, install, verbose }) {
 		"config.js",
 	);
 	const { initLSPConfig } = await import(pathToFileURL(configEntry).href);
-	const sessionRootsEntry = path.join(
-		repoRoot,
-		"dist",
-		"clients",
-		"lsp",
-		"session-roots.js",
-	);
-	const { isSessionRootRegistered } = await import(
-		pathToFileURL(sessionRootsEntry).href
-	);
 
 	let ensureTool;
 	if (install) {
@@ -1614,18 +1605,10 @@ async function runLspHandshake({ langs, install, verbose }) {
 				);
 			}
 		}
-		// Harness guard (#2369): every fixture must register its OWN workspace as
-		// a session root before it is touched. Without this, the ordering of
-		// `LSP_FIXTURES` becomes load-bearing — an earlier fixture that registers
-		// a foreign workspace flips `isOutsideAllSessionRoots` from empty
-		// (fail-open) to non-empty, and every later fixture that skipped
-		// registration is silently declined instead of failing loudly. This must
-		// never again depend on which fixtures happen to run first.
-		if (!isSessionRootRegistered(workspace)) {
-			throw new Error(
-				`[${fx.lang}] fixture workspace ${workspace} was touched without being registered as a session root (#2369) — every fixture must call initLSPConfig(workspace) before use`,
-			);
-		}
+		// Harness guard (#2369/#2655): every fixture must register its OWN
+		// workspace as a session root before it is touched — see
+		// lib/lsp-fixture-session-guard.mjs for why.
+		await assertFixtureWorkspaceRegistered(fx.lang, workspace);
 		try {
 			if (!lsp.supportsLSP(absFile)) {
 				push("skip", "no LSP server registered for this file");
