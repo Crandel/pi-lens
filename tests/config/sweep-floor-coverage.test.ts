@@ -128,6 +128,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"persistence behavior cases, not a production population sweep",
 	"tests/clients/session-state-store.test.ts":
 		"store behavior cases, not a production population sweep",
+	"tests/clients/skills-resolver.test.ts":
+		"mocks node:fs's readdirSync for one EACCES fault-injection case and asserts notify/degradation counts with toHaveLength(0); not a registered-or-fail production population sweep",
 	"tests/clients/tree-sitter-879-post-filters.test.ts":
 		"tree-sitter behavior cases, not a production population sweep",
 	"tests/clients/tree-sitter-cache-stats-astgrep-coverage.test.ts":
