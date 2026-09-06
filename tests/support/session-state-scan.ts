@@ -16,7 +16,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listSourceFiles, relativePosix, stripSource } from "./sweep-kit.js";
+import {
+	escapeRegExp,
+	listSourceFiles,
+	relativePosix,
+	stripSource,
+} from "./sweep-kit.js";
 
 export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -552,11 +557,6 @@ export function auditContainerClassExclusions(
 	return problems;
 }
 
-/** Escape a literal identifier for safe use inside a `RegExp` alternation. */
-function escapeRegExpLiteral(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 const containerDeclarationCache = new Map<string, RegExp>();
 
 /**
@@ -581,7 +581,7 @@ function containerDeclarationRegex(dir: string): RegExp {
 	const cached = containerDeclarationCache.get(dir);
 	if (cached) return cached;
 	const names = [...BUILTIN_CONTAINER_CTORS, ...containerClassNames(dir)].map(
-		escapeRegExpLiteral,
+		escapeRegExp,
 	);
 	const regex = new RegExp(
 		`^(?:export\\s+)?(?:const|let)\\s+([A-Za-z_$][\\w$]*)[^=\\n]*=\\s*new\\s+(?:${names.join("|")})\\b`,

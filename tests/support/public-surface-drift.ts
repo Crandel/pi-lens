@@ -31,6 +31,7 @@
  */
 
 import * as fs from "node:fs";
+import { escapeRegExp } from "./sweep-kit.js";
 import {
 	assertSchemaStabilityTiers,
 	type JsonSchemaNode,
@@ -97,7 +98,7 @@ export interface PublicSurface {
  * span reading `config.ui.compact` documents `ui`, a longer word does not.
  */
 export function documentedIn(text: string, name: string): boolean {
-	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const escaped = escapeRegExp(name);
 	const token = `(?<![A-Za-z0-9_$])${escaped}(?![A-Za-z0-9_$])`;
 	return new RegExp(
 		`(\`[^\`\\n]*${token}[^\`\\n]*\`)|("${escaped}"\\s*:)|(^#{1,6}\\s.*${token})|(^\\|[^\\n]*${token})`,
