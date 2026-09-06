@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import semver from "semver";
 import { describe, expect, it } from "vitest";
 import {
 	HOST_PROVIDED_PACKAGES,
@@ -37,6 +38,9 @@ const lock = JSON.parse(
 		"node_modules/@ast-grep/cli"?: {
 			version?: string;
 			hasInstallScript?: boolean;
+		};
+		"node_modules/@earendil-works/pi-tui"?: {
+			version?: string;
 		};
 	};
 };
@@ -350,6 +354,65 @@ describe("host-provided packages are not vendored (#1926)", () => {
 				`${name} is not host-provided`,
 			).toBe(false);
 		}
+	});
+});
+
+// #2586: `^0.84.1` on a 0.x host version pins the minor (npm's caret on a
+// pre-1.0 version only floats the patch), so a real pi-coding-agent/pi-tui
+// 0.85.x host was excluded by declaration even though the nightly real-pi
+// compat smoke already runs green against it and pi-tui 0.85.1 still exports
+// every symbol `clients/deps/pi-tui.ts` consumes. The declared peer range
+// must accept every host version this repo has actually verified — no more,
+// no less: broadening past what is tested (e.g. asserting 0.86.0 is accepted)
+// would silently re-open the same gap the next incompatible minor creates.
+describe("pi-tui peer range covers every tested host version (#2586)", () => {
+	const peerRange = pkg.peerDependencies?.["@earendil-works/pi-tui"];
+
+	// Derived from the lockfile so this list cannot silently drift from what
+	// the unit suite actually installs and runs against; "0.85.1" is also
+	// named literally per the issue's acceptance criterion, even though it
+	// coincides with the lockfile-derived entry after the devDependency bump.
+	// "0.84.1" pins the LOW end of the range explicitly (#2586 review F3):
+	// the lockfile-derived entry alone dedupes to a single 0.85.1 value once
+	// the devDependency is bumped, so a mutation that silently drops 0.84.x
+	// support (e.g. narrowing the range to "^0.85.0") would stay green
+	// without it. #257's install-selftest.mjs cites 0.84.1 as a version this
+	// repo already verified pi's package-manager resolver against, so it's
+	// not an arbitrary floor.
+	const lockVersion =
+		lock.packages?.["node_modules/@earendil-works/pi-tui"]?.version;
+	const testedVersions = [
+		...new Set([lockVersion, "0.85.1", "0.84.1"].filter(Boolean)),
+	] as string[];
+
+	it("lists at least one tested version to guard", () => {
+		// Guards the guard: an emptied testedVersions would make the loop below
+		// vacuously pass.
+		expect(testedVersions.length).toBeGreaterThan(0);
+	});
+
+	it("declares a peer range", () => {
+		expect(
+			peerRange,
+			"peerDependencies must declare @earendil-works/pi-tui",
+		).toBeTruthy();
+	});
+
+	for (const version of testedVersions) {
+		it(`accepts tested host version ${version}`, () => {
+			expect(
+				semver.satisfies(version, peerRange ?? ""),
+				`peerDependencies["@earendil-works/pi-tui"] (${peerRange}) must accept ${version}`,
+			).toBe(true);
+		});
+	}
+
+	it("does not broaden acceptance past a tested minor (0.86.0 stays out)", () => {
+		// #2586's fix widens the range to cover exactly the 0.84.x/0.85.x hosts
+		// this repo has compat evidence for. Asserting a not-yet-released,
+		// not-yet-tested 0.86.0 is accepted would mask the exact declaration
+		// gap this suite exists to catch the next time pi ships a new minor.
+		expect(semver.satisfies("0.86.0", peerRange ?? "")).toBe(false);
 	});
 });
 
