@@ -149,6 +149,29 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the fixture-ordering defect lives in the CLI's own module-load order; no in-process call is the script under test",
 	},
+	// 2026-09-07 (#2613): the CLI's real exit code (2 vs. 4) and its
+	// GITHUB_OUTPUT write are the subject under test; header on the file
+	// states why.
+	"real-process-spawn:scripts/resolve-newest-in-range-host.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT side effect are unobservable from an in-process stub",
+	},
+	// 2026-09-07 (#2613 review S2/T3): --dry-run env-reading/report-building
+	// wiring is the subject; the real `gh` calls stay untested, same
+	// documented exception as the sibling scripts/notify-clean-signal-drift.mjs.
+	"real-process-spawn:scripts/notify-install-smoke-drift.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's env-to-report wiring in --dry-run mode is unobservable from an in-process stub",
+	},
+	// 2026-09-07 (#2613 review S3a): the retry wrapper's real exit code and
+	// distinct ::error::infra: label on exhaustion are the subject.
+	"real-process-spawn:scripts/npm-retry.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's real exit code and distinct infra label on exhaustion are unobservable from an in-process stub",
+	},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */

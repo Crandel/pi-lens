@@ -51,14 +51,19 @@ export function buildDriftIssueBody(summary, opts = {}) {
 }
 
 /**
- * Find the single persistent tracking issue among a list of open,
- * label-filtered issues (as returned by `gh issue list --json number,title`).
- * Title-matched (not just label-matched) so an unrelated issue that happens to
- * carry the label for some other reason is never mistaken for the tracker.
+ * Find the single persistent tracking issue among a list of open issues (as
+ * returned by `gh issue list --json number,title`) by exact title match — so
+ * an unrelated issue that happens to carry the same label (or none at all)
+ * for some other reason is never mistaken for the tracker. `title` defaults
+ * to this module's own `DRIFT_ISSUE_TITLE` for this file's original
+ * `tool-smoke` consumer; a second consumer (scripts/lib/install-smoke-drift.mjs,
+ * #2613) passes its OWN title explicitly rather than this module growing a
+ * second title constant it has no other use for.
  *
  * @param {{number: number, title: string}[]} issues
+ * @param {string} [title]
  * @returns {{number: number, title: string} | null}
  */
-export function findDriftTrackingIssue(issues) {
-	return (issues ?? []).find((i) => i.title === DRIFT_ISSUE_TITLE) ?? null;
+export function findDriftTrackingIssue(issues, title = DRIFT_ISSUE_TITLE) {
+	return (issues ?? []).find((i) => i.title === title) ?? null;
 }
