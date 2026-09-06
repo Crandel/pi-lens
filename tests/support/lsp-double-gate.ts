@@ -42,13 +42,33 @@
  * `as`-casts, local `const`s, local factory functions, `vi.fn()` wrappers and
  * one hop of `holder.current` indirection.
  *
- * ## The vocabulary is derived, never hand-maintained
+ * ## Two rules, and only ONE of them reads the vocabulary
+ *
+ * Round 2 of this gate said "the vocabulary is a filter on the resolved
+ * object". That was FALSE: the object rule computed `vocabulary ∩ keys`,
+ * stored it on the result, and never gated on it, so emptying the vocabulary
+ * left the entire population scan green while only the post-hoc fixture went
+ * red. The dead plumbing is gone and the two rules are now stated as they
+ * actually are:
+ *
+ *   * **The object rule is SEAM-ONLY, by design.** Any object handed to a
+ *     `getLSPService` stub that was not seeded from `makeLspServiceDouble()`
+ *     is hand-rolled, whatever keys it carries — that IS the recurrence. A
+ *     `getLSPService: () => ({})` is as much a partial double as one naming
+ *     twelve methods; it is only harder to notice. So this rule does not
+ *     consult {@link lspServiceMethodNames} at all, and a test pins that it
+ *     does not.
+ *   * **The post-hoc rule is VOCABULARY-GATED, and there the gate is
+ *     load-bearing.** For `service.touchFile = …` the property name is the
+ *     only signal available: without the vocabulary the rule would flag every
+ *     member assignment on every binding the seam receives. Emptying the
+ *     vocabulary reds exactly this rule's fixture and nothing else.
  *
  * {@link lspServiceMethodNames} is `Object.keys(makeLspServiceDouble())` — the
- * factory's own default surface. A method added to the factory widens the
- * detector in the same commit; a hand-copied roster beside the factory would
- * be exactly the mirrored-registry defect AGENTS.md forbids. The vocabulary is
- * a filter on the resolved object, not the anchor.
+ * factory's own default surface, derived rather than hand-copied, so a method
+ * added to the factory widens the post-hoc rule in the same commit. It is
+ * passed in rather than read from module scope so both properties above are
+ * testable through a real seam instead of a mock.
  *
  * ## What it deliberately PERMITS
  *
@@ -58,12 +78,23 @@
  * straight back to hand-rolling — which is how round 1 ended up laundering
  * identifiers to keep its own sweep green.
  *
- * ## What it cannot see
+ * ## Boundary map — what it cannot see
  *
- * A double assembled by a helper in ANOTHER module, one reached through more
- * indirection than {@link MAX_RESOLUTION_DEPTH} hops, and one installed
- * through a computed key. Each is a false NEGATIVE — the safe direction for a
- * ratchet whose job is to stop a known population from growing.
+ * Every entry here is a false NEGATIVE, the safe direction for a ratchet whose
+ * job is to stop a known population from growing. Named so a later reader
+ * treats this as a ratchet and never as a proof:
+ *
+ *   * `Object.assign(base, { touchFile })` handed to the seam — the resolver
+ *     follows `vi.fn(...)` wrappers and local factory functions, but not an
+ *     arbitrary builtin call, so the resulting object is invisible;
+ *   * a CLASS INSTANCE (`getLSPService: () => new FakeLspService()`) — a
+ *     `new_expression` resolves to no object literal, and the class body's
+ *     methods are never walked;
+ *   * a double assembled by a helper in ANOTHER module (the shape-c fixture
+ *     leans on exactly this, so the post-hoc rule has something only it can
+ *     catch);
+ *   * indirection deeper than {@link MAX_RESOLUTION_DEPTH} hops, and any
+ *     method installed through a computed key.
  */
 
 import * as path from "node:path";
@@ -76,6 +107,19 @@ export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"../..",
 );
+
+/**
+ * The `// lsp-double: <reason>` line a file must carry to be admitted to the
+ * ratchet's baseline after minting. Half of the two-part gate in
+ * `tests/config/lsp-service-double-sweep.test.ts`; the other half is the
+ * `ADMITTED_AFTER_BASELINE` map. Returns the reason text, or `undefined`.
+ */
+const ADMISSION_HEADER = /^[ \t]*\/\/[ \t]*lsp-double:[ \t]*(.+)$/m;
+
+export function admissionHeader(source: string): string | undefined {
+	const match = ADMISSION_HEADER.exec(source);
+	return match ? match[1].trim() : undefined;
+}
 
 /** The factory's own default surface — the single source of truth (#2582). */
 export function lspServiceMethodNames(): ReadonlySet<string> {
@@ -101,30 +145,10 @@ export interface HandRolledDouble {
 	line: number;
 	/** `"object"` for a literal wearing the shape, `"assign"` for post-hoc patching. */
 	shape: "object" | "assign";
-	/** The `LSPService` method names that made it match, sorted. */
-	keys: string[];
 }
 
 function unquote(text: string): string {
 	return text.replace(/^["'`]|["'`]$/g, "");
-}
-
-/** Property names carried by one object literal node, shorthand and methods included. */
-function objectKeys(node: SgNode): string[] {
-	const keys: string[] = [];
-	for (const child of node.children()) {
-		const kind = child.kind();
-		if (kind === "pair") {
-			const key = child.field("key");
-			if (key) keys.push(unquote(key.text()));
-		} else if (kind === "shorthand_property_identifier") {
-			keys.push(child.text());
-		} else if (kind === "method_definition") {
-			const name = child.field("name");
-			if (name) keys.push(unquote(name.text()));
-		}
-	}
-	return keys;
 }
 
 /** True when this object literal spreads a `makeLspServiceDouble(...)` result. */
@@ -328,10 +352,10 @@ function seamExpressions(root: SgNode): SgNode[] {
  */
 export async function findHandRolledLspDoubles(
 	source: string,
+	vocabulary: ReadonlySet<string> = lspServiceMethodNames(),
 ): Promise<HandRolledDouble[]> {
 	const napi = await loadAstGrepNapi();
 	const root = napi.parse(napi.Lang.TypeScript, source).root();
-	const vocabulary = lspServiceMethodNames();
 	const scope = new Scope(root);
 
 	const doubles = new Map<number, HandRolledDouble>();
@@ -340,13 +364,12 @@ export async function findHandRolledLspDoubles(
 	for (const expression of seamExpressions(root)) {
 		const bare = bareIdentifier(expression);
 		if (bare) handRolledBindings.add(bare);
+		// SEAM-ONLY on purpose: an object the seam receives that the factory did
+		// not seed is hand-rolled whatever its keys are. See the module doc.
 		for (const object of resolveObjects(expression, scope, new Set())) {
 			if (spreadsFactory(object)) continue;
-			const keys = [
-				...new Set(objectKeys(object).filter((k) => vocabulary.has(k))),
-			];
 			const line = object.range().start.line + 1;
-			doubles.set(line, { line, shape: "object", keys: keys.sort() });
+			doubles.set(line, { line, shape: "object" });
 		}
 	}
 
@@ -362,7 +385,7 @@ export async function findHandRolledLspDoubles(
 			for (const write of writes) {
 				const line = write.range().start.line + 1;
 				if (doubles.has(line)) continue;
-				doubles.set(line, { line, shape: "assign", keys: [property] });
+				doubles.set(line, { line, shape: "assign" });
 			}
 		}
 	}

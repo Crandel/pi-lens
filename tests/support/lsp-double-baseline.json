@@ -6,7 +6,6 @@
 	"tests/clients/actionable-warnings.test.ts": 1,
 	"tests/clients/dispatch/runners/pyright-environment.test.ts": 1,
 	"tests/clients/lsp-document-symbols.test.ts": 2,
-	"tests/clients/lsp/late-auxiliary-findings.test.ts": 1,
 	"tests/clients/mcp/analyze.test.ts": 1,
 	"tests/clients/mcp/session-context-eviction.test.ts": 1,
 	"tests/clients/mcp/session-test-findings-retire.test.ts": 1,

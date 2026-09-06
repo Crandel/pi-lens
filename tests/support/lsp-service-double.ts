@@ -45,6 +45,7 @@ export function makeLspServiceDouble(
 		openFile: vi.fn(async () => undefined),
 		getAuxiliaryClientsForFile: vi.fn(async () => []),
 		getAllDiagnostics: vi.fn(async () => new Map()),
+		readCachedDiagnosticsForServers: vi.fn(async () => new Map()),
 		getDiagnostics: vi.fn(() => []),
 		getWarmClientForFile: vi.fn(async () => undefined),
 		getOpenDocumentPaths: vi.fn(() => []),
