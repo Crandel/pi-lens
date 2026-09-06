@@ -5,10 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // #2626 review round 2, F4 pattern: wrap node:fs via vi.mock (a bare
 // vi.spyOn cannot redefine a node: built-in's ESM export), default to the
-// REAL implementation, and override for a single call in the EACCES case.
+// REAL implementation, and override for a single call in the EACCES cases.
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
-	return { ...actual, readdirSync: vi.fn(actual.readdirSync) };
+	return {
+		...actual,
+		existsSync: vi.fn(actual.existsSync),
+		readdirSync: vi.fn(actual.readdirSync),
+	};
 });
 
 import * as fs from "node:fs";
@@ -30,6 +34,7 @@ let tmpDirs: string[] = [];
 beforeEach(() => {
 	tmpDirs = [];
 	vi.mocked(fs.readdirSync).mockClear();
+	vi.mocked(fs.existsSync).mockClear();
 });
 
 afterEach(() => {
@@ -105,8 +110,30 @@ describe("checkAstGrepRulesHealth", () => {
 		expect(manager.loadRuleDescriptions().size).toBe(0);
 	});
 
-	it("distinguishes an unreadable ruleDir (EACCES) from absent (ENOENT)", () => {
+	it("distinguishes an unreadable RESOLVED candidate (EACCES) from absent (ENOENT)", () => {
+		// ruleDir itself exists (the last, catch-all candidate), so the loop
+		// finds it and this exercises the readdirSync(rulesPath) branch.
 		const ruleDir = freshRuleDir();
+		const error = Object.assign(new Error("permission denied"), {
+			code: "EACCES",
+		});
+		vi.mocked(fs.readdirSync).mockImplementationOnce(() => {
+			throw error;
+		});
+		expect(checkAstGrepRulesHealth(ruleDir)).toEqual({
+			status: "unreadable",
+			fsErrorCode: "EACCES",
+		});
+	});
+
+	it("distinguishes an unreadable ruleDir ITSELF (EACCES) from absent (ENOENT), when no candidate is even visible", () => {
+		// A ruleDir that cannot be STATTED at all (EACCES on the directory)
+		// makes every fs.existsSync(candidate) check fail closed to `false`
+		// (Node's own contract), so the loop never finds a rulesPath — the
+		// `!rulesPath` branch must still tell this apart from a genuinely
+		// ABSENT ruleDir via a direct readdirSync(ruleDir) probe.
+		const ruleDir = freshRuleDir();
+		vi.mocked(fs.existsSync).mockReturnValue(false);
 		const error = Object.assign(new Error("permission denied"), {
 			code: "EACCES",
 		});
