@@ -612,9 +612,7 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-html-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		// #2638: the bare `vscode-html-languageserver-bin` package's own `bin`
-		// is named `html-languageserver`, not this. Ships from the same
-		// `vscode-langservers-extracted` family the json/css entries use.
+		// #2638: bin-name mismatch on the bare package — see git log.
 		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-html-language-server",
 	},
@@ -699,9 +697,7 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-css-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		// #2638: bare `vscode-css-languageserver` was unpublished (E404, 2021).
-		// Ships from `vscode-langservers-extracted`, unpinned (no engines.node
-		// floor) like the json/html entries in this same family.
+		// #2638: bare package unpublished (E404) — see git log.
 		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-css-language-server",
 	},
