@@ -1152,11 +1152,12 @@ export async function resyncLspFile(
 				// Guarded: a service shape lacking the method must degrade to the
 				// old "timeout"/slow-wedged wording, not throw into the catch below
 				// and suppress this record entirely (#1766 F3). The recurrence is
-				// live, not historical: 39 test files still stub `getLSPService`
-				// with a hand-rolled object that has no `isSpawnInFlight`, and the
-				// #2582 sweep's ratchet baseline names every one of them. Removing
-				// this typeof turns the "lacks isSpawnInFlight" case in
-				// tests/clients/pipeline-lsp-sync.test.ts red.
+				// LIVE, not historical: 19 hand-rolled `getLSPService` doubles in 18
+				// test files still lack this method, every one of them pinned in
+				// `tests/support/lsp-double-baseline.json` and tracked to burn down
+				// in #2592. Delete this typeof and the "lacks isSpawnInFlight" case
+				// in tests/clients/pipeline-lsp-sync.test.ts turns red. Re-evaluate
+				// the guard when that baseline reaches zero, not before.
 				const spawnInFlight =
 					!abort?.aborted &&
 					typeof lspService.isSpawnInFlight === "function" &&

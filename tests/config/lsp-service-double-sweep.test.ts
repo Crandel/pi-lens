@@ -17,7 +17,7 @@
  * not scope (`tests/tools/lsp-*`, `tests/clients/mcp/*`,
  * `tests/clients/actionable-warnings*`, `dispatch/runners/pyright-*`). They
  * are pinned in `tests/support/lsp-double-baseline.json` and tracked to burn
- * down in #{FOLLOWUP}. The ratchet is TWO-SIDED, the same idiom as
+ * down in #2592. The ratchet is TWO-SIDED, the same idiom as
  * `tests/clients/flake-shape-ratchet.test.ts` and `sweep-kit`'s
  * `auditRegistry`:
  *
@@ -45,13 +45,14 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	findHandRolledLspDoubles,
 	type HandRolledDouble,
 	lspServiceMethodNames,
 	repoRoot,
 } from "../support/lsp-double-gate.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import {
 	assertNonEmptyScan,
 	listSourceFiles,
@@ -176,6 +177,28 @@ describe("#2582 hand-rolled LSPService double ratchet", () => {
 			"tests/clients/write-autofix-attachment-message.test.ts",
 		];
 		expect(migrated.filter((file) => file in live)).toEqual([]);
+	});
+});
+
+describe("#2582 factory contract", () => {
+	it("omit leaves the named method ABSENT, not stubbed", () => {
+		// The production fallbacks this factory has to be able to exercise are
+		// `typeof service.method === "function"` checks (clients/pipeline.ts
+		// ~1145, #1766 F3). A default that merely returns false is a DIFFERENT
+		// state: it never reaches the fallback. Without this, `omit` is
+		// indistinguishable from its absence in every suite that uses it —
+		// a mutation probe that neutered `omit` left the whole
+		// pipeline-lsp-sync suite green.
+		const omitted = makeLspServiceDouble({}, { omit: ["isSpawnInFlight"] });
+		expect("isSpawnInFlight" in omitted).toBe(false);
+		expect("touchFile" in omitted).toBe(true);
+	});
+
+	it("overrides replace a default without dropping the rest of the surface", () => {
+		const touchFile = vi.fn();
+		const service = makeLspServiceDouble({ touchFile });
+		expect(service.touchFile).toBe(touchFile);
+		expect(typeof service.getAuxiliaryClientsForFile).toBe("function");
 	});
 });
 

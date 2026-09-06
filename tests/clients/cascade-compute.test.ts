@@ -64,7 +64,6 @@ const lspError = (message = "cascade error") => ({
 	source: "test-lsp",
 });
 
-
 // #1095: attach a content `binding` the way the REAL producers do — a
 // NON-enumerable property (getAllDiagnostics uses a lazy getter, touchFile a
 // value; both non-enumerable). Mirroring non-enumerability also guards against a
@@ -2263,9 +2262,7 @@ describe("computeCascadeForFile", () => {
 				mocks.getLSPService.mockReturnValue({
 					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: vi.fn().mockRejectedValue(
-						new Error("touch timed out"),
-					),
+					touchFile: vi.fn().mockRejectedValue(new Error("touch timed out")),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -3167,14 +3164,12 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: vi.fn().mockImplementation(
-						async (filePath: string) => {
-							if (filePath === rejectedNeighbor) {
-								throw new Error("touch failed");
-							}
-							return { diags: [lspError("confirmed live error")] };
-						},
-					),
+					touchFile: vi.fn().mockImplementation(async (filePath: string) => {
+						if (filePath === rejectedNeighbor) {
+							throw new Error("touch failed");
+						}
+						return { diags: [lspError("confirmed live error")] };
+					}),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -3228,9 +3223,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: vi.fn().mockRejectedValue(
-						new Error("touch failed"),
-					),
+					touchFile: vi.fn().mockRejectedValue(new Error("touch failed")),
 					getDiagnostics: vi.fn(),
 				});
 

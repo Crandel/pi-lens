@@ -201,7 +201,8 @@ function resolveObjects(
 	const key = `${node.kind()}@${node.range().start.index}`;
 	if (seen.has(key)) return [];
 	seen.add(key);
-	const recurse = (next: SgNode) => resolveObjects(next, scope, seen, depth + 1);
+	const recurse = (next: SgNode) =>
+		resolveObjects(next, scope, seen, depth + 1);
 
 	switch (node.kind()) {
 		case "object":
@@ -232,7 +233,11 @@ function resolveObjects(
 						if (child.kind() !== "pair") continue;
 						const pairKey = child.field("key");
 						const pairValue = child.field("value");
-						if (pairKey && pairValue && unquote(pairKey.text()) === property.text()) {
+						if (
+							pairKey &&
+							pairValue &&
+							unquote(pairKey.text()) === property.text()
+						) {
 							viaLiteral.push(...recurse(pairValue));
 						}
 					}
@@ -247,10 +252,11 @@ function resolveObjects(
 			const callee = node.field("function");
 			// A factory call is COMPLIANT: stop here and report nothing.
 			if (callee?.text() === FACTORY) return [];
-			const args = node
-				.field("arguments")
-				?.children()
-				.filter((c) => c.isNamed()) ?? [];
+			const args =
+				node
+					.field("arguments")
+					?.children()
+					.filter((c) => c.isNamed()) ?? [];
 			// `vi.fn(() => service)` and friends: the double is the argument.
 			if (callee?.text().endsWith("vi.fn") || callee?.text() === "fn") {
 				return args.flatMap(recurse);
@@ -336,7 +342,9 @@ export async function findHandRolledLspDoubles(
 		if (bare) handRolledBindings.add(bare);
 		for (const object of resolveObjects(expression, scope, new Set())) {
 			if (spreadsFactory(object)) continue;
-			const keys = [...new Set(objectKeys(object).filter((k) => vocabulary.has(k)))];
+			const keys = [
+				...new Set(objectKeys(object).filter((k) => vocabulary.has(k))),
+			];
 			const line = object.range().start.line + 1;
 			doubles.set(line, { line, shape: "object", keys: keys.sort() });
 		}
