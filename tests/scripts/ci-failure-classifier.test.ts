@@ -978,7 +978,9 @@ describe("runClassifier orchestration against a mocked, STATEFUL GitHub API (#21
 		});
 
 		it("with allowMissingPr, a failing rerun is still recorded honestly in the returned commentBody", async () => {
-			const api = makePushApi({ rerunHandler: () => ({ ok: false, status: 403 }) });
+			const api = makePushApi({
+				rerunHandler: () => ({ ok: false, status: 403 }),
+			});
 			const result = await runClassifier({
 				fetcher: api.fetcher,
 				owner: "acme",
