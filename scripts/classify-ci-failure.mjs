@@ -23,6 +23,7 @@ function parseArgs(argv) {
 		sha: null,
 		infraKillOnly: false,
 		skipMissingJob: false,
+		allowMissingPr: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
@@ -32,16 +33,24 @@ function parseArgs(argv) {
 		else if (arg === "--sha") args.sha = argv[++i];
 		else if (arg === "--infra-kill-only") args.infraKillOnly = true;
 		else if (arg === "--skip-missing-job") args.skipMissingJob = true;
+		else if (arg === "--allow-missing-pr") args.allowMissingPr = true;
 	}
 	return args;
 }
 
 async function main() {
-	const { runId, jobName, prNumber, sha, infraKillOnly, skipMissingJob } =
-		parseArgs(process.argv.slice(2));
+	const {
+		runId,
+		jobName,
+		prNumber,
+		sha,
+		infraKillOnly,
+		skipMissingJob,
+		allowMissingPr,
+	} = parseArgs(process.argv.slice(2));
 	if (!runId) {
 		console.error(
-			"usage: node scripts/classify-ci-failure.mjs --run <runId> [--job-name <name>] [--pr <number>] [--sha <headSha>] [--infra-kill-only] [--skip-missing-job]",
+			"usage: node scripts/classify-ci-failure.mjs --run <runId> [--job-name <name>] [--pr <number>] [--sha <headSha>] [--infra-kill-only] [--skip-missing-job] [--allow-missing-pr]",
 		);
 		process.exitCode = 2;
 		return;
@@ -70,14 +79,16 @@ async function main() {
 		sha: sha || undefined,
 		rerunKinds: infraKillOnly ? ["infra-kill"] : undefined,
 		skipMissingJob,
+		allowMissingPr,
 	});
 	if ("skipped" in result) {
 		console.log(`CI failure classifier skipped: ${result.reason}`);
 		return;
 	}
 
+	const prLabel = result.prNumber ? `PR #${result.prNumber}` : "no PR (push)";
 	console.log(
-		`PR #${result.prNumber} sha=${result.sha} job=${result.jobName} -> ` +
+		`${prLabel} sha=${result.sha} job=${result.jobName} -> ` +
 			`${result.classification.kind}${result.rerunTriggeredThisPass ? " (rerun triggered)" : ""}`,
 	);
 	console.log(result.commentBody);

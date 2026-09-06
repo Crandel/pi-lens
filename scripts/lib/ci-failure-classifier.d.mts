@@ -113,10 +113,14 @@ export interface RunClassifierArgs {
 	sha?: string;
 	rerunKinds?: ClassificationKind[];
 	skipMissingJob?: boolean;
+	// #2668: a master-push run has no associated PR at all (not merely an
+	// unresolved lookup) -- allow classification and the rerun to proceed
+	// without one, skipping every PR-comment step.
+	allowMissingPr?: boolean;
 }
 export type SuccessfulClassifierRun = ClassifierDecision & {
 	sha: string;
-	prNumber: number;
+	prNumber: number | null;
 	jobId: number;
 	jobName: string;
 	supersededByCommentId?: number;

@@ -12,17 +12,38 @@ permissions: {}
 jobs:
   classify:
     name: Classify failed Unit tests
-    # pull_request runs only: a master-push run has an empty pull_requests
-    # array, so the classifier can only throw there and paint a useless red
-    # check beside an already-red master. Master-lane rerun coverage needs a
-    # comment-free path and is tracked separately.
-    # Same-repo runs only: a fork PR's workflow_run carries an empty
-    # pull_requests array, so the classifier can only throw the same
-    # no-associated-PR error the push gate excludes. Fork-lane rerun
-    # coverage needs the comment-free path tracked on #2042's remainder.
+    # pull_request runs, PLUS master-push runs (#2668): a master-push run's
+    # workflow_run carries an empty pull_requests array (there is no PR to
+    # look one up from), so the classifier is given --allow-missing-pr and
+    # skips every PR-comment step for that path -- classification and the
+    # one-shot rerun still run in full. See "Reading a master infra-kill"
+    # below for how to tell that apart from a real red on master.
+    # Same-repo runs only: a fork PR's workflow_run also carries an empty
+    # pull_requests array, so the classifier would otherwise throw the same
+    # no-associated-PR error the push path now handles deliberately. Fork
+    # -lane rerun coverage stays tracked on #2042's remainder.
+    #
+    # Reading a master infra-kill vs a real red:
+    #   - This job only ever fires for a first attempt (run_attempt == 1) of
+    #     a FAILED "CI" run, so it runs on every master red, infra or not.
+    #   - Open this job's own log (Actions -> "CI infra-kill rerun" ->
+    #     the run for that push). Its one console line names the
+    #     classification: "no PR (push) sha=<sha> job=Unit tests ->
+    #     infra-kill (rerun triggered)" means it judged the kill infra and
+    #     already reran the CI workflow once -- check the CI run's Actions
+    #     history for a second attempt (run_attempt == 2) landing green.
+    #   - A line ending in "-> real" (or classification "infra-kill" with no
+    #     "(rerun triggered)", e.g. a same-SHA repeat) means this job did NOT
+    #     paper over it: master is genuinely red and needs a human fix, the
+    #     same as any PR-side "ci-classifier: real" comment would.
+    #   - A PR run's outcome is a sticky issue comment instead of this job's
+    #     log, because a PR has a thread to post it to.
     if: >-
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.event == 'pull_request' &&
+      (
+        github.event.workflow_run.event == 'pull_request' ||
+        (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'master')
+      ) &&
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt == 1
     runs-on: ubuntu-latest
@@ -36,6 +57,7 @@ jobs:
       RUN_ID: ${{ github.event.workflow_run.id }}
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
       PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      RUN_EVENT: ${{ github.event.workflow_run.event }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -45,5 +67,9 @@ jobs:
         shell: bash
         run: |
           args=(--run "$RUN_ID" --sha "$HEAD_SHA" --infra-kill-only --skip-missing-job)
-          if [[ -n "$PR_NUMBER" ]]; then args+=(--pr "$PR_NUMBER"); fi
+          if [[ -n "$PR_NUMBER" ]]; then
+            args+=(--pr "$PR_NUMBER")
+          elif [[ "$RUN_EVENT" == "push" ]]; then
+            args+=(--allow-missing-pr)
+          fi
           node scripts/classify-ci-failure.mjs "${args[@]}"
