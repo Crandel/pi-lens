@@ -1121,9 +1121,33 @@ async function main() {
 			throw new Error(`unsupported --from: ${opts.from}`);
 		}
 
-		log(`installing ${installSource} into the scratch project`);
+		// pi supplies typebox and pi-tui from its own runtime, so nothing vendors
+		// them and the standalone MCP server cannot load without them. This reuses
+		// the repo's own answer to that (#1926) rather than re-listing the
+		// packages here — the list and the ranges stay in one place.
+		const supplyArgs = execFileSync(
+			process.execPath,
+			[
+				path.join(REPO_ROOT, "scripts", "supply-host-provided-deps.mjs"),
+				"--install-args",
+			],
+			{ encoding: "utf8" },
+		)
+			.trim()
+			.split(/\s+/)
+			.filter(Boolean);
+
+		// ONE install, deliberately: npm reconciles the tree against the fixture's
+		// package.json on every run, so installing the candidate and the
+		// host-provided peers in two `--no-save` passes prunes the first one back
+		// out (observed: "Path does not exist" from `pi install` on a directory
+		// that existed moments earlier).
+		log(
+			`installing ${installSource} into the scratch project ` +
+				`(with host-provided peers ${supplyArgs.join(" ")})`,
+		);
 		npm(
-			["install", "--no-audit", "--no-fund", "--no-save", installSource],
+			["install", "--no-audit", "--no-fund", installSource, ...supplyArgs],
 			projectDir,
 		);
 		installedPkgDir = path.join(projectDir, "node_modules", "pi-lens");
@@ -1139,20 +1163,6 @@ async function main() {
 				files: listInstalledFiles(installedPkgDir),
 			};
 		}
-
-		// pi supplies typebox and pi-tui from its own runtime, so nothing vendors
-		// them and the standalone MCP server cannot load without them. This is the
-		// repo's own answer to that (#1926) — reused rather than re-listed here.
-		const supplyArgs = execFileSync(
-			process.execPath,
-			[path.join(REPO_ROOT, "scripts", "supply-host-provided-deps.mjs"), "--install-args"],
-			{ encoding: "utf8" },
-		)
-			.trim()
-			.split(/\s+/)
-			.filter(Boolean);
-		log(`supplying host-provided peers: ${supplyArgs.join(" ")}`);
-		npm(["install", "--no-save", "--no-audit", "--no-fund", ...supplyArgs], projectDir);
 
 		log(`pi install ${installedPkgDir}`);
 		execFileSync(opts.pi, ["install", installedPkgDir], {
