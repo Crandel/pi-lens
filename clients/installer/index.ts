@@ -4584,6 +4584,31 @@ async function installArchiveTool(
 	}
 }
 
+/**
+ * Record a genuine package-manager install exception against `toolId` and
+ * log it — the one place `installNpmTool`/`installPipTool`/`installGemTool`'s
+ * catch blocks funnel through (#2661 review F3/Sonar: the three catches were
+ * byte-identical but for the strategy label, a duplication SonarCloud's new-
+ * code gate correctly flagged). The real error (registry E404, EBADENGINE, a
+ * network failure, "no version satisfies…") lands in `installFailureReasons`
+ * so a caller that distinguishes a genuine installer defect from a policy
+ * decline (the tool-smoke lane, #2638) sees the actual message, never the
+ * generic fallback `finishInstallAttempt` uses when nothing set it.
+ */
+function recordPackageManagerInstallException(
+	toolId: string,
+	strategyLabel: string,
+	packageName: string,
+	err: unknown,
+): undefined {
+	const message = (err as Error).message;
+	logSessionStart(
+		`auto-install ${strategyLabel} ${packageName}: exception: ${message}`,
+	);
+	installFailureReasons.set(toolId, message);
+	return undefined;
+}
+
 async function installNpmTool(
 	toolId: string,
 	packageName: string,
@@ -4747,17 +4772,12 @@ async function installNpmTool(
 
 		return binPath;
 	} catch (err) {
-		// Record the REAL error (registry E404, EBADENGINE, network failure,
-		// verification failure) against `toolId`, not just the session log —
-		// `finishInstallAttempt`'s caller (`installTool`) falls back to a
-		// generic "install failed" when nothing set `installFailureReasons`,
-		// and a caller that needs to distinguish "a genuine installer defect"
-		// from "the toolchain is absent on this runner" (the tool-smoke lane,
-		// #2638 review) needs the actual message, not the generic fallback.
-		const message = (err as Error).message;
-		logSessionStart(`auto-install npm ${packageName}: exception: ${message}`);
-		installFailureReasons.set(toolId, message);
-		return undefined;
+		return recordPackageManagerInstallException(
+			toolId,
+			"npm",
+			packageName,
+			err,
+		);
 	}
 }
 /**
@@ -4913,14 +4933,12 @@ async function installPipTool(
 			`Failed to install ${packageName}: no usable pip command found (${lastError || "unknown error"})`,
 		);
 	} catch (err) {
-		// Same fix as `installNpmTool` (#2638/#2661 review F4): record the real
-		// error against `toolId`, not just the session log, so a caller that
-		// distinguishes a genuine installer defect from a policy decline (the
-		// tool-smoke lane) sees the actual pip error, not a generic fallback.
-		const message = (err as Error).message;
-		logSessionStart(`auto-install pip ${packageName}: exception: ${message}`);
-		installFailureReasons.set(toolId, message);
-		return undefined;
+		return recordPackageManagerInstallException(
+			toolId,
+			"pip",
+			packageName,
+			err,
+		);
 	}
 }
 
@@ -4951,11 +4969,12 @@ async function installGemTool(
 
 		return packageName;
 	} catch (err) {
-		// Same fix as `installNpmTool`/`installPipTool` (#2638/#2661 review F4).
-		const message = (err as Error).message;
-		logSessionStart(`auto-install gem ${packageName}: exception: ${message}`);
-		installFailureReasons.set(toolId, message);
-		return undefined;
+		return recordPackageManagerInstallException(
+			toolId,
+			"gem",
+			packageName,
+			err,
+		);
 	}
 }
 
