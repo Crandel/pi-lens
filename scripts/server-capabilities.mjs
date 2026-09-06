@@ -22,6 +22,7 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { mergeServerCapabilitiesDoc } from "./lib/md-matrix.mjs";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
+import { assertFixtureWorkspaceRegistered } from "./lib/lsp-fixture-session-guard.mjs";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -66,6 +67,10 @@ const OPS = [
 for (const fx of fixtures) {
 	const dst = fs.mkdtempSync(path.join(os.tmpdir(), "caps-lsp-"));
 	fs.cpSync(path.join(repoRoot, fx.dir), dst, { recursive: true });
+	// #2369/#2655: every fixture registers its OWN workspace unconditionally —
+	// see lib/lsp-fixture-session-guard.mjs for why this can't be conditional
+	// on `disableServers`.
+	await initLSPConfig(dst);
 	const absFile = path.join(dst, fx.file);
 	if (fx.gitInit) {
 		try {
@@ -83,6 +88,7 @@ for (const fx of fixtures) {
 	if (install && ensureTool) {
 		for (const t of fx.tools ?? []) await ensureTool(t).catch(() => undefined);
 	}
+	await assertFixtureWorkspaceRegistered(fx.lang, dst);
 	if (!lsp.supportsLSP(absFile)) {
 		fs.rmSync(dst, { recursive: true, force: true });
 		continue;
