@@ -28,6 +28,22 @@
  * install's `prepare` step, before dev tooling exists) or a version
  * mismatch.
  *
+ * WHY `node <path>` AND NOT EXECUTING THE LOCAL BINARY DIRECTLY (#2593
+ * review round 3)
+ * `node_modules/typescript/bin/tsc` is a 44-byte extensionless
+ * `#!/usr/bin/env node` shebang script (`import "../lib/tsc.js"`), not a
+ * native executable. Spawning it AS the command (`execFileSync(localTscBin,
+ * ...)`, round 2's shape) relies on the OS interpreting the shebang line —
+ * which Windows' `CreateProcess` does not do, so that shape failed
+ * `Install test (windows-latest)` in CI with `spawnSync
+ * ...\node_modules\typescript\bin\tsc ENOENT`. The fix: spawn
+ * `process.execPath` (node itself) with the script's path as an argv
+ * element, exactly the shape scripts/setup-git-hooks.mjs and
+ * scripts/lib/exec-isolation.mjs's `buildIsolatedExecInvocation` (which
+ * spawns npm's own CLI the identical way) already use — reused, not
+ * reinvented. `node <path>` ignores the shebang line and runs the file per
+ * its own `package.json`'s `"type": "module"`, on every platform alike.
+ *
  * WHY THE FALLBACK STILL NEEDS `--prefix` ISOLATION (#2593, refs #2590)
  * `npm exec --package` resolves against the WHOLE project dependency tree
  * (every nested `node_modules`), not just the npx cache — see
@@ -123,7 +139,23 @@ export function resolveLocalTsc({ root: rootDir, version }) {
  * touching the filesystem — mirroring how buildEsbuildExecInvocation in
  * scripts/bundle-dist.mjs stays pure by taking its prefix as an input. When
  * `localTscBin` is set, this builds NO npm-exec argv at all (no `exec`, no
- * `--package`, no `--prefix`) — just a direct spawn of the local binary.
+ * `--package`, no `--prefix`) — just a direct spawn of the local binary,
+ * run via `process.execPath` with the script path as an argv element (#2593
+ * review round 3), NEVER by executing `localTscBin` itself as the spawned
+ * command: it is a 44-byte extensionless `#!/usr/bin/env node` shebang
+ * script (`node_modules/typescript/bin/tsc` -> `import "../lib/tsc.js"`),
+ * and Windows' `CreateProcess` has no shebang-execution mechanism, so
+ * `execFileSync(localTscBin, ...)` fails there with `ENOENT` (reproduced
+ * verbatim in CI: `Install test (windows-latest)` on this PR's round-2
+ * head). This is the same shell-free "spawn node with the script path as an
+ * argv element" shape already used by scripts/setup-git-hooks.mjs and
+ * scripts/lib/exec-isolation.mjs's `buildIsolatedExecInvocation` (which
+ * spawns npm's own CLI the identical way) — reused here, not reinvented.
+ * `node <path>` ignores the shebang line and runs the file as the ES module
+ * its own `package.json` declares (`typescript`'s `"type": "module"`),
+ * identical to what the OS's shebang mechanism does on POSIX — verified:
+ * `node node_modules/typescript/bin/tsc --version` prints the pinned
+ * version on every platform this runs on today.
  *
  * @param {{ localTscBin: string | null, root: string, version: string, npmCli: string, execPrefix?: string, tsconfigProject: string }} args
  * @returns {{ command: string, argv: string[], options: { cwd: string, stdio: "inherit" } }}
@@ -138,8 +170,8 @@ export function planTscInvocation({
 }) {
 	if (localTscBin) {
 		return {
-			command: localTscBin,
-			argv: ["--project", tsconfigProject, "--noCheck"],
+			command: process.execPath,
+			argv: [localTscBin, "--project", tsconfigProject, "--noCheck"],
 			options: { cwd: rootDir, stdio: "inherit" },
 		};
 	}

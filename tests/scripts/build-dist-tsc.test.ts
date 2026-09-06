@@ -94,7 +94,7 @@ describe("planTscInvocation local-vs-fallback branching (#2593 review round 2, F
 		"..",
 	);
 
-	it("runs the local bin DIRECTLY, building no npm-exec argv at all, when a local binary is given", () => {
+	it("runs node against the local bin's path (never executes it directly), building no npm-exec argv at all", () => {
 		const localTscBin = "/fake/node_modules/typescript/bin/tsc";
 		const { command, argv, options } = planTscInvocation({
 			localTscBin,
@@ -105,13 +105,26 @@ describe("planTscInvocation local-vs-fallback branching (#2593 review round 2, F
 			tsconfigProject: "tsconfig.dist.json",
 		});
 
-		// The whole point of this branch: spawn the local binary directly, no
-		// `npm exec` wrapper, no `--package`, no `--prefix`, no network.
-		expect(command).toBe(localTscBin);
+		// #2593 review round 3: `localTscBin` is an extensionless
+		// `#!/usr/bin/env node` shebang script, not a native executable.
+		// Executing it AS the command (asserting `command === localTscBin`,
+		// this test's round-2 shape) enshrined exactly the bug that failed
+		// `Install test (windows-latest)` in CI (`spawnSync ...\bin\tsc
+		// ENOENT` — Windows has no shebang-execution mechanism). The command
+		// must be `process.execPath` (node itself), with the script's path as
+		// an argv element — the same shape scripts/setup-git-hooks.mjs and
+		// scripts/lib/exec-isolation.mjs's buildIsolatedExecInvocation use.
+		expect(command).toBe(process.execPath);
+		expect(argv[0]).toBe(localTscBin);
 		expect(argv).not.toContain("exec");
 		expect(argv).not.toContain("--package");
 		expect(argv).not.toContain("--prefix");
-		expect(argv).toEqual(["--project", "tsconfig.dist.json", "--noCheck"]);
+		expect(argv).toEqual([
+			localTscBin,
+			"--project",
+			"tsconfig.dist.json",
+			"--noCheck",
+		]);
 
 		// cwd stays root even in this branch (#2593 review round 2, F2): tsc
 		// resolves a relative --project argument against its OWN cwd, not the
