@@ -334,6 +334,29 @@ export function shipVerdict(results, options = {}) {
 }
 
 /**
+ * Split `supply-host-provided-deps.mjs --install-args` output into argv
+ * entries.
+ *
+ * NEWLINE-delimited, never whitespace-delimited. A peer range can legitimately
+ * contain a space — `@earendil-works/pi-tui@^0.84.1 || ^0.85.0` after #2586 —
+ * and the upstream script emits one entry per line for exactly that reason.
+ * A `/\s+/` split explodes such a range into three argv entries and hands
+ * `npm install` the tokens `||` and `^0.85.0` as package names. This runner
+ * shipped that split for one commit; the OR-form range arrived from master in
+ * the same merge, which is the "textually clean merge that recombines into a
+ * bug" shape.
+ *
+ * @param {string} stdout
+ * @returns {string[]}
+ */
+export function parseSupplyArgs(stdout) {
+	return String(stdout ?? "")
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+}
+
+/**
  * The refusal message for a dirty checkout, or null when it is clean.
  *
  * A `--from tree` run packs `git archive HEAD`, so an uncommitted edit would be
@@ -1403,17 +1426,15 @@ async function main() {
 		// them and the standalone MCP server cannot load without them. This reuses
 		// the repo's own answer to that (#1926) rather than re-listing the
 		// packages here — the list and the ranges stay in one place.
-		const supplyArgs = execFileSync(
+		const supplyStdout = execFileSync(
 			process.execPath,
 			[
 				path.join(REPO_ROOT, "scripts", "supply-host-provided-deps.mjs"),
 				"--install-args",
 			],
 			{ encoding: "utf8", env },
-		)
-			.trim()
-			.split(/\s+/)
-			.filter(Boolean);
+		);
+		const supplyArgs = parseSupplyArgs(supplyStdout);
 
 		// ONE install, deliberately: npm reconciles the tree against the fixture's
 		// package.json on every run, so installing the candidate and the

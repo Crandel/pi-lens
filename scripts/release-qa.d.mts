@@ -113,6 +113,13 @@ export function shipVerdict(
  */
 export function dirtyCheckoutRefusal(porcelain: string): string | null;
 
+/**
+ * Split `supply-host-provided-deps.mjs --install-args` output into argv
+ * entries — newline-delimited, because a peer range may contain a space
+ * (`^0.84.1 || ^0.85.0`, #2586).
+ */
+export function parseSupplyArgs(stdout: string): string[];
+
 export function verdictExitCode(verdict: string): number;
 
 /**

@@ -46,6 +46,7 @@ import {
 	assertInstallAllowed,
 	getProjectTrustGeneration,
 } from "./project-trust.js";
+import { escapeRegExp } from "./string-utils.js";
 import { logTreeSitterDiagnostic } from "./tree-sitter-logger.js";
 import { notifyUserDegradation } from "./user-notify.js";
 
@@ -2996,16 +2997,6 @@ export class TreeSitterClient {
 				break; // first __slots__ wins
 			}
 			return slots;
-		}
-
-		/**
-		 * Escape a string for safe interpolation into a `RegExp` source —
-		 * needed anywhere an identifier's raw text is combined with regex
-		 * metacharacters like `\b` word boundaries (see
-		 * "not_closed_or_try_with_resources" below; #1089 P2).
-		 */
-		function escapeRegExp(s: string): string {
-			return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 		}
 
 		switch (postFilter) {

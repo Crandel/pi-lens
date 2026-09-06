@@ -1,12 +1,9 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-	buildEsbuildExecInvocation,
-	resolveBundleExecPrefix,
-} from "../../scripts/bundle-dist.mjs";
+import { buildEsbuildExecInvocation } from "../../scripts/bundle-dist.mjs";
+import { createIsolatedExecPrefix } from "../../scripts/lib/exec-isolation.mjs";
 
 // #2590: `npm exec --package esbuild@<ESBUILD_VERSION>` resolves against the
 // FULL project dependency tree (libnpmexec's `missingFromTree` queries
@@ -42,59 +39,20 @@ import {
 // `@npmcli/config`'s `loadLocalPrefix()` — a `--prefix` CLI value short-
 // circuits the walk-up entirely).
 //
-// #2594 review F2: a test that only calls `resolveBundleExecPrefix()` in
-// isolation cannot catch a regression where the call site stops using its
-// result (e.g. reverting the invocation to plain `cwd: execPrefix`, or
-// dropping the `--prefix` flag entirely — both reintroduce a real defect
-// while leaving an isolated cwd/prefix-decision test green). So this test
-// exercises the actual argv+options the production code hands to
-// `execFileSync`, via the same pure builder `main()` uses.
-describe("resolveBundleExecPrefix (#2590)", () => {
-	const root = path.resolve(
-		path.dirname(fileURLToPath(import.meta.url)),
-		"..",
-		"..",
-	);
-
-	it("returns a fresh, empty directory that is neither the project root, an ancestor of it, nor a descendant of it", () => {
-		const prefix = resolveBundleExecPrefix();
-		try {
-			expect(prefix).not.toBe(root);
-			expect(fs.statSync(prefix).isDirectory()).toBe(true);
-			expect(fs.readdirSync(prefix)).toEqual([]);
-
-			// This implementation achieves an empty tree by using os.tmpdir(),
-			// which also sits outside root's ancestry on every platform this runs
-			// on today — not a property mkdtemp itself guarantees (see the header
-			// comment on resolveBundleExecPrefix in scripts/bundle-dist.mjs).
-			const fromRoot = path.relative(root, prefix);
-			expect(fromRoot.startsWith("..")).toBe(true);
-			const toRoot = path.relative(prefix, root);
-			expect(toRoot.startsWith("..")).toBe(true);
-		} finally {
-			fs.rmSync(prefix, { recursive: true, force: true });
-		}
-	});
-
-	it("creates a fresh directory under the OS temp dir on every call", () => {
-		const first = resolveBundleExecPrefix();
-		const second = resolveBundleExecPrefix();
-		try {
-			expect(first).not.toBe(second);
-			const tmp = fs.realpathSync(os.tmpdir());
-			for (const dir of [first, second]) {
-				const real = fs.realpathSync(dir);
-				expect(real === tmp || !path.relative(tmp, real).startsWith("..")).toBe(
-					true,
-				);
-			}
-		} finally {
-			fs.rmSync(first, { recursive: true, force: true });
-			fs.rmSync(second, { recursive: true, force: true });
-		}
-	});
-});
-
+// #2594 review F2: a test that only calls the prefix resolver in isolation
+// cannot catch a regression where the call site stops using its result (e.g.
+// reverting the invocation to plain `cwd: execPrefix`, or dropping the
+// `--prefix` flag entirely — both reintroduce a real defect while leaving an
+// isolated cwd/prefix-decision test green). So this test exercises the
+// actual argv+options the production code hands to `execFileSync`, via the
+// same pure builder `main()` uses.
+//
+// #2593: the prefix resolver and the argv builder both moved to
+// scripts/lib/exec-isolation.mjs (`createIsolatedExecPrefix` /
+// `buildIsolatedExecInvocation`), shared with scripts/build-dist-tsc.mjs's
+// tsc spawn — see tests/scripts/exec-isolation.test.ts for the generic
+// builder's own tests and tests/scripts/build-dist-tsc.test.ts for the tsc
+// call site's equivalent of this file's tests.
 describe("buildEsbuildExecInvocation (#2594 review F2)", () => {
 	const root = path.resolve(
 		path.dirname(fileURLToPath(import.meta.url)),
@@ -103,7 +61,7 @@ describe("buildEsbuildExecInvocation (#2594 review F2)", () => {
 	);
 
 	it("spawns with cwd: root and a --prefix pointing outside root", () => {
-		const execPrefix = resolveBundleExecPrefix();
+		const execPrefix = createIsolatedExecPrefix();
 		try {
 			const { options, argv } = buildEsbuildExecInvocation({
 				npmCli: "/fake/npm-cli.js",
@@ -128,7 +86,7 @@ describe("buildEsbuildExecInvocation (#2594 review F2)", () => {
 	});
 
 	it("still passes --package esbuild@<version> and the esbuild binary name", () => {
-		const execPrefix = resolveBundleExecPrefix();
+		const execPrefix = createIsolatedExecPrefix();
 		try {
 			const { argv } = buildEsbuildExecInvocation({
 				npmCli: "/fake/npm-cli.js",

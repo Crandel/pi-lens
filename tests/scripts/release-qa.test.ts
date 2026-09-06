@@ -41,6 +41,7 @@ import {
 	parseArgs,
 	dirtyCheckoutRefusal,
 	parseBaselineRows,
+	parseSupplyArgs,
 	PINNED_ENV_KEYS,
 	pollToTerminal,
 	scratchEnv,
@@ -509,6 +510,26 @@ describe("release-QA scratch hermeticity (#2619 review F1)", () => {
 		);
 		expect(seen.piLensHome).toBe(path.join(scratchRoot, "home", ".pi-lens"));
 		expect(seen.npmCache).toBe(path.join(scratchRoot, "npm-cache"));
+	});
+});
+
+describe("release-QA host-provided peer args (#2586 recombination)", () => {
+	// scripts/supply-host-provided-deps.mjs emits ONE ENTRY PER LINE because a
+	// peer range can contain a space — its own header says so, added by #2586's
+	// review. A whitespace split turns the OR-form range into three argv
+	// entries and hands `npm install` the tokens `||` and `^0.85.0` as package
+	// names.
+	it("keeps an OR-form range in one argv entry", () => {
+		expect(
+			parseSupplyArgs(
+				"typebox@^1.0.0\n@earendil-works/pi-tui@^0.84.1 || ^0.85.0\n",
+			),
+		).toEqual(["typebox@^1.0.0", "@earendil-works/pi-tui@^0.84.1 || ^0.85.0"]);
+	});
+
+	it("drops blank lines and trailing whitespace", () => {
+		expect(parseSupplyArgs("  a@1 \n\n b@2\n\n")).toEqual(["a@1", "b@2"]);
+		expect(parseSupplyArgs("")).toEqual([]);
 	});
 });
 

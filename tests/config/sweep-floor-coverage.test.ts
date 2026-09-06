@@ -136,7 +136,7 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"host type cases, not a production population sweep",
 	"tests/packaging.test.ts":
 		"packaging behavior cases, not a production population sweep",
-	"tests/scripts/bundle-dist.test.ts":
+	"tests/scripts/exec-isolation.test.ts":
 		"checks a freshly created temp directory is empty, not a production " +
 		"population sweep",
 	"tests/scripts/no-hardcoded-machine-paths.test.ts":
