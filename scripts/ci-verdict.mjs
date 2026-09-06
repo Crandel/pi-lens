@@ -1,19 +1,40 @@
 #!/usr/bin/env node
 /**
- * scripts/ci-verdict.mjs (#2539): ONE REST read of the two required checks'
- * conclusions on an EXACT head SHA, replacing the ad hoc `gh api` filters the
- * fixer/reviewer playbooks were hand-writing and the tail of `gh pr checks`,
- * which hid a failed Unit tests behind a passing Lint (#2527 review round 2
- * merge-blocked on exactly that). Sibling to scripts/check-pr-body.mjs: a
- * pure verdict function over the check-runs JSON, exported for tests, and a
- * thin `gh` CLI shell around it -- no GITHUB_TOKEN/GITHUB_API_URL plumbing,
- * just `gh` on PATH (the issue's acceptance criterion).
+ * scripts/ci-verdict.mjs (#2539): ONE REST read of EVERY check-run on an
+ * EXACT head SHA, replacing the ad hoc `gh api` filters the fixer/reviewer
+ * playbooks were hand-writing and the tail of `gh pr checks`, which hid a
+ * failed Unit tests behind a passing Lint (#2527 review round 2 merge-
+ * blocked on exactly that). Sibling to scripts/check-pr-body.mjs: a pure
+ * verdict function over the check-runs JSON, exported for tests, and a thin
+ * `gh` CLI shell around it -- no GITHUB_TOKEN/GITHUB_API_URL plumbing, just
+ * `gh` on PATH (the issue's acceptance criterion).
+ *
+ * #2609: originally this script only ever looked at the fixed
+ * `REQUIRED_CHECKS` pair (`Unit tests`, `Lint & type-check`), so a red
+ * "Production install build" or "Install test" job on PR #2588's head
+ * e32d814e never entered the computation at all -- exit 0, "both required
+ * checks concluded success", while a real code defect (a widened peer range
+ * containing spaces, word-split by `read -ra`) sat red. Every check-run
+ * GitHub reports on the head is now a row, and every row GATES unless it is
+ * on the advisory allowlist (`scripts/lib/ci-checks.mjs`'s
+ * `isAdvisoryCheck` -- the SAME list #2185's real merge-train gate already
+ * uses) or its conclusion is "skipped"/"neutral" (a job-level `if:` that
+ * evaluated false, not a failure -- see computeVerdict's own doc comment).
+ * `run()` also attempts a LIVE read of `master`'s branch-protection
+ * `required_status_checks.contexts` via `gh api`, and treats those names as
+ * gating unconditionally (never excusable by the static advisory allowlist)
+ * when that read succeeds; when it does not (no permission, no ruleset,
+ * transport error), the constant `REQUIRED_CHECKS` pair is the fallback --
+ * either way, "every check-run not on the advisory allowlist gates" holds.
  *
  *   node scripts/ci-verdict.mjs <pr-number|sha> [--wait <seconds>]
  *
  * Exit codes:
- *   0  -- both required checks concluded "success"
- *   1  -- either required check completed with a non-"success" conclusion
+ *   0  -- every gating check-run concluded "success" (or a non-blocking
+ *         terminal conclusion: "skipped"/"neutral")
+ *   1  -- a gating check-run completed with a blocking, non-success
+ *         conclusion (failure/timed_out/cancelled/action_required/stale/
+ *         startup_failure)
  *   2  -- the PR's head is genuinely merge-conflicted (`gh pr view --json
  *         mergeable` reads "CONFLICTING"), regardless of whether the required
  *         checks are present or absent in check-runs (round 3, F1): a
@@ -109,7 +130,12 @@
 
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { REQUIRED_CHECKS, resolveLatestByName } from "./lib/ci-checks.mjs";
+import {
+	isAdvisoryCheck,
+	isBlockingConclusion,
+	REQUIRED_CHECKS,
+	resolveLatestByName,
+} from "./lib/ci-checks.mjs";
 
 export { REQUIRED_CHECKS };
 
@@ -175,6 +201,45 @@ export function isPrNumber(arg) {
  * what else is already known. DIRTY, once truncation is ruled out, is the
  * next most severe signal, so it wins over an independently failed or
  * still-running sibling check.
+ *
+ * #2609: `rows` used to be built ONLY from `requiredChecks` (the fixed
+ * `["Unit tests", "Lint & type-check"]` pair), so a red "Production install
+ * build" or "Install test" job on PR #2588's head e32d814e never appeared at
+ * all -- `run()` reported "both required checks concluded success" while a
+ * real code defect sat red. `rows` now also carries one row for every OTHER
+ * check-run name GitHub reports on the head (`discoveredRows` below,
+ * appended after the required rows, sorted by name for a deterministic
+ * table). `requiredChecks` NAMES are still the only ones that can be
+ * reported ABSENT (a name not yet in `byName` at all just isn't a row --
+ * there is no fixed manifest of what a PR "should" run, unlike the
+ * always-eventually-present required pair).
+ *
+ * Every row carries `gating`: `!isAdvisoryCheck(row.name)`, OR'd with
+ * membership in `requiredChecks` itself. The OR matters only when
+ * `requiredChecks` came from a live branch-protection read (`run()` passes
+ * that instead of the constant default when `gh api .../protection` is
+ * readable) and GitHub's own required-check list names something this
+ * script's static `ADVISORY_CHECKS`/`ADVISORY_SUFFIX` allowlist would
+ * otherwise excuse -- a live "required by GitHub" signal always overrides a
+ * static "advisory" guess (AGENTS.md shape 38: the cheapest evasion is
+ * quietly adding a real gate to the advisory list; this override is the
+ * belt-and-suspenders check that catches it even if it happens).
+ *
+ * A NON-gating row (advisory) is excluded from both the FAILURE and PENDING
+ * checks below regardless of its own status/conclusion -- an advisory lane
+ * still red or still running must never hold up or fail the verdict.
+ *
+ * `isBlockingConclusion` (scripts/lib/ci-checks.mjs), not a bare `!==
+ * "success"` comparison, decides whether a COMPLETED gating row is a
+ * failure: "skipped" and "neutral" are terminal-but-not-failing conclusions,
+ * and NOT hypothetical here -- this repository's own
+ * `record-post-merge-validation` job (defined in both ci.yml and lint.yml)
+ * carries a job-level `if: ... event_name == 'repository_dispatch'` and
+ * reports "skipped" on every ordinary pull_request run (confirmed live on
+ * PR #2588, 2026-09-06 -- two "Record post-merge validation" rows, both
+ * "skipping" in `gh pr checks`). Reading `!== "success"` as failure the way
+ * the pre-#2609 script did would have turned that routine skip into a
+ * permanent false FAILURE the moment discovered rows were added.
  */
 export function computeVerdict(
 	checkRunsPayload,
@@ -185,16 +250,16 @@ export function computeVerdict(
 		? checkRunsPayload.check_runs
 		: [];
 	const byName = resolveLatestByName(checkRuns);
-	const rows = requiredChecks.map((name) => {
+	const requiredNameSet = new Set(requiredChecks);
+
+	const buildRow = (name) => {
 		const run = byName.get(name);
+		// requiredNameSet.has(name): see the doc comment above -- a name GitHub
+		// itself confirms as required always gates, even if it were also (by
+		// mistake) on the static advisory allowlist.
+		const gating = requiredNameSet.has(name) || !isAdvisoryCheck(name);
 		if (!run) {
-			return {
-				name,
-				present: false,
-				status: null,
-				conclusion: null,
-				url: null,
-			};
+			return { name, present: false, status: null, conclusion: null, url: null, gating };
 		}
 		return {
 			name,
@@ -202,14 +267,34 @@ export function computeVerdict(
 			status: run.status ?? null,
 			conclusion: run.conclusion ?? null,
 			url: run.html_url ?? run.details_url ?? null,
+			gating,
 		};
-	});
+	};
 
-	const anyAbsent = rows.some((row) => !row.present);
+	const requiredRows = requiredChecks.map(buildRow);
+	const discoveredNames = [...byName.keys()]
+		.filter((name) => !requiredNameSet.has(name))
+		.sort();
+	const rows = [...requiredRows, ...discoveredNames.map(buildRow)];
+
+	// Only the required rows can be legitimately "absent" -- discovered rows
+	// are, by construction, names that DID appear in the payload.
+	const anyAbsent = requiredRows.some((row) => !row.present);
 	const totalCount = checkRunsPayload?.total_count;
 	const truncated =
 		typeof totalCount === "number" && totalCount > checkRuns.length;
 	const mergeState = mergeable ?? "n/a";
+
+	const failingGatingRows = rows.filter(
+		(row) =>
+			row.gating &&
+			row.present &&
+			row.status === "completed" &&
+			isBlockingConclusion(row.conclusion),
+	);
+	const pendingGatingRows = rows.filter(
+		(row) => row.gating && row.status !== "completed",
+	);
 
 	let exitCode;
 	let reason;
@@ -221,24 +306,19 @@ export function computeVerdict(
 		reason = anyAbsent
 			? "one or more required checks are absent and the PR is merge-conflicted (mergeable=CONFLICTING): a merge-conflicted PR can't build its merge-ref, so the real gates are skipped, not failed -- AGENTS.md shape 11"
 			: "the PR is merge-conflicted (mergeable=CONFLICTING) even though the required checks show present -- that's stale evidence from before the head turned conflicting, not proof it can merge (round 3, F1)";
-	} else if (
-		rows.some(
-			(row) => row.status === "completed" && row.conclusion !== "success",
-		)
-	) {
+	} else if (failingGatingRows.length > 0) {
 		exitCode = EXIT_FAILURE;
-		reason =
-			"one or more required checks completed with a non-success conclusion";
-	} else if (rows.some((row) => row.status !== "completed")) {
+		reason = `gating check(s) completed with a non-success conclusion: ${failingGatingRows.map((row) => `${row.name} (${row.conclusion})`).join(", ")}`;
+	} else if (pendingGatingRows.length > 0) {
 		exitCode = EXIT_PENDING;
 		reason = anyAbsent
 			? mergeable == null
 				? "one or more required checks are absent and there is no PR context (bare-SHA target) to confirm they are not merge-conflicted; treating as pending, not DIRTY -- pass a PR number, or wait for CI to register"
 				: `one or more required checks are absent but the PR is not merge-conflicted (mergeable=${mergeable}); CI likely hasn't registered yet -- treating as pending, not DIRTY`
-			: "one or more required checks are still queued or in progress";
+			: `gating check(s) still queued or in progress: ${pendingGatingRows.map((row) => row.name).join(", ")}`;
 	} else {
 		exitCode = EXIT_SUCCESS;
-		reason = "both required checks concluded success";
+		reason = "every gating check concluded success";
 	}
 	return { exitCode, rows, reason, mergeState, truncated };
 }
@@ -312,6 +392,7 @@ export async function pollVerdict({
 	fetchPayload,
 	waitSeconds,
 	mergeable = null,
+	requiredChecks = REQUIRED_CHECKS,
 	sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 	now = () => Date.now(),
 }) {
@@ -324,7 +405,7 @@ export async function pollVerdict({
 			capSeconds > 0 ? Math.max(0, deadline - now()) : undefined;
 		verdict = computeVerdict(
 			await fetchPayload(remainingMs),
-			REQUIRED_CHECKS,
+			requiredChecks,
 			mergeable,
 		);
 		polls += 1;
@@ -410,6 +491,45 @@ export function fetchCheckRunsPayload(
 	);
 }
 
+// The only branch this repository protects (ci.yml/lint.yml/etc. all trigger
+// on `branches: [master]`); every PR this script is ever pointed at targets
+// it. Not derived per-target because a bare-SHA target carries no base-branch
+// context at all, and deriving it for a PR-number target would need a SECOND
+// `gh pr view` field read for a value that never varies in this repo.
+export const PROTECTED_BRANCH = "master";
+
+/**
+ * Reads the LIVE required-status-check names GitHub enforces on
+ * `PROTECTED_BRANCH`, via `gh api repos/<repo>/branches/<branch>/protection`
+ * (classic branch protection; this repository has no ruleset configured --
+ * `gh api repos/.../rulesets` returned `[]` when probed 2026-09-06, so
+ * `required_status_checks.contexts` on the branch-protection endpoint is the
+ * live source of truth today). Returns `null` on ANY failure -- insufficient
+ * permission, 404, malformed JSON, an unexpected response shape, a `gh`
+ * timeout -- never throws, so an unreadable ruleset always falls back to
+ * `run()`'s constant `REQUIRED_CHECKS` default rather than aborting the
+ * whole verdict read (#2609's acceptance criterion: "the required checks
+ * from the repository ruleset / branch protection via `gh api` WHEN
+ * READABLE, else an explicit ADVISORY allowlist").
+ */
+export function resolveRequiredCheckNames(
+	repository,
+	ghExec = gh,
+	timeoutMs = DEFAULT_GH_TIMEOUT_MS,
+) {
+	try {
+		const raw = ghExec(
+			["api", `repos/${repository}/branches/${PROTECTED_BRANCH}/protection`],
+			{ timeoutMs },
+		);
+		const contexts = JSON.parse(raw)?.required_status_checks?.contexts;
+		if (!Array.isArray(contexts) || contexts.length === 0) return null;
+		return contexts.map(String);
+	} catch {
+		return null;
+	}
+}
+
 export function parseArgs(argv) {
 	const rest = [];
 	let waitSeconds = null;
@@ -454,6 +574,20 @@ export async function run({
 		);
 		const repository = resolveRepository(ghExec, initialTimeoutMs);
 		const { sha, mergeable } = resolveHeadSha(target, ghExec, initialTimeoutMs);
+		// #2609: read once, before polling starts (branch protection does not
+		// change between polls of the same head). `null` means unreadable --
+		// `requiredChecks` then falls back to the constant default, and every
+		// OTHER discovered check still gates via computeVerdict's own
+		// advisory-allowlist check (see its doc comment).
+		const liveRequiredChecks = resolveRequiredCheckNames(
+			repository,
+			ghExec,
+			initialTimeoutMs,
+		);
+		const requiredChecks = liveRequiredChecks ?? REQUIRED_CHECKS;
+		const gatingSource = liveRequiredChecks
+			? `branch protection required_status_checks on ${PROTECTED_BRANCH} (${liveRequiredChecks.join(", ")}) -- every other check-run gates unless it is on the advisory allowlist`
+			: `advisory allowlist only -- branch protection on ${PROTECTED_BRANCH} was unreadable, falling back to the constant required-check list (${REQUIRED_CHECKS.join(", ")})`;
 
 		const { verdict, polls } = await pollVerdict({
 			fetchPayload: (remainingMs) =>
@@ -465,6 +599,7 @@ export async function run({
 				),
 			waitSeconds,
 			mergeable,
+			requiredChecks,
 		});
 
 		stdout(
@@ -476,6 +611,7 @@ export async function run({
 		// infer it from `reason` text alone. `"n/a"` for a bare-SHA target
 		// documents that DIRTY is PR-only.
 		stdout(`Merge state: ${verdict.mergeState}`);
+		stdout(`Gating source: ${gatingSource}`);
 		stdout(verdict.reason);
 		return verdict.exitCode;
 	} catch (error) {

@@ -19,6 +19,7 @@ import {
 	resolveGhTimeoutMs,
 	resolveHeadSha,
 	resolveRepository,
+	resolveRequiredCheckNames,
 	resolveWaitCapSeconds,
 	run,
 } from "../../scripts/ci-verdict.mjs";
@@ -380,6 +381,268 @@ describe("computeVerdict — rerun de-duplication (latest-started wins)", () => 
 		expect(verdict.exitCode).toBe(EXIT_PENDING);
 		const unitTests = verdict.rows.find((row) => row.name === "Unit tests");
 		expect(unitTests?.status).toBe("in_progress");
+	});
+});
+
+// #2609: `ci-verdict.mjs` used to build `rows` ONLY from the fixed
+// `["Unit tests", "Lint & type-check"]` pair, so a red "Production install
+// build" or "Install test" job on PR #2588's head e32d814e never entered the
+// computation -- `run() 2588` printed "both required checks concluded
+// success" while the Production install build job was genuinely red (a
+// widened peer range with a space, word-split by `read -ra`). Pre-fix, this
+// whole describe block's first test reproduces that: RED on
+// `git show <pre-#2609 sha>:scripts/ci-verdict.mjs`'s `computeVerdict`,
+// because that version never looked at any check-run name outside
+// `requiredChecks`.
+describe("computeVerdict — every check-run gates unless advisory (#2609)", () => {
+	const REAL_PROD_INSTALL_BUILD_NAME =
+		"Production install build (--omit=dev, from source)";
+
+	it("exits 1 when a discovered, non-advisory check-run fails even though both required checks pass (PR #2588 shape)", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: REAL_PROD_INSTALL_BUILD_NAME,
+					conclusion: "failure",
+					id: 3,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_FAILURE);
+		expect(verdict.reason).toContain(REAL_PROD_INSTALL_BUILD_NAME);
+		const row = verdict.rows.find(
+			(r) => r.name === REAL_PROD_INSTALL_BUILD_NAME,
+		);
+		expect(row?.gating).toBe(true);
+	});
+
+	it("exits 0 when only a name-suffix advisory lane fails (OSV scan (advisory))", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "OSV scan (advisory)",
+					conclusion: "failure",
+					id: 3,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
+		const row = verdict.rows.find((r) => r.name === "OSV scan (advisory)");
+		expect(row?.gating).toBe(false);
+	});
+
+	it("exits 0 when only a static-allowlist advisory vendor check fails (SonarCloud/CodeQL, no suffix)", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "SonarCloud Code Analysis",
+					conclusion: "failure",
+					id: 3,
+				}),
+			],
+		};
+		expect(computeVerdict(payload, undefined, "MERGEABLE").exitCode).toBe(
+			EXIT_SUCCESS,
+		);
+	});
+
+	it("exits 3 (pending) while a discovered gating check is still queued or in progress", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: REAL_PROD_INSTALL_BUILD_NAME,
+					status: "in_progress",
+					conclusion: null,
+					id: 3,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.reason).toContain(REAL_PROD_INSTALL_BUILD_NAME);
+	});
+
+	// Not hypothetical: this repository's `record-post-merge-validation` job
+	// (ci.yml AND lint.yml) has a job-level `if: ... event_name ==
+	// 'repository_dispatch'` and reports "skipped" on every ordinary
+	// pull_request run (confirmed live on PR #2588, 2026-09-06 -- two "Record
+	// post-merge validation" rows, both "skipping" in `gh pr checks`). A bare
+	// `conclusion !== "success"` check (the pre-#2609 comparison, applied to a
+	// newly-discovered row) would red every PR forever.
+	it("a discovered gating check that concluded 'skipped' does not fail the verdict", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "Record post-merge validation",
+					conclusion: "skipped",
+					id: 3,
+				}),
+			],
+		};
+		expect(computeVerdict(payload, undefined, "MERGEABLE").exitCode).toBe(
+			EXIT_SUCCESS,
+		);
+	});
+
+	it("a discovered gating check that concluded 'neutral' does not fail the verdict", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({ name: "Some neutral tool", conclusion: "neutral", id: 3 }),
+			],
+		};
+		expect(computeVerdict(payload, undefined, "MERGEABLE").exitCode).toBe(
+			EXIT_SUCCESS,
+		);
+	});
+
+	// AGENTS.md shape 38: "the cheapest evasion is adding a real gate to the
+	// advisory list." A name GitHub's OWN branch-protection read confirms as
+	// required must gate even if it also happens to match the static
+	// advisory allowlist -- this is the override `computeVerdict`'s `gating =
+	// requiredNameSet.has(name) || !isAdvisoryCheck(name)` provides. Deleting
+	// the `requiredNameSet.has(name) ||` half (keeping only
+	// `!isAdvisoryCheck(name)`) is the exact mutation this test catches.
+	it("a name confirmed required by branch protection always gates, even if it matches the advisory allowlist", () => {
+		const payload = {
+			check_runs: [
+				checkRun({
+					name: "SonarCloud Code Analysis",
+					conclusion: "failure",
+					id: 1,
+				}),
+			],
+		};
+		const verdict = computeVerdict(
+			payload,
+			["SonarCloud Code Analysis"],
+			"MERGEABLE",
+		);
+		expect(verdict.exitCode).toBe(EXIT_FAILURE);
+	});
+
+	it("discovered rows are sorted by name after the required rows, each carrying present:true", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({ name: "Install test (windows-latest)", id: 3 }),
+				checkRun({ name: "Install test (macos-latest)", id: 4 }),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.rows.map((r) => r.name)).toEqual([
+			"Unit tests",
+			"Lint & type-check",
+			"Install test (macos-latest)",
+			"Install test (windows-latest)",
+		]);
+		expect(verdict.rows.slice(2).every((r) => r.present)).toBe(true);
+	});
+});
+
+describe("resolveRequiredCheckNames — live branch-protection read (#2609)", () => {
+	it("returns the contexts array when gh api resolves branch protection", () => {
+		const ghExec = (args: string[]) => {
+			expect(args).toEqual([
+				"api",
+				"repos/acme/repo/branches/master/protection",
+			]);
+			return JSON.stringify({
+				required_status_checks: { contexts: ["Unit tests", "Lint & type-check"] },
+			});
+		};
+		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toEqual([
+			"Unit tests",
+			"Lint & type-check",
+		]);
+	});
+
+	it("returns null when gh api throws (403/404/timeout/not readable)", () => {
+		const ghExec = () => {
+			throw new Error("HTTP 403: Resource not accessible");
+		};
+		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toBeNull();
+	});
+
+	it("returns null when the response has no required_status_checks.contexts array", () => {
+		const ghExec = () => JSON.stringify({ some: "other shape" });
+		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toBeNull();
+	});
+
+	it("passes the timeoutMs through to ghExec's own options", () => {
+		const calls: unknown[] = [];
+		const ghExec = (_args: string[], options: unknown) => {
+			calls.push(options);
+			return JSON.stringify({ required_status_checks: { contexts: [] } });
+		};
+		resolveRequiredCheckNames("acme/repo", ghExec, 12_345);
+		expect(calls[0]).toEqual({ timeoutMs: 12_345 });
+	});
+});
+
+describe("run — prints the gating source and uses a live branch-protection read (#2609)", () => {
+	it("documents the branch-protection source and threads it into the verdict", async () => {
+		const ghExec = (args: string[]) => {
+			if (args[0] === "repo") return "acme/repo";
+			if (args[0] === "pr")
+				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+			if (args[1] === "repos/acme/repo/branches/master/protection") {
+				return JSON.stringify({
+					required_status_checks: {
+						contexts: ["Unit tests", "Lint & type-check"],
+					},
+				});
+			}
+			return JSON.stringify(BOTH_SUCCESS);
+		};
+		const stdoutLines: string[] = [];
+		const exitCode = await run({
+			argv: ["2539"],
+			ghExec,
+			stdout: (line: string) => stdoutLines.push(line),
+			stderr: () => {},
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		expect(stdoutLines.some((l) => l.startsWith("Gating source: branch protection"))).toBe(
+			true,
+		);
+	});
+
+	it("falls back to the advisory-allowlist wording when branch protection is unreadable", async () => {
+		const ghExec = (args: string[]) => {
+			if (args[0] === "repo") return "acme/repo";
+			if (args[0] === "pr")
+				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+			if (args[1] === "repos/acme/repo/branches/master/protection") {
+				throw new Error("HTTP 403");
+			}
+			return JSON.stringify(BOTH_SUCCESS);
+		};
+		const stdoutLines: string[] = [];
+		const exitCode = await run({
+			argv: ["2539"],
+			ghExec,
+			stdout: (line: string) => stdoutLines.push(line),
+			stderr: () => {},
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		expect(
+			stdoutLines.some((l) => l.startsWith("Gating source: advisory allowlist only")),
+		).toBe(true);
 	});
 });
 

@@ -18,6 +18,63 @@
 
 export const REQUIRED_CHECKS = ["Unit tests", "Lint & type-check"];
 
+// How this repository ACTUALLY marks a check advisory: the workflow job name
+// ends in "(advisory)". Probed 2026-08-26 against the live rollups of every
+// open PR -- `oxfmt format check (advisory)`, `PR body (advisory)`,
+// `Vale prose lint (advisory)`, `OSV scan (advisory)`. Originally lived only
+// in merge-train-lane.mjs; moved here in #2609 so ci-verdict.mjs (a second
+// consumer of the exact same policy) imports the ONE list instead of
+// hand-rolling its own -- AGENTS.md shape 38's own warning ("the cheapest
+// evasion is adding a real gate to the advisory list") is a defect risk
+// multiplied by every duplicate copy of this set, not just the original.
+// merge-train-lane.mjs re-exports these three names unchanged for its
+// existing importers.
+export const ADVISORY_SUFFIX = "(advisory)";
+export const ADVISORY_CHECKS = new Set([
+	// Third-party SonarCloud GitHub App check-run (posted via the SonarCloud
+	// integration, not a workflow job in .github/workflows) -- has no
+	// "(advisory)" suffix to self-identify by, so it needs an explicit entry.
+	"SonarCloud Code Analysis",
+	// GitHub's own code-scanning summary check (default CodeQL setup -- there
+	// is no committed codeql.yml; the per-language "Analyze (<lang>)" jobs it
+	// spawns are a DIFFERENT, unrelated set of check-run names this list does
+	// NOT cover, and they gate like any other non-advisory check).
+	"CodeQL",
+]);
+
+export function isAdvisoryCheck(name) {
+	return (
+		ADVISORY_CHECKS.has(name) || String(name ?? "").endsWith(ADVISORY_SUFFIX)
+	);
+}
+
+// A non-advisory check in any of these states blocks a merge (#2185's real
+// merge-train gate; moved here from merge-train-lane.mjs in #2609 for the
+// same single-source reason as ADVISORY_CHECKS above). GraphQL's rollup
+// reports these UPPERCASE; REST's check-runs API reports them lowercase --
+// `isBlockingConclusion` below normalizes case so both payload shapes share
+// this ONE list. Deliberately NOT exhaustive over every enum value GitHub
+// documents: "success", "skipped", and "neutral" are exactly the completed
+// conclusions that are NOT failures, and every one of them is a real,
+// observed shape in this repo -- "skipped" is not hypothetical, it is what
+// `record-post-merge-validation`'s job-level
+// `if: ... && github.event_name == 'repository_dispatch'` reports on EVERY
+// ordinary pull_request run (probed live on PR #2588, 2026-09-06: two
+// "Record post-merge validation" rows, both "skipping"). Treating a job's
+// own conditional skip as a failure would red every PR forever (#2609).
+export const BLOCKING_CONCLUSIONS = new Set([
+	"FAILURE",
+	"TIMED_OUT",
+	"CANCELLED",
+	"ACTION_REQUIRED",
+	"STARTUP_FAILURE",
+	"STALE",
+]);
+
+export function isBlockingConclusion(conclusion) {
+	return BLOCKING_CONCLUSIONS.has(String(conclusion ?? "").toUpperCase());
+}
+
 function startedAtOf(run) {
 	return run?.startedAt ?? run?.started_at ?? null;
 }

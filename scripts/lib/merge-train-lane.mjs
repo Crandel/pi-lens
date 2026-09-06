@@ -22,7 +22,20 @@
  * state to drift.
  */
 
-import { REQUIRED_CHECKS, resolveLatestByName } from "./ci-checks.mjs";
+import {
+	ADVISORY_CHECKS,
+	ADVISORY_SUFFIX,
+	BLOCKING_CONCLUSIONS,
+	isAdvisoryCheck,
+	REQUIRED_CHECKS,
+	resolveLatestByName,
+} from "./ci-checks.mjs";
+
+// Re-exported unchanged for this module's existing importers (#2609 moved
+// the definitions to ci-checks.mjs, the shared module, so ci-verdict.mjs can
+// use the SAME advisory/blocking policy instead of a second hand-rolled
+// copy -- see ci-checks.mjs for the reasoning and the live-probe evidence).
+export { ADVISORY_CHECKS, ADVISORY_SUFFIX, BLOCKING_CONCLUSIONS, isAdvisoryCheck };
 import { commentMarkerExists, paginate } from "./github-paging.mjs";
 import {
 	classifyActionFailure,
@@ -140,38 +153,11 @@ function parseGraphqlDateTime(value, field, page, number) {
 	return timestamp;
 }
 
-// How this repository ACTUALLY marks a check advisory: the workflow job name
-// ends in "(advisory)". Probed 2026-08-26 against the live rollups of every
-// open PR -- `oxfmt format check (advisory)`, `PR body (advisory)`,
-// `Vale prose lint (advisory)`, `OSV scan (advisory)`. Review round 1, F3: a
-// hand-written allowlist of two vendor names read `oxfmt format check
-// (advisory): FAILURE` as blocking and refused to merge this PR's own head.
-// The suffix is the single source of truth the repository already maintains;
-// the two vendor names below carry no suffix and stay explicit.
-export const ADVISORY_SUFFIX = "(advisory)";
-export const ADVISORY_CHECKS = new Set(["SonarCloud Code Analysis", "CodeQL"]);
-
-export function isAdvisoryCheck(name) {
-	return (
-		ADVISORY_CHECKS.has(name) || String(name ?? "").endsWith(ADVISORY_SUFFIX)
-	);
-}
-
 // Only positive evidence of a settled pass. GitHub's CheckRun status is
 // QUEUED / IN_PROGRESS / COMPLETED and conclusion is null until COMPLETED
 // (probed 2026-08-26 against this repository's own open PRs).
 export const CONCLUDED_STATUS = "COMPLETED";
 export const PASSING_CONCLUSION = "SUCCESS";
-
-// A non-advisory check in any of these states blocks the merge.
-export const BLOCKING_CONCLUSIONS = new Set([
-	"FAILURE",
-	"TIMED_OUT",
-	"CANCELLED",
-	"ACTION_REQUIRED",
-	"STARTUP_FAILURE",
-	"STALE",
-]);
 
 // States the merge API will actually accept. Review round 1, F1: this
 // repository's master protection has `strict: true` (probed 2026-08-26 via
