@@ -60,8 +60,7 @@ function checkSkillsHealth(skillsDir: string): SkillsHealth {
 	try {
 		entries = fs.readdirSync(skillsDir, { withFileTypes: true });
 	} catch (error) {
-		const fsErrorCode =
-			(error as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
+		const fsErrorCode = (error as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
 		if (fsErrorCode === "ENOENT") return { status: "absent" };
 		return { status: "unreadable", fsErrorCode };
 	}

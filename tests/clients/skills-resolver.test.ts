@@ -21,13 +21,18 @@ const latencyEntries: Array<{
 	filePath?: string;
 	metadata?: Record<string, unknown>;
 }> = [];
-vi.mock("../../clients/latency-logger.js", () => ({
-	logLatency: (entry: {
-		phase?: string;
-		filePath?: string;
-		metadata?: Record<string, unknown>;
-	}) => latencyEntries.push(entry),
-}));
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/latency-logger.js")>();
+	return {
+		...actual,
+		logLatency: (entry: {
+			phase?: string;
+			filePath?: string;
+			metadata?: Record<string, unknown>;
+		}) => latencyEntries.push(entry),
+	};
+});
 
 import * as fs from "node:fs";
 import {
@@ -220,7 +225,10 @@ describe("resolveSkillPaths (#2626) — layout table against pi's real loader", 
 		const skillsDir = path.join(packageRoot, "skills");
 		const realTarget = path.join(packageRoot, "real-skill-target");
 		fsSync.mkdirSync(realTarget, { recursive: true });
-		fsSync.writeFileSync(path.join(realTarget, "SKILL.md"), "# symlinked skill\n");
+		fsSync.writeFileSync(
+			path.join(realTarget, "SKILL.md"),
+			"# symlinked skill\n",
+		);
 		fsSync.mkdirSync(skillsDir, { recursive: true });
 		fsSync.symlinkSync(realTarget, path.join(skillsDir, "linked"), "dir");
 		const entryFile = path.join(packageRoot, "index.js");
@@ -378,11 +386,17 @@ describe("resolveSkillPaths (#2626) — F4: EACCES vs ENOENT", () => {
 		// misreported as "empty"/"no SKILL.md", which would be a false claim
 		// about content that exists but could not be read.
 		fsSync.mkdirSync(skillsDir, { recursive: true });
-		fsSync.writeFileSync(path.join(skillsDir, "SKILL.md"), "# unreadable skill\n");
+		fsSync.writeFileSync(
+			path.join(skillsDir, "SKILL.md"),
+			"# unreadable skill\n",
+		);
 		const entryFile = path.join(packageRoot, "index.js");
 		const realReaddirSync = vi.mocked(fs.readdirSync).getMockImplementation();
 
-		vi.mocked(fs.readdirSync).mockImplementationOnce(((dir: unknown) => {
+		vi.mocked(fs.readdirSync).mockImplementationOnce(((
+			dir: unknown,
+			options: unknown,
+		) => {
 			if (path.resolve(String(dir)) === path.resolve(skillsDir)) {
 				const err = new Error(
 					"EACCES: permission denied, scandir",
@@ -390,8 +404,8 @@ describe("resolveSkillPaths (#2626) — F4: EACCES vs ENOENT", () => {
 				err.code = "EACCES";
 				throw err;
 			}
-			return realReaddirSync?.(dir as never);
-		}) as typeof fs.readdirSync);
+			return realReaddirSync?.(dir as never, options as never);
+		}) as unknown as typeof fs.readdirSync);
 
 		let result: string[] | undefined;
 		expect(() => {
