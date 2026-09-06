@@ -65,9 +65,7 @@ describe("locateContractSource", () => {
 		const result = locateContractSource(packageDir, CANDIDATES);
 		expect(result.found).toBe(true);
 		if (!result.found) throw new Error("unreachable");
-		expect(result.relativePath).toBe(
-			"src/runs/shared/child-runtime-config.ts",
-		);
+		expect(result.relativePath).toBe("src/runs/shared/child-runtime-config.ts");
 		expect(result.observedAt).toBe("0.65.0");
 	});
 
@@ -181,9 +179,11 @@ describe("locateContractSources", () => {
 		const result = locateContractSources(packageDir, PARTS);
 		expect(result.found).toBe(true);
 		if (!result.found) throw new Error("unreachable");
-		expect(result.parts.every((p) => p.relativePath === "src/runs/shared/pi-args.ts")).toBe(
-			true,
-		);
+		expect(
+			result.parts.every(
+				(p) => p.relativePath === "src/runs/shared/pi-args.ts",
+			),
+		).toBe(true);
 	});
 
 	it("reports found:false naming the FIRST unresolvable part when only one part is absent", () => {

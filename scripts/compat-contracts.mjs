@@ -96,9 +96,7 @@ const CONTRACT_SOURCE_LOCATIONS = {
 		parts: [
 			{
 				name: "source",
-				candidates: [
-					{ path: "src/process-runner.ts", observedAt: "1.0.3" },
-				],
+				candidates: [{ path: "src/process-runner.ts", observedAt: "1.0.3" }],
 			},
 		],
 	},
@@ -304,8 +302,7 @@ async function main() {
 
 	console.log("\ncontract checks:");
 	for (const r of results) {
-		const label =
-			r.outcome === "infra" ? "INFRA" : r.pass ? "PASS" : "FAIL";
+		const label = r.outcome === "infra" ? "INFRA" : r.pass ? "PASS" : "FAIL";
 		console.log(`  [${label}] ${r.id} (${r.package}) — ${r.description}`);
 		console.log(`         ${r.detail}`);
 	}

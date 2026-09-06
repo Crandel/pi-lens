@@ -291,12 +291,14 @@ export const CONTRACTS = [
  * }} inputs
  */
 export function runAllContractChecks(inputs) {
-	const results = CONTRACTS.map(({ id, package: pkg, description, inputKey, check }) => ({
-		id,
-		package: pkg,
-		description,
-		...check(inputs[inputKey]),
-	}));
+	const results = CONTRACTS.map(
+		({ id, package: pkg, description, inputKey, check }) => ({
+			id,
+			package: pkg,
+			description,
+			...check(inputs[inputKey]),
+		}),
+	);
 	const allPass = results.every((r) => r.pass);
 	return { results, allPass };
 }
