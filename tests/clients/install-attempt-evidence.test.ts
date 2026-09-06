@@ -143,6 +143,25 @@ describe("the installer records what its attempt did (#1500)", () => {
 		});
 	});
 
+	// #2638 review: a caller that needs to tell "the installer genuinely
+	// failed" (E404, EBADENGINE, network error) from "declined"/"skipped"
+	// needs the ACTUAL npm error text, not the generic "install failed"
+	// fallback `finishInstallAttempt` uses when nothing set
+	// `installFailureReasons` — the tool-smoke lane's classification
+	// (`scripts/smoke-tools.mjs`'s `genuineInstallFailure`) reads exactly
+	// this to decide RED vs the toolchain-absent ⚠ skip.
+	it("a genuine npm install failure records the real registry error, not a generic fallback", async () => {
+		safeSpawnAsync.mockResolvedValue(npmFailed);
+		const { ensureTool, getInstallFailureReason, getInstallAttempt } =
+			await installer();
+
+		expect(await ensureTool("fish-lsp")).toBeUndefined();
+		const reason = getInstallFailureReason("fish-lsp");
+		expect(reason).toContain("404 Not Found");
+		expect(reason).toContain("fish-lsp");
+		expect(getInstallAttempt("fish-lsp")?.reason).toBe(reason);
+	});
+
 	it("a successful install records succeeded", async () => {
 		safeSpawnAsync.mockImplementation(async () => {
 			// The install "downloads" the package: plant what npm would leave.

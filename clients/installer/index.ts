@@ -29,16 +29,17 @@
  * - rust-analyzer (Rust LSP) [GitHub release]
  * - golangci-lint (Go linting) [GitHub release]
  *
- * Manual install required (25+ tools):
- * - yaml-language-server: npm install -g yaml-language-server
- * - vscode-json-languageserver: npm install -g vscode-langservers-extracted
- * - bash-language-server: npm install -g bash-language-server
- * - svelte-language-server: npm install -g svelte-language-server
- * - vscode-css-languageserver: npm install -g vscode-langservers-extracted
- * - @prisma/language-server: npm install -g @prisma/language-server
- * - dockerfile-language-server: npm install -g dockerfile-language-server-nodejs
- * - @vue/language-server: npm install -g @vue/language-server
- * - And all language-specific servers (gopls, rust-analyzer, etc.)
+ * Every other managed tool (including several the list above omits, e.g.
+ * bash-language-server, yaml-language-server, svelte-language-server,
+ * @prisma/language-server, @vue/language-server, dockerfile-language-server-nodejs,
+ * and vscode-css-languageserver — all of which ARE auto-installed) is
+ * documented by the `TOOLS` array below, not restated here. #2638: a
+ * hand-kept "manual install" list naming specific package specs used to live
+ * in this comment, drifted from `TOOLS` (it named a since-unpublished npm
+ * package for the CSS entry, and several tools it called "manual" were
+ * already auto-install above) and nothing caught it. `TOOLS` is the single
+ * source of truth for every id, package, and strategy; deleted rather than
+ * re-derived, since a comment cannot be generated from code at write time.
  *
  * Strategies:
  * - npm packages via npx/bun
@@ -611,7 +612,18 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-html-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		packageName: "vscode-html-languageserver-bin",
+		// #2638 review: `vscode-html-languageserver-bin` (the bare package this
+		// id used to name) is the SAME class of defect the CSS entry above had —
+		// still resolves on npm (unlike vscode-css-languageserver's E404), but
+		// its published `bin` is named `html-languageserver`, not
+		// `vscode-html-language-server` (verified: `npm view
+		// vscode-html-languageserver-bin@1.4.0 bin`), and it has not been
+		// republished since 2018. The HTML server ships today inside
+		// `vscode-langservers-extracted` — the SAME family the css/json entries
+		// above already use — under the exact bin name this entry's
+		// checkCommand/binaryName already expect. Unpinned, matching the
+		// sibling entries; no engines.node floor exists on this package either.
+		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-html-language-server",
 	},
 	{
@@ -4566,6 +4578,7 @@ async function installArchiveTool(
 }
 
 async function installNpmTool(
+	toolId: string,
 	packageName: string,
 	binaryName: string,
 	verificationArgs: string[] = ["--version"],
@@ -4727,9 +4740,16 @@ async function installNpmTool(
 
 		return binPath;
 	} catch (err) {
-		logSessionStart(
-			`auto-install npm ${packageName}: exception: ${(err as Error).message}`,
-		);
+		// Record the REAL error (registry E404, EBADENGINE, network failure,
+		// verification failure) against `toolId`, not just the session log —
+		// `finishInstallAttempt`'s caller (`installTool`) falls back to a
+		// generic "install failed" when nothing set `installFailureReasons`,
+		// and a caller that needs to distinguish "a genuine installer defect"
+		// from "the toolchain is absent on this runner" (the tool-smoke lane,
+		// #2638 review) needs the actual message, not the generic fallback.
+		const message = (err as Error).message;
+		logSessionStart(`auto-install npm ${packageName}: exception: ${message}`);
+		installFailureReasons.set(toolId, message);
 		return undefined;
 	}
 }
@@ -5036,6 +5056,7 @@ export async function installTool(toolId: string): Promise<boolean> {
 			case "npm": {
 				if (!tool.packageName || !tool.binaryName) return false;
 				const npmPath = await installNpmTool(
+					tool.id,
 					tool.packageName,
 					tool.binaryName,
 					tool.checkArgs,

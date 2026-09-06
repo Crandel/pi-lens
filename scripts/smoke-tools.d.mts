@@ -93,6 +93,35 @@ export function passFloorBreach(
 ): string | null;
 /** Fixtures flagged `tier1` — the scheduled parser lane's selection. */
 export function tier1Fixtures(): SmokeFixture[];
+/**
+ * Whether an `ensureTool` failure for a tool of install strategy
+ * `installStrategy` is a genuine installer defect (should be reported as a
+ * fail) rather than "this runner lacks the toolchain" (#2638). `npm` is
+ * always genuine (this harness itself runs under Node); `pip`/`gem` are
+ * genuine only when `toolchainPresent` is `true`; every other strategy is
+ * never genuine (unchanged toolchain-absent semantics).
+ */
+export function isGenuineInstallFailure(
+	installStrategy: string | undefined,
+	toolchainPresent: boolean | undefined,
+): boolean;
+/** One TOOLS registry entry, as far as this classification cares. */
+export interface SmokeToolDefinition {
+	installStrategy?: string;
+}
+/**
+ * The first genuine (non-toolchain-absent) install failure among `toolIds`,
+ * or `undefined` when every unavailable tool in the list is legitimately
+ * absent-toolchain. `toolchainPresence` is a per-run cache keyed by strategy
+ * ("pip"/"gem"), populated lazily and reused across calls.
+ */
+export function genuineInstallFailure(
+	toolIds: readonly string[],
+	unavailableTools: ReadonlySet<string>,
+	toolsById: ReadonlyMap<string, SmokeToolDefinition>,
+	failureReasons: ReadonlyMap<string, string>,
+	toolchainPresence: Record<string, boolean>,
+): { toolId: string; strategy: string | undefined; reason: string } | undefined;
 export const FIXTURES: SmokeFixture[];
 export const LSP_FIXTURES: LspFixture[];
 export const FORMAT_FIXTURES: FormatFixture[];

@@ -1407,6 +1407,82 @@ export function passFloorBreach(rows, minPass) {
 ✗ pass floor: ${passed} runner(s) passed, at least ${minPass} required (${unavailable} unavailable). A lane that installs nothing proves nothing — treat this as red, not as flaky tooling.`;
 }
 
+/**
+ * Whether an `ensureTool` failure for a tool of this install strategy is a
+ * genuine installer defect (RED "fail") rather than "this runner lacks the
+ * toolchain" (⚠ "skip", the same bucket a missing Go/Rust toolchain uses).
+ *
+ * `npm`: this harness itself runs under Node — an npm-strategy tool can
+ * never fail because Node is absent, so an `ensureTool` failure here is
+ * ALWAYS a real installer defect (a dead/renamed package, EBADENGINE, a bad
+ * pin — #2638: `vscode-css-languageserver`'s E404 was folded into the same
+ * "unavailable" skip a genuinely-absent Rust toolchain uses, so the nightly
+ * saw it fail every night without ever going red).
+ * `pip`/`gem`: python/pip or gem might genuinely be absent on this runner,
+ * so the failure counts as genuine only when `toolchainPresent` confirms the
+ * runtime `ensureTool` needed was actually there.
+ *
+ * Every other strategy (`github`/`maven`/`archive`) keeps the existing skip
+ * semantics unchanged — a missing platform/arch release asset is a real
+ * "this runner cannot install this" case, not the #2638 shape.
+ */
+export function isGenuineInstallFailure(installStrategy, toolchainPresent) {
+	if (installStrategy === "npm") return true;
+	if (installStrategy === "pip" || installStrategy === "gem") {
+		return toolchainPresent === true;
+	}
+	return false;
+}
+
+/**
+ * Is `command --version` runnable on this runner? Best-effort, synchronous —
+ * used once per run to decide whether a pip/gem `ensureTool` failure had its
+ * toolchain available (see `isGenuineInstallFailure`).
+ */
+function commandOnPath(command) {
+	try {
+		execFileSync(command, ["--version"], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The first genuine (non-toolchain-absent) install failure among `toolIds`,
+ * or `undefined` when every unavailable tool in the list is legitimately
+ * absent-toolchain. `toolsById` is the TOOLS registry keyed by id;
+ * `failureReasons` is this run's collected `getInstallFailureReason` result
+ * per tool id.
+ */
+export function genuineInstallFailure(
+	toolIds,
+	unavailableTools,
+	toolsById,
+	failureReasons,
+	toolchainPresence,
+) {
+	for (const id of toolIds) {
+		if (!unavailableTools.has(id)) continue;
+		const strategy = toolsById.get(id)?.installStrategy;
+		const present =
+			strategy === "pip" || strategy === "gem"
+				? (toolchainPresence[strategy] ??
+					(toolchainPresence[strategy] = commandOnPath(
+						strategy === "pip" ? "pip" : "gem",
+					)))
+				: undefined;
+		if (isGenuineInstallFailure(strategy, present)) {
+			return {
+				toolId: id,
+				strategy,
+				reason: failureReasons.get(id) ?? "install failed (no reason recorded)",
+			};
+		}
+	}
+	return undefined;
+}
+
 /** Classify one target runner's outcome against the Step-1 bar. */
 function classify(outcome) {
 	if (!outcome) {
@@ -1492,6 +1568,8 @@ async function runLspHandshake({ langs, install, verbose }) {
 	const { initLSPConfig } = await import(pathToFileURL(configEntry).href);
 
 	let ensureTool;
+	let TOOLS_REGISTRY = [];
+	let getInstallFailureReason;
 	if (install) {
 		const installerEntry = path.join(
 			repoRoot,
@@ -1500,8 +1578,16 @@ async function runLspHandshake({ langs, install, verbose }) {
 			"installer",
 			"index.js",
 		);
-		({ ensureTool } = await import(pathToFileURL(installerEntry).href));
+		({
+			ensureTool,
+			TOOLS: TOOLS_REGISTRY,
+			getInstallFailureReason,
+		} = await import(pathToFileURL(installerEntry).href));
 	}
+	const toolsById = new Map(TOOLS_REGISTRY.map((t) => [t.id, t]));
+	// Computed lazily, once per run, the first time a pip/gem tool actually
+	// fails — most runs never touch this.
+	const toolchainPresence = {};
 
 	const selected = langs.length
 		? LSP_FIXTURES.filter((f) => langs.includes(f.lang))
@@ -1515,10 +1601,18 @@ async function runLspHandshake({ langs, install, verbose }) {
 	const rows = [];
 	for (const fx of selected) {
 		const unavailableTools = new Set();
+		const failureReasons = new Map();
 		if (install && ensureTool) {
 			for (const toolId of fx.tools ?? []) {
 				const resolved = await ensureTool(toolId);
-				if (!resolved) unavailableTools.add(toolId);
+				if (!resolved) {
+					unavailableTools.add(toolId);
+					failureReasons.set(
+						toolId,
+						getInstallFailureReason?.(toolId) ??
+							"install failed (no reason recorded)",
+					);
+				}
 				if (verbose) {
 					console.error(
 						`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,
@@ -1674,10 +1768,27 @@ async function runLspHandshake({ langs, install, verbose }) {
 				const auxUnavailable =
 					toolList.length > 0 && toolList.every((t) => unavailableTools.has(t));
 				if (auxDiags.length === 0 && auxUnavailable) {
-					push(
-						"skip",
-						`auxiliary ${auxIds.join(",")} unavailable (tool not installed; pass --install)`,
+					// #2638 review: a genuine install failure (npm/pip with its
+					// toolchain present) is a RED row, not the same "unavailable"
+					// bucket a missing platform toolchain uses.
+					const genuine = genuineInstallFailure(
+						toolList,
+						unavailableTools,
+						toolsById,
+						failureReasons,
+						toolchainPresence,
 					);
+					if (genuine) {
+						push(
+							"fail",
+							`ensureTool(${genuine.toolId}) failed (${genuine.strategy} toolchain present): ${genuine.reason}`,
+						);
+					} else {
+						push(
+							"skip",
+							`auxiliary ${auxIds.join(",")} unavailable (tool not installed; pass --install)`,
+						);
+					}
 					continue;
 				}
 				push(
@@ -1705,11 +1816,27 @@ async function runLspHandshake({ langs, install, verbose }) {
 			if (fx.expectServerId && !threw) {
 				if (!touchedDiags) {
 					// No client became ready — the alternate isn't installed (and
-					// --install wasn't passed or its install failed). Skip, don't fail.
-					push(
-						"skip",
-						`${fx.expectServerId} unavailable (no client ready; pass --install or install ${(fx.tools ?? []).join(",")})`,
+					// --install wasn't passed or its install failed). Skip, unless
+					// the failure was genuine (#2638 review) — then it's a real
+					// installer defect, not an absent toolchain.
+					const genuine = genuineInstallFailure(
+						fx.tools ?? [],
+						unavailableTools,
+						toolsById,
+						failureReasons,
+						toolchainPresence,
 					);
+					if (genuine) {
+						push(
+							"fail",
+							`ensureTool(${genuine.toolId}) failed (${genuine.strategy} toolchain present): ${genuine.reason}`,
+						);
+					} else {
+						push(
+							"skip",
+							`${fx.expectServerId} unavailable (no client ready; pass --install or install ${(fx.tools ?? []).join(",")})`,
+						);
+					}
 					continue;
 				}
 				const active = await lsp.getWarmClientForFile(absFile);
@@ -1822,10 +1949,29 @@ async function runLspHandshake({ langs, install, verbose }) {
 					diags,
 				);
 			} else {
-				push(
-					"skip",
-					`no client ready in ${LSP_CLIENT_WAIT_MS}ms (server missing/slow; try --install)`,
+				// No client ready — either the toolchain this server needs isn't
+				// on this runner (⚠ skip, unchanged), or ensureTool RAN and FAILED
+				// even though its toolchain was present (a real installer defect:
+				// #2638, `vscode-css-languageserver`'s E404 sat in this exact
+				// "skip" bucket every night the nightly ran).
+				const genuine = genuineInstallFailure(
+					fx.tools ?? [],
+					unavailableTools,
+					toolsById,
+					failureReasons,
+					toolchainPresence,
 				);
+				if (genuine) {
+					push(
+						"fail",
+						`ensureTool(${genuine.toolId}) failed (${genuine.strategy} toolchain present): ${genuine.reason}`,
+					);
+				} else {
+					push(
+						"skip",
+						`no client ready in ${LSP_CLIENT_WAIT_MS}ms (server missing/slow; try --install)`,
+					);
+				}
 			}
 		} catch (err) {
 			push("fail", `error: ${err?.message ?? err}`);

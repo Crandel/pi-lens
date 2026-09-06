@@ -12,8 +12,15 @@ import { TOOLS, parsePinnedVersion } from "../../../clients/installer/index.js";
  * This is the missing net: every `installStrategy: "npm"` entry's bare
  * package name (the pin stripped, if any — `parsePinnedVersion` is the
  * production function that already knows how to strip it) must resolve on
- * the real npm registry. Gated behind `PI_LENS_INTEGRATION=1` like the other
- * live-network suites (`typescript-classic-repair.integration.test.ts`,
+ * the real npm registry AT THE VERSION THIS REGISTRY WOULD ACTUALLY INSTALL
+ * (the pin, or `dist-tags.latest` when unpinned) — and that version's own
+ * published `bin` map must contain the entry's `binaryName`. The second half
+ * closes the other #2638 finding: the installer's header comment claimed
+ * this exact server installed from `vscode-langservers-extracted` while the
+ * entry's `packageName` field disagreed, and nothing checked the two against
+ * each other OR against what npm actually publishes. Gated behind
+ * `PI_LENS_INTEGRATION=1` like the other live-network suites
+ * (`typescript-classic-repair.integration.test.ts`,
  * `typescript-native-vitest.integration.test.ts`) — it hits the network and
  * has no place in the default per-PR run; a nightly/tool-smoke lane opts in
  * via the env var.
@@ -39,6 +46,14 @@ function registryPath(bareName: string): string {
 	return encodeURIComponent(bareName);
 }
 
+interface RegistryResolution {
+	ok: boolean;
+	status: number;
+	detail: string;
+	/** The `bin` map of the resolved version, when one was found. */
+	bin?: Record<string, string>;
+}
+
 /**
  * A GET on both a genuinely-unknown name (HTTP 404, body `{"error":"Not
  * found"}`) AND an unpublished package's doc (HTTP 200, a name-squat-
@@ -46,18 +61,24 @@ function registryPath(bareName: string): string {
  * with no `dist-tags` — verified live for both
  * `pi-lens-definitely-does-not-exist-2638` and the exact dead package
  * #2638 shipped, `vscode-css-languageserver`. `npm install`/`npm view`
- * resolve through `dist-tags.latest`, so checking THAT (rather than the
- * HTTP status, which a mutation probe showed never independently
- * distinguishes these two failure shapes from a real install) is the one
- * signal this helper needs; a non-JSON body is a genuine registry/network
- * failure and is left to throw and fail the test loudly rather than being
- * swallowed into a soft "not ok".
+ * resolve through `dist-tags.latest` (or the pinned version, when the
+ * TOOLS entry pins one), so checking THAT (rather than the HTTP status,
+ * which a mutation probe showed never independently distinguishes these
+ * two failure shapes from a real install) is the one signal this helper
+ * needs; a non-JSON body is a genuine registry/network failure and is
+ * left to throw and fail the test loudly rather than being swallowed
+ * into a soft "not ok".
+ *
+ * `wantVersion`, when given, resolves the PINNED version's own manifest
+ * rather than `dist-tags.latest` — the version actually installed can
+ * differ from latest, and its `bin` map is the one that matters (#2638
+ * review: the header/registry-resolve gap this test exists to close is
+ * exactly "the entry and what npm actually publishes disagree").
  */
-async function resolvesOnNpmRegistry(bareName: string): Promise<{
-	ok: boolean;
-	status: number;
-	detail: string;
-}> {
+async function resolvesOnNpmRegistry(
+	bareName: string,
+	wantVersion?: string,
+): Promise<RegistryResolution> {
 	const res = await fetch(
 		`https://registry.npmjs.org/${registryPath(bareName)}`,
 		{ method: "GET" },
@@ -65,6 +86,7 @@ async function resolvesOnNpmRegistry(bareName: string): Promise<{
 	const body = (await res.json()) as {
 		"dist-tags"?: Record<string, string>;
 		time?: { unpublished?: unknown };
+		versions?: Record<string, { bin?: string | Record<string, string> }>;
 	};
 	const latest = body["dist-tags"]?.latest;
 	if (!latest) {
@@ -76,7 +98,28 @@ async function resolvesOnNpmRegistry(bareName: string): Promise<{
 				: `no dist-tags.latest (HTTP ${res.status})`,
 		};
 	}
-	return { ok: true, status: res.status, detail: `latest=${latest}` };
+	const targetVersion = wantVersion ?? latest;
+	const manifest = body.versions?.[targetVersion];
+	if (!manifest) {
+		return {
+			ok: false,
+			status: res.status,
+			detail: `version ${targetVersion} not in the registry's own versions map (latest=${latest})`,
+		};
+	}
+	// npm allows a package's `bin` field to be either a name->path map, or a
+	// bare string — the latter means "one binary, named after the package"
+	// (npm derives the name from `name`, scope stripped).
+	const bin =
+		typeof manifest.bin === "string"
+			? { [bareName.replace(/^@[^/]+\//, "")]: manifest.bin }
+			: (manifest.bin ?? {});
+	return {
+		ok: true,
+		status: res.status,
+		detail: `version=${targetVersion}`,
+		bin,
+	};
 }
 
 describe.skipIf(!RUN_LIVE_REGISTRY_RESOLVE)(
@@ -108,13 +151,29 @@ describe.skipIf(!RUN_LIVE_REGISTRY_RESOLVE)(
 
 		for (const tool of npmTools) {
 			const bareName = bareNpmName(tool.packageName as string);
+			const pinnedVersion = parsePinnedVersion(tool.packageName as string);
 			it(`${tool.id} (${bareName}) resolves on npmjs.org`, async () => {
-				const result = await resolvesOnNpmRegistry(bareName);
+				const result = await resolvesOnNpmRegistry(bareName, pinnedVersion);
 				expect(
 					result.ok,
-					`${tool.id}: package "${bareName}" is not installable (${result.detail}) — the TOOLS entry names a dead/unpublished package and ensureTool() for this id can never succeed`,
+					`${tool.id}: package "${bareName}" is not installable (${result.detail}) — the TOOLS entry names a dead/unpublished package (or a version npm no longer has) and ensureTool() for this id can never succeed`,
 				).toBe(true);
 			});
+
+			// #2638 review: the exact contradiction this issue shipped —
+			// checkCommand/binaryName naming a bin the packageName's OWN
+			// published `bin` map doesn't have — must be caught here, not just
+			// "the package exists".
+			if (tool.binaryName) {
+				it(`${tool.id}: binaryName "${tool.binaryName}" is a real bin of ${bareName}`, async () => {
+					const result = await resolvesOnNpmRegistry(bareName, pinnedVersion);
+					expect(result.ok, `${tool.id}: ${result.detail}`).toBe(true);
+					expect(
+						Object.keys(result.bin ?? {}),
+						`${tool.id}: package "${bareName}"'s bin map does not publish "${tool.binaryName}"`,
+					).toContain(tool.binaryName);
+				});
+			}
 		}
 	},
 );
