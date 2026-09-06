@@ -166,11 +166,16 @@ describe("published package entry points (dist mode, #182)", () => {
 		).toBeUndefined();
 	});
 
-	it("wires the bundle step into build:dist after tsc (#335)", () => {
+	it("wires the bundle step into build:dist after tsc (#335, #2593)", () => {
 		const bd = pkg.scripts?.["build:dist"] ?? "";
-		// tsc must run before the bundle (bundle collapses the tsc emit).
+		// tsc (isolated via scripts/build-dist-tsc.mjs, #2593) must run before
+		// the bundle (bundle collapses the tsc emit).
 		expect(bd).toContain("bundle:dist");
+		expect(bd).toContain("build-dist-tsc.mjs");
 		expect(bd.indexOf("tsconfig.dist.json")).toBeLessThan(
+			bd.indexOf("bundle:dist"),
+		);
+		expect(bd.indexOf("build-dist-tsc.mjs")).toBeLessThan(
 			bd.indexOf("bundle:dist"),
 		);
 		expect(pkg.scripts?.["bundle:dist"] ?? "").toContain("bundle-dist.mjs");
