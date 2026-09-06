@@ -64,7 +64,12 @@ function sliceExportedFunction(source: string, name: string): string {
 	if (start === -1) {
 		throw new Error(`could not find "${startMarker}" in host source`);
 	}
-	const nextDeclMatch = /\n(?:export (?:function|const)\b)/.exec(
+	// `export ` is OPTIONAL in the boundary: a non-exported sibling declared
+	// right after the target (e.g. an unexported `function legacySplitBom`
+	// kept for a deprecation window) must ALSO terminate the slice, or its
+	// body gets swallowed into the target's captured source — the whole
+	// point of scoping the assertion (#2586 review round 3, F4-residual).
+	const nextDeclMatch = /\n(?:(?:export )?(?:function|const)\b)/.exec(
 		source.slice(start + startMarker.length),
 	);
 	const end = nextDeclMatch
