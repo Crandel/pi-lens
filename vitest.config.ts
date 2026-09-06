@@ -337,6 +337,9 @@ const wallClockBudgetInclude = [
 	// #2586 review F1: proves the ACTUAL stdout bytes supply-host-provided-deps.mjs
 	// prints (real child process, flake-shape admission).
 	"tests/scripts/supply-host-provided-deps.test.ts",
+	// #2369: the fixture-ordering defect lives in the CLI's own module-load
+	// order; only a real child process is the script under test.
+	"tests/scripts/smoke-tools-lsp-fixture-registration.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL
