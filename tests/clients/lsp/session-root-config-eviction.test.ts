@@ -27,6 +27,7 @@ import {
 import {
 	initLSPConfig,
 	isServerDisabled,
+	loadLSPConfig,
 	resetLSPConfigStateForTests,
 } from "../../../clients/lsp/config.js";
 import {
@@ -195,6 +196,19 @@ describe("#2518 a live session root's denial survives foreign cwd traffic", () =
 		await loading;
 	}, 60_000);
 
+	it("claims ONE config_resolved row per root across the two loaders", async () => {
+		// `clients/runtime-session.ts`'s warm paths call `loadLSPConfig(cwd)`
+		// directly — no registry, no `initLSPConfig` — with the session cwd
+		// verbatim, while the session's own init passes the registry-resolved
+		// spelling. Both take the SAME once-per-(session, root) claim, so the
+		// row stays one per root; a key normalized per caller instead of once
+		// at the record would let the two spellings claim twice (review F6).
+		const root = denyingRoot();
+		await loadLSPConfig(`${root}${path.sep}`);
+		await initLSPConfig(root);
+		expect(await configResolvedRowsFor(root)).toHaveLength(1);
+	}, 60_000);
+
 	it("records one bounded degradation when the cap drops a served root", async () => {
 		for (let index = 0; index < 130; index++) {
 			await initLSPConfig(foreignRoot(index));
@@ -213,26 +227,36 @@ describe("#2518 a live session root's denial survives foreign cwd traffic", () =
 		expect(evictions[0]?.latestReasons[0]?.reason).toContain("(count: 2)");
 	}, 120_000);
 
-	it("re-arms the config_resolved record for a root the cap dropped", async () => {
-		const root = denyingRoot();
-		await initLSPConfig(root);
-		expect(await configResolvedRowsFor(root)).toHaveLength(1);
+	// `initLSPConfig`'s cwd is NOT canonical in production: `analysisRoot` comes
+	// out of `.pi-lens.json` verbatim and `clients/runtime-session.ts` hands the
+	// session cwd straight to the warm paths, so a trailing slash reaches here.
+	// Both spellings must key the same claim, or the release misses it (review
+	// F6) — parameterized rather than duplicated so the canonical case cannot
+	// drift away from the non-canonical one.
+	for (const spelling of ["canonical", "trailing slash"] as const) {
+		it(`re-arms the config_resolved record for a root the cap dropped (${spelling} cwd)`, async () => {
+			const canonical = denyingRoot();
+			const root =
+				spelling === "canonical" ? canonical : `${canonical}${path.sep}`;
+			await initLSPConfig(root);
+			expect(await configResolvedRowsFor(canonical)).toHaveLength(1);
 
-		// A second resolution of a root that is STILL served needs no second
-		// row — the store already holds that answer.
-		await initLSPConfig(root);
-		expect(await configResolvedRowsFor(root)).toHaveLength(1);
+			// A second resolution of a root that is STILL served needs no second
+			// row — the store already holds that answer.
+			await initLSPConfig(root);
+			expect(await configResolvedRowsFor(canonical)).toHaveLength(1);
 
-		for (let index = 0; index < 129; index++) {
-			await initLSPConfig(foreignRoot(index));
-		}
-		expect(isSessionRootRegistered(root)).toBe(false);
+			for (let index = 0; index < 129; index++) {
+				await initLSPConfig(foreignRoot(index));
+			}
+			expect(isSessionRootRegistered(canonical)).toBe(false);
 
-		// Now the answer is GONE, so the reload is a real second resolution and
-		// must say what it resolved to. Without releasing the once-claim with
-		// the entry, the reload publishes a `config_resolution_pending` mark
-		// that no row ever answers.
-		await initLSPConfig(root);
-		expect(await configResolvedRowsFor(root)).toHaveLength(2);
-	}, 120_000);
+			// Now the answer is GONE, so the reload is a real second resolution and
+			// must say what it resolved to. Without releasing the once-claim with
+			// the entry, the reload publishes a `config_resolution_pending` mark
+			// that no row ever answers.
+			await initLSPConfig(root);
+			expect(await configResolvedRowsFor(canonical)).toHaveLength(2);
+		}, 120_000);
+	}
 });

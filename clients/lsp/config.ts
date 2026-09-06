@@ -283,13 +283,42 @@ const CONFIG_RESOLVED_PHASE = "config_resolved";
  * row, which the analyzer's join reads as "expected and never happened"
  * rather than silently matching "never expected at all".
  *
- * Carries `root=<normalizeFilePath(cwd)>` (#2552 review round 4, MEDIUM): the
+/**
+ * THE (session, root) key of every config-resolution record: the
+ * `config_resolution_pending` mark, the `config_resolved` row and claim, and
+ * the release of that claim when the root is evicted.
+ *
+ * `path.resolve` FIRST, then `normalizeFilePath` (#2518 review F6). The two
+ * are not interchangeable and neither alone is enough: `normalizeFilePath`
+ * folds separators and Windows casing but is the IDENTITY on a POSIX path
+ * that merely needs canonicalizing, so `"/proj/"` and `"/proj"` produced two
+ * different claim keys — and `path.resolve` alone would leave the Windows
+ * casing fold this key has needed since #2552. Resolving here rather than at
+ * each caller is what makes the keys identical BY CONSTRUCTION: the callers
+ * do not agree today (`initLSPConfig` passes its registry-resolved cwd,
+ * `clients/runtime-session.ts`'s two warm-path `loadLSPConfig` calls pass the
+ * session cwd verbatim, and `analysisRoot` from `.pi-lens.json` can carry a
+ * trailing slash), and a per-caller normalization is exactly the shape 1
+ * defect this key keeps being bitten by — the write form and the read form
+ * diverging because two sites each folded the path their own way.
+ *
+ * It is also the key `clients/lsp/session-roots.ts` stores its roots under,
+ * once composed: the registry key is `path.resolve(cwd)`, and this function
+ * applied to it is idempotent, so `forgetConfigResolvedClaims` releases
+ * exactly the claim `recordConfigResolved` took.
+ */
+function configResolutionKey(cwd: string): string {
+	return normalizeFilePath(path.resolve(cwd));
+}
+
+/**
+ * Carries `root=<configResolutionKey(cwd)>` (#2552 review round 4, MEDIUM): the
  * warm MCP server keeps ONE session id for the life of the process but calls
  * this once per SERVED ROOT (`ensureReady` per root, `mcp/server.ts`) — a
  * session-id-only mark let one root's `config_resolved` row silently clear
  * every OTHER root's deficit under the same id, reintroducing review round
  * 2's F3 defect one layer up, at the analyzer's join instead of the claim.
- * The value is the SAME `normalizeFilePath(cwd)` string
+ * The value is the SAME {@link configResolutionKey} string
  * {@link recordConfigResolved} uses for its claim scope and its row's
  * `filePath`, so the mark and the row compare equal without the analyzer
  * re-deriving any path normalization of its own.
@@ -297,7 +326,7 @@ const CONFIG_RESOLVED_PHASE = "config_resolved";
 function publishConfigResolutionPending(cwd: string): void {
 	logSessionStart(
 		`session_start config_resolution_pending session=${currentSessionRecordId()} ` +
-			`root=${normalizeFilePath(cwd)}`,
+			`root=${configResolutionKey(cwd)}`,
 	);
 }
 
@@ -311,8 +340,10 @@ function recordConfigResolved(
 	// #2552 review round 4: computed ONCE and reused for the claim scope, the
 	// row's `filePath`, and the sessionstart line's `root=` — one normalization
 	// of `cwd`, so the pending mark, the row, and the claim can never disagree
-	// about which root they name.
-	const root = normalizeFilePath(cwd);
+	// about which root they name. #2518 review F6 moved that one normalization
+	// into `configResolutionKey`, so callers passing the same root spelled
+	// differently cannot disagree either.
+	const root = configResolutionKey(cwd);
 	if (!claimPhaseOncePerSession(CONFIG_RESOLVED_PHASE, root)) {
 		return;
 	}
@@ -584,13 +615,17 @@ export function registerLSPConfig(config: LSPConfig): RegisteredLSPConfig {
  * Rows stay bounded because evictions do, and evictions are counted:
  * `lsp-session-root-evicted` in the degradation ledger.
  *
- * `normalizeFilePath` is the claim's own key function — the same one
- * `recordConfigResolved` stamps the claim with — not `path.resolve`, so the
- * release cannot miss a claim on a platform where the two differ.
+ * The release derives its key with {@link configResolutionKey}, the ONE
+ * expression the claim itself is taken with — not a second normalization that
+ * happens to match. Round 2 shipped `normalizeFilePath(root)` here against a
+ * claim keyed on the caller's own `normalizeFilePath(cwd)`, which is the same
+ * string only when `path.resolve` is the identity on that cwd: a trailing
+ * slash (what `analysisRoot` from `.pi-lens.json` and the warm paths can pass)
+ * made the release miss and the reload silent again (review F6).
  */
 function forgetConfigResolvedClaims(evictedRoots: readonly string[]): void {
 	for (const root of evictedRoots) {
-		releasePhaseClaim(CONFIG_RESOLVED_PHASE, normalizeFilePath(root));
+		releasePhaseClaim(CONFIG_RESOLVED_PHASE, configResolutionKey(root));
 	}
 }
 
