@@ -17,7 +17,6 @@ import * as path from "node:path";
 import { win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { minimatch } from "./deps/minimatch.js";
-import { escapeRegExp } from "./string-utils.js";
 
 /**
  * Detect a positively Windows-shaped path, regardless of the host OS.
@@ -781,100 +780,218 @@ function findCharacterClassEnd(segment: string, open: number): number {
 	return -1;
 }
 
-/** Compile one `/`-delimited glob run into a regex source under `dialect`. */
-function globRunToRegExpSource(
-	run: string,
-	dialect: WorkspaceMemberGlobDialect,
-): string {
-	const anyRun = dialect.wildcardCrossesSeparator ? ".*" : "[^/]*";
-	const anyChar = dialect.wildcardCrossesSeparator ? "." : "[^/]";
-	let out = "";
-	for (let i = 0; i < run.length; i += 1) {
-		const ch = run[i];
-		if (ch === "*") {
-			out += anyRun;
-			continue;
-		}
-		if (ch === "?") {
-			out += anyChar;
-			continue;
-		}
-		if (ch === "[" && dialect.characterClasses) {
-			const close = findCharacterClassEnd(run, i);
-			if (close !== -1) {
-				// `\` and a first-position `]` are literal class MEMBERS in glob;
-				// left alone they would be a regex escape and an empty-class
-				// terminator (`[]ab]` is `[]` + `ab]` in JS), so both are escaped.
-				const body = run.slice(i + 1, close).replace(/[\\\]]/g, "\\$&");
-				out += `[${body.startsWith("!") ? `^${body.slice(1)}` : body}]`;
-				i = close;
-				continue;
-			}
-		}
-		out += escapeRegExp(ch);
-	}
-	return out;
+/**
+ * One step of a compiled workspace-member pattern. Every step consumes a
+ * BOUNDED amount of the path (one character, or one character at a time under
+ * its own repeat), which is what makes the evaluator below non-backtracking:
+ * there is no nested quantifier for a backtracking engine to explore.
+ *
+ * - `literal` — this exact code unit, `/` included.
+ * - `one` / `star` — a `?` / `*`, consuming one / any number of characters
+ *   that {@link stepAcceptsChar} admits.
+ * - `class` — a `[abc]`/`[!abc]` run, compiled to a one-character regex. This
+ *   is the only compiled regex left in the matcher, and it is bounded by
+ *   construction: one class, no quantifier, tested against a one-character
+ *   string.
+ * - `split` — an epsilon fork: match from `alternative`, or from the next
+ *   step. Only a `**` emits one, to express "zero or more whole components".
+ */
+type WorkspaceGlobStep =
+	| { readonly kind: "literal"; readonly char: string }
+	| { readonly kind: "one"; readonly crossesSeparator: boolean }
+	| { readonly kind: "star"; readonly crossesSeparator: boolean }
+	| { readonly kind: "class"; readonly match: RegExp }
+	| WorkspaceGlobSplit;
+
+/** The one mutable step: `alternative` is back-patched once the group it skips is emitted. */
+interface WorkspaceGlobSplit {
+	readonly kind: "split";
+	alternative: number;
 }
 
 /**
- * Compile a normalized workspace-member pattern into an anchored whole-path
- * regex, or `undefined` when the pattern cannot compile.
+ * May a wildcard with this separator policy consume `ch`?
+ *
+ * A separator-confined wildcard (`[^/]` in the regex this replaced) takes
+ * anything but `/`. A separator-CROSSING one — uv `exclude`'s `*`/`?`, and
+ * every `**` in either uv dialect — spelled `.` in that regex, which is every
+ * code unit EXCEPT the four line terminators. That exclusion is preserved
+ * deliberately rather than "fixed": minimatch's globstar is `.`-based too, so
+ * a `\n` inside a directory name has never matched across a `**` in either
+ * implementation, and the differential oracle would flag a change here as a
+ * divergence rather than an improvement (#2603).
+ */
+function stepAcceptsChar(crossesSeparator: boolean, ch: string): boolean {
+	return crossesSeparator
+		? ch !== "\n" && ch !== "\r" && ch !== "\u2028" && ch !== "\u2029"
+		: ch !== "/";
+}
+
+/**
+ * Compile a normalized workspace-member pattern into a step list, or
+ * `undefined` when it cannot be compiled at all.
  *
  * A `**` component consumes zero or more path components — except as the LAST
  * component, where it requires at least one (`a/**` matches `a/b`, not `a`),
- * reproducing both minimatch's and rust `glob`'s answer.
- *
- * CONSECUTIVE `**` COMPONENTS COLLAPSE TO ONE (#2591 review round 2, F1),
- * which is exactly what upstream does: `rust-lang/glob@cfa2a58f2e44373573f657ec25b3621e44714dee`,
- * `src/lib.rs:672-684`, "collapse consecutive AnyRecursiveSequence to a single
- * one". It is also the difference between linear and exponential matching here:
- * each `**` emits its own `(?:.+/)?`, and N adjacent nullable `.+` groups
- * backtrack 2^N ways against a long non-matching path. Measured through
- * `detectPythonEnvironment` before the collapse, 21-component path: 8 chained
- * `**` = 69ms, 10 = 701ms, 12 = 5739ms (minimatch, which collapses: ~0.2ms
- * flat). That call is awaited with no timeout by `test-runner-client.ts`,
- * `dispatch/runners/pyright.ts` and `lsp/server.ts`, so the blowup is a hang,
- * not a slow answer. Collapsing is semantics-preserving — `a/**\/**\/b` and
- * `a/**\/b` accept the same set — so this is purely the upstream-faithful
- * normalization, not a behavior change.
+ * reproducing both minimatch's and rust `glob`'s answer. It is emitted as
+ * `split → one → star → literal "/"`, i.e. "nothing, or one-or-more characters
+ * followed by the `/` that ends them", after the separator that precedes it.
+ * That is the same language as the `(?:/.+)?/` group the previous compiler
+ * emitted — `X(?:/.+)?/Y` and `X/(?:.+/)?Y` both denote `X/Y` ∪ `X/.+/Y` — in a
+ * form with no nested quantifier.
  */
 function compileWorkspaceMemberPattern(
 	pattern: string,
 	dialect: WorkspaceMemberGlobDialect,
-): RegExp | undefined {
+): WorkspaceGlobStep[] | undefined {
 	const isGlobstar = (component: string): boolean =>
 		component === "**" && dialect.globstar === "crosses-components";
-	const components = pattern
-		.split("/")
-		.filter(
-			(component, i, all) => !(isGlobstar(component) && isGlobstar(all[i - 1])),
-		);
-	let source = "";
+	const components = pattern.split("/");
+	const steps: WorkspaceGlobStep[] = [];
 	let needSeparator = false;
-	for (let i = 0; i < components.length; i += 1) {
-		if (!isGlobstar(components[i])) {
-			if (needSeparator) source += "/";
-			source += globRunToRegExpSource(components[i], dialect);
-			needSeparator = true;
+	for (let c = 0; c < components.length; c += 1) {
+		if (needSeparator) steps.push({ kind: "literal", char: "/" });
+		needSeparator = false;
+		const component = components[c];
+		if (isGlobstar(component)) {
+			if (c === components.length - 1) {
+				// `.+` — a trailing `**` requires at least one character.
+				steps.push({ kind: "one", crossesSeparator: true });
+				steps.push({ kind: "star", crossesSeparator: true });
+				continue;
+			}
+			// `(?:.+/)?` — zero or more whole components. The group already ends
+			// at a `/`, so the next component must NOT emit one.
+			const split: WorkspaceGlobSplit = { kind: "split", alternative: -1 };
+			steps.push(split);
+			steps.push({ kind: "one", crossesSeparator: true });
+			steps.push({ kind: "star", crossesSeparator: true });
+			steps.push({ kind: "literal", char: "/" });
+			split.alternative = steps.length;
 			continue;
 		}
-		if (i === components.length - 1) {
-			source += needSeparator ? "/.+" : ".+";
-		} else {
-			source += needSeparator ? "(?:/.+)?/" : "(?:.+/)?";
+		for (let i = 0; i < component.length; i += 1) {
+			const ch = component[i];
+			if (ch === "*") {
+				steps.push({
+					kind: "star",
+					crossesSeparator: dialect.wildcardCrossesSeparator,
+				});
+				continue;
+			}
+			if (ch === "?") {
+				steps.push({
+					kind: "one",
+					crossesSeparator: dialect.wildcardCrossesSeparator,
+				});
+				continue;
+			}
+			if (ch === "[" && dialect.characterClasses) {
+				const close = findCharacterClassEnd(component, i);
+				if (close !== -1) {
+					// `\` and a first-position `]` are literal class MEMBERS in glob;
+					// left alone they would be a regex escape and an empty-class
+					// terminator (`[]ab]` is `[]` + `ab]` in JS), so both are escaped.
+					const body = component.slice(i + 1, close).replace(/[\\\]]/g, "\\$&");
+					const source = body.startsWith("!")
+						? `[^${body.slice(1)}]`
+						: `[${body}]`;
+					let match: RegExp;
+					try {
+						match = new RegExp(`^${source}$`);
+					} catch {
+						// A glob character class is not a JS character class: `[z-a]`
+						// is a legal glob (matching nothing, since the range is empty)
+						// and an illegal RegExp ("Range out of order"). Fail CLOSED —
+						// an uncompilable pattern declares no member and excludes
+						// nothing — which is also the answer the deleted minimatch call
+						// gave (#2591 review round 2, F2).
+						return undefined;
+					}
+					steps.push({ kind: "class", match });
+					i = close;
+					continue;
+				}
+			}
+			steps.push({ kind: "literal", char: ch });
 		}
-		needSeparator = false;
+		needSeparator = true;
 	}
-	try {
-		return new RegExp(`^${source}$`);
-	} catch {
-		// A glob character class is not a JS character class: `[z-a]` is a legal
-		// glob (matching nothing, since the range is empty) and an illegal RegExp
-		// ("Range out of order"). Fail CLOSED — an uncompilable pattern declares
-		// no member and excludes nothing — which is also the answer the deleted
-		// minimatch call gave (#2591 review round 2, F2).
-		return undefined;
+	return steps;
+}
+
+/**
+ * Does the whole of `subject` match the whole of `steps`?
+ *
+ * A memoized (step index, path index) table, filled once, bottom-up:
+ * `table[s][p]` is "steps `s…` match `subject[p…]`". Every cell reads only
+ * cells with a larger step index or a larger path index, so one backward
+ * double loop fills the table with no recursion and no re-entry — the match is
+ * O(steps x characters) in time and space, with no path through it that can
+ * take exponential time (#2603).
+ *
+ * The compiled whole-path regex this replaced was correct but backtracking:
+ * every `**` emitted its own nullable `.+`, and N of them explored 2^N splits
+ * of a non-matching subject. #2591 collapsed CONSECUTIVE `**`s, which is a
+ * normalization that cannot fire across a separating component, so
+ * `("**\/*" x12)/zzz` against a 40-component path still took 124900 ms (#2603);
+ * the same shapes are microseconds here. There is nothing left to collapse for
+ * speed, so no collapse is done: `a/**\/**\/b` compiles to two adjacent
+ * `(?:.+/)?` groups, which denote the same language as one and cost the same
+ * table.
+ */
+function matchesWorkspaceMemberSteps(
+	steps: readonly WorkspaceGlobStep[],
+	subject: string,
+): boolean {
+	const stepCount = steps.length;
+	const width = subject.length + 1;
+	// One byte per (step, position) cell; `1` means "the rest matches from here".
+	const table = new Uint8Array((stepCount + 1) * width);
+	for (let p = subject.length; p >= 0; p -= 1) {
+		const atEnd = p === subject.length;
+		// The empty step list matches only the empty remainder.
+		table[stepCount * width + p] = atEnd ? 1 : 0;
+		for (let s = stepCount - 1; s >= 0; s -= 1) {
+			const step = steps[s];
+			const next = (s + 1) * width;
+			let matched = 0;
+			switch (step.kind) {
+				case "literal":
+					matched =
+						!atEnd && subject[p] === step.char ? table[next + p + 1] : 0;
+					break;
+				case "one":
+					matched =
+						!atEnd && stepAcceptsChar(step.crossesSeparator, subject[p])
+							? table[next + p + 1]
+							: 0;
+					break;
+				case "class":
+					matched =
+						!atEnd && step.match.test(subject[p]) ? table[next + p + 1] : 0;
+					break;
+				case "star":
+					// Consume nothing, or one more character and stay on this step.
+					matched =
+						table[next + p] === 1 ||
+						(!atEnd &&
+							stepAcceptsChar(step.crossesSeparator, subject[p]) &&
+							table[s * width + p + 1] === 1)
+							? 1
+							: 0;
+					break;
+				case "split":
+					matched =
+						table[step.alternative * width + p] === 1 || table[next + p] === 1
+							? 1
+							: 0;
+					break;
+			}
+			table[s * width + p] = matched;
+		}
 	}
+	return table[0] === 1;
 }
 
 /**
@@ -902,6 +1019,18 @@ function compileWorkspaceMemberPattern(
  * uv's own `glob` crate does not honor them either (same pinned SHA), so
  * dropping them moves uv toward upstream rather than away from it.
  *
+ * Matching is NON-BACKTRACKING (#2603): the pattern compiles to a list of
+ * bounded steps and {@link matchesWorkspaceMemberSteps} decides it with one
+ * memoized (step, position) table, O(steps x characters), no matter how many
+ * `**`s the pattern carries. The anchored whole-path regex this replaced was
+ * correct but explored 2^N splits of a non-matching path for N `**`
+ * components — 124900 ms for `("**\/*" x12)/zzz` against a 40-component path,
+ * on a call `detectPythonEnvironment` awaits with no timeout, i.e. a wedged
+ * turn rather than a slow answer. The wall-clock half of that fix lives in
+ * `tests/clients/workspace-glob-nonbacktracking-budget.test.ts`; the answers
+ * are unchanged, pinned by the dialect table and the minimatch differential in
+ * `tests/clients/path-utils.test.ts`.
+ *
  * A pattern that cannot be compiled at all answers `false` for every path —
  * it declares no member and excludes nothing (#2591 review round 2, F2). The
  * only such patterns today carry an empty character-class range (`[z-a]`:
@@ -926,9 +1055,9 @@ export function matchesWorkspaceMemberPattern(
 	) {
 		return false;
 	}
+	const steps = compileWorkspaceMemberPattern(normalized, dialect);
 	return (
-		compileWorkspaceMemberPattern(normalized, dialect)?.test(relativePath) ??
-		false
+		steps !== undefined && matchesWorkspaceMemberSteps(steps, relativePath)
 	);
 }
 
