@@ -5,11 +5,16 @@ name: Tool smoke (nightly)
 # path against per-language fixtures — so it's slow and network-dependent, hence
 # nightly + manual only, never a per-PR gate.
 #
-# The harness exits nonzero only on genuine infra failures (timeout / exception
-# / server_error). A tool that's merely unavailable (couldn't install on the
-# runner) reports ⚠ and does NOT fail the run, so transient install/network
-# flakiness doesn't produce false alarms — the printed report still shows the
-# ⚠ counts for review.
+# The harness exits nonzero on genuine infra failures (timeout / exception /
+# server_error) AND on a genuine installer defect: an ensureTool failure for a
+# strategy whose toolchain this runner has (npm always, since the harness
+# itself runs under Node; pip/gem when confirmed present) reports ✗ and DOES
+# fail the run (#2638/#2661 — a dead/renamed npm package used to report the
+# same ⚠ a missing toolchain does, and sat unnoticed for months). A tool that
+# is declined/skipped by policy, genuinely lacks its toolchain on this runner,
+# or hit a transient/offline registry condition (no network, a registry 5xx)
+# reports ⚠ and does NOT fail the run — the printed report still shows the ⚠
+# counts for review.
 
 on:
   schedule:

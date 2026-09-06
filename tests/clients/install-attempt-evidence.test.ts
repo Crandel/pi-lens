@@ -148,8 +148,9 @@ describe("the installer records what its attempt did (#1500)", () => {
 	// needs the ACTUAL npm error text, not the generic "install failed"
 	// fallback `finishInstallAttempt` uses when nothing set
 	// `installFailureReasons` — the tool-smoke lane's classification
-	// (`scripts/smoke-tools.mjs`'s `genuineInstallFailure`) reads exactly
-	// this to decide RED vs the toolchain-absent ⚠ skip.
+	// (`scripts/smoke-tools.mjs`'s `classifyInstallOutcome`) reads exactly
+	// this (via `getInstallAttempt(...).reason`) to decide RED vs the
+	// toolchain-absent ⚠ skip.
 	it("a genuine npm install failure records the real registry error, not a generic fallback", async () => {
 		safeSpawnAsync.mockResolvedValue(npmFailed);
 		const { ensureTool, getInstallFailureReason, getInstallAttempt } =
@@ -160,6 +161,30 @@ describe("the installer records what its attempt did (#1500)", () => {
 		expect(reason).toContain("404 Not Found");
 		expect(reason).toContain("fish-lsp");
 		expect(getInstallAttempt("fish-lsp")?.reason).toBe(reason);
+	});
+
+	// #2661 review F4: `installPipTool`'s own catch swallowed its error
+	// byte-identically to `installNpmTool`'s pre-fix bug — every pip-strategy
+	// tool (cmake-language-server, jedi-language-server, …) that genuinely
+	// failed to install recorded the same generic fallback, indistinguishable
+	// from a policy decline to any caller reading `getInstallAttempt`.
+	it("a genuine pip install failure records the real pip error, not a generic fallback", async () => {
+		const pipFailed = {
+			stdout: "",
+			stderr: "ERROR: Could not find a version that satisfies the requirement cmake-language-server",
+			status: 1,
+		};
+		safeSpawnAsync.mockResolvedValue(pipFailed);
+		const { ensureTool, getInstallFailureReason, getInstallAttempt } =
+			await installer();
+
+		expect(await ensureTool("cmake-language-server")).toBeUndefined();
+		const attempt = getInstallAttempt("cmake-language-server");
+		expect(attempt?.outcome).toBe("failed");
+		const reason = getInstallFailureReason("cmake-language-server");
+		expect(reason).toContain("cmake-language-server");
+		expect(reason).not.toBe("install failed");
+		expect(attempt?.reason).toBe(reason);
 	});
 
 	it("a successful install records succeeded", async () => {

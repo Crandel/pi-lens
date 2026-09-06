@@ -1407,37 +1407,30 @@ export function passFloorBreach(rows, minPass) {
 ✗ pass floor: ${passed} runner(s) passed, at least ${minPass} required (${unavailable} unavailable). A lane that installs nothing proves nothing — treat this as red, not as flaky tooling.`;
 }
 
+// A transient/offline registry condition — the runner has no network, or the
+// registry itself is down, neither of which is "this runner lacks a
+// toolchain" or "the installer has a defect" (#2661 review F2). E5xx covers
+// the registry's own 5xx responses; the rest are Node's own connect-failure
+// errno strings.
+const TRANSIENT_NETWORK_PATTERN = /ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN|E5\d\d/;
+
 /**
- * Whether an `ensureTool` failure for a tool of this install strategy is a
- * genuine installer defect (RED "fail") rather than "this runner lacks the
- * toolchain" (⚠ "skip", the same bucket a missing Go/Rust toolchain uses).
- *
- * `npm`: this harness itself runs under Node — an npm-strategy tool can
- * never fail because Node is absent, so an `ensureTool` failure here is
- * ALWAYS a real installer defect (a dead/renamed package, EBADENGINE, a bad
- * pin — #2638: `vscode-css-languageserver`'s E404 was folded into the same
- * "unavailable" skip a genuinely-absent Rust toolchain uses, so the nightly
- * saw it fail every night without ever going red).
- * `pip`/`gem`: python/pip or gem might genuinely be absent on this runner,
- * so the failure counts as genuine only when `toolchainPresent` confirms the
- * runtime `ensureTool` needed was actually there.
- *
- * Every other strategy (`github`/`maven`/`archive`) keeps the existing skip
- * semantics unchanged — a missing platform/arch release asset is a real
- * "this runner cannot install this" case, not the #2638 shape.
+ * The first non-empty line of `text`, capped at 200 chars — the same bound
+ * `describeInstallAttempt` (`clients/dispatch/runners/utils/availability-
+ * policy.ts`) uses for a free-text installer reason, so a row detail is one
+ * line long instead of spilling a whole `npm ERR!` transcript into the table
+ * (#2661 review F5).
  */
-export function isGenuineInstallFailure(installStrategy, toolchainPresent) {
-	if (installStrategy === "npm") return true;
-	if (installStrategy === "pip" || installStrategy === "gem") {
-		return toolchainPresent === true;
-	}
-	return false;
+function firstLine(text) {
+	const line = String(text ?? "")
+		.split(/\r?\n/)
+		.find((l) => l.trim().length > 0);
+	if (!line) return "";
+	return line.length > 200 ? `${line.slice(0, 200)}…` : line;
 }
 
 /**
- * Is `command --version` runnable on this runner? Best-effort, synchronous —
- * used once per run to decide whether a pip/gem `ensureTool` failure had its
- * toolchain available (see `isGenuineInstallFailure`).
+ * Is `command --version` runnable on this runner? Best-effort, synchronous.
  */
 function commandOnPath(command) {
 	try {
@@ -1449,38 +1442,104 @@ function commandOnPath(command) {
 }
 
 /**
- * The first genuine (non-toolchain-absent) install failure among `toolIds`,
- * or `undefined` when every unavailable tool in the list is legitimately
- * absent-toolchain. `toolsById` is the TOOLS registry keyed by id;
- * `failureReasons` is this run's collected `getInstallFailureReason` result
- * per tool id.
+ * Is a pip or gem toolchain reachable on this runner? For pip, tries every
+ * candidate the installer itself would try (`pipCommandCandidates()`, #2661
+ * review S5 — probing bare `pip` alone missed a `pip3`-only or
+ * python-module-only runner); for gem, the installer uses a single `gem`
+ * command. Cached per run in `toolchainPresence` (keyed by strategy) since
+ * this only needs to run once even if several pip/gem tools are unavailable.
  */
-export function genuineInstallFailure(
+function toolchainPresent(strategy, toolchainPresence, pipCandidates) {
+	const cached = toolchainPresence[strategy];
+	if (cached !== undefined) return cached;
+	const present =
+		strategy === "gem"
+			? commandOnPath("gem")
+			: pipCandidates.some((cmd) => commandOnPath(cmd));
+	toolchainPresence[strategy] = present;
+	return present;
+}
+
+/**
+ * Classify why `toolId` (one of a fixture's declared `tools`) never resolved
+ * via `ensureTool`, using the installer's own ATTEMPT record — never the
+ * `getInstallFailureReason` refusal map alone, which (per its own doc comment
+ * in `clients/installer/index.ts`) cannot answer whether an install even RAN
+ * (#2661 review F1: the previous version of this function inferred
+ * "genuine" from strategy + that map alone, so `PI_LENS_DISABLE_TOOL_INSTALL`,
+ * an install-lock timeout, and a project-trust decline — none of which ran an
+ * install at all — were all misclassified as a genuine installer defect).
+ *
+ * `{ row: "fail", detail }` only when ALL of:
+ *  - `getInstallAttempt(toolId).outcome === "failed"` — an install genuinely
+ *    RAN and did not succeed (excludes `declined`/`skipped`/no attempt);
+ *  - the reason isn't a transient/offline registry condition (F2) — a runner
+ *    with no network is a runner condition, not an installer defect;
+ *  - the strategy needed no toolchain this runner lacks: `npm` is always
+ *    genuine (this harness itself runs under Node, so Node can never be
+ *    "absent" for it); `pip`/`gem` only when `toolchainPresent` confirms the
+ *    runtime was actually there; every other strategy (`github`/`maven`/
+ *    `archive`) keeps the pre-#2638 skip semantics — a missing platform/arch
+ *    release asset is a real "this runner cannot install this" case.
+ *
+ * Every other case is `{ row: "skip", detail }` — the historical behavior.
+ */
+export function classifyInstallOutcome(toolId, deps) {
+	const { getInstallAttempt, toolsById, toolchainPresence, pipCandidates } =
+		deps;
+	const attempt = getInstallAttempt(toolId);
+	if (attempt?.outcome !== "failed") {
+		return {
+			row: "skip",
+			detail: `${toolId} unavailable (${attempt?.outcome ?? "no install attempt"}${attempt?.reason ? `: ${firstLine(attempt.reason)}` : ""})`,
+		};
+	}
+	const reason = attempt.reason ?? "install failed (no reason recorded)";
+	if (TRANSIENT_NETWORK_PATTERN.test(reason)) {
+		return {
+			row: "skip",
+			detail: `${toolId} unavailable (transient registry/network condition: ${firstLine(reason)})`,
+		};
+	}
+	const strategy = toolsById.get(toolId)?.installStrategy;
+	const genuine =
+		strategy === "npm"
+			? true
+			: strategy === "pip" || strategy === "gem"
+				? toolchainPresent(strategy, toolchainPresence, pipCandidates)
+				: false;
+	if (!genuine) {
+		return {
+			row: "skip",
+			detail: `${toolId} unavailable (no ${strategy ?? "known"} toolchain on this runner)`,
+		};
+	}
+	return {
+		row: "fail",
+		detail: `ensureTool(${toolId}) failed (${strategy} toolchain present): ${firstLine(reason)}`,
+	};
+}
+
+/**
+ * The row this fixture's `ensureTool` step should report: the first GENUINE
+ * install failure among `toolIds` (see `classifyInstallOutcome`), or the
+ * given fallback "skip" detail when every unavailable tool in the list is
+ * legitimately declined/skipped/toolchain-absent/transient. The single call
+ * site all three `runLspHandshake` unavailability branches share (#2661
+ * review F3 — three near-identical inline blocks collapsed to one).
+ */
+export function resolveUnavailabilityRow(
 	toolIds,
 	unavailableTools,
-	toolsById,
-	failureReasons,
-	toolchainPresence,
+	deps,
+	fallbackSkipDetail,
 ) {
 	for (const id of toolIds) {
 		if (!unavailableTools.has(id)) continue;
-		const strategy = toolsById.get(id)?.installStrategy;
-		const present =
-			strategy === "pip" || strategy === "gem"
-				? (toolchainPresence[strategy] ??
-					(toolchainPresence[strategy] = commandOnPath(
-						strategy === "pip" ? "pip" : "gem",
-					)))
-				: undefined;
-		if (isGenuineInstallFailure(strategy, present)) {
-			return {
-				toolId: id,
-				strategy,
-				reason: failureReasons.get(id) ?? "install failed (no reason recorded)",
-			};
-		}
+		const outcome = classifyInstallOutcome(id, deps);
+		if (outcome.row === "fail") return outcome;
 	}
-	return undefined;
+	return { row: "skip", detail: fallbackSkipDetail };
 }
 
 /** Classify one target runner's outcome against the Step-1 bar. */
@@ -1569,7 +1628,8 @@ async function runLspHandshake({ langs, install, verbose }) {
 
 	let ensureTool;
 	let TOOLS_REGISTRY = [];
-	let getInstallFailureReason;
+	let getInstallAttempt;
+	let pipCandidates = [];
 	if (install) {
 		const installerEntry = path.join(
 			repoRoot,
@@ -1578,16 +1638,27 @@ async function runLspHandshake({ langs, install, verbose }) {
 			"installer",
 			"index.js",
 		);
+		let pipCommandCandidatesFn;
 		({
 			ensureTool,
 			TOOLS: TOOLS_REGISTRY,
-			getInstallFailureReason,
+			getInstallAttempt,
+			pipCommandCandidates: pipCommandCandidatesFn,
 		} = await import(pathToFileURL(installerEntry).href));
+		// The SAME candidate ladder `installPipTool` tries (#2661 review S5) —
+		// never a second, independently-maintained guess.
+		pipCandidates = pipCommandCandidatesFn?.() ?? [];
 	}
 	const toolsById = new Map(TOOLS_REGISTRY.map((t) => [t.id, t]));
 	// Computed lazily, once per run, the first time a pip/gem tool actually
 	// fails — most runs never touch this.
 	const toolchainPresence = {};
+	const classifyDeps = {
+		getInstallAttempt: getInstallAttempt ?? (() => undefined),
+		toolsById,
+		toolchainPresence,
+		pipCandidates,
+	};
 
 	const selected = langs.length
 		? LSP_FIXTURES.filter((f) => langs.includes(f.lang))
@@ -1601,18 +1672,10 @@ async function runLspHandshake({ langs, install, verbose }) {
 	const rows = [];
 	for (const fx of selected) {
 		const unavailableTools = new Set();
-		const failureReasons = new Map();
 		if (install && ensureTool) {
 			for (const toolId of fx.tools ?? []) {
 				const resolved = await ensureTool(toolId);
-				if (!resolved) {
-					unavailableTools.add(toolId);
-					failureReasons.set(
-						toolId,
-						getInstallFailureReason?.(toolId) ??
-							"install failed (no reason recorded)",
-					);
-				}
+				if (!resolved) unavailableTools.add(toolId);
 				if (verbose) {
 					console.error(
 						`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,
@@ -1768,27 +1831,16 @@ async function runLspHandshake({ langs, install, verbose }) {
 				const auxUnavailable =
 					toolList.length > 0 && toolList.every((t) => unavailableTools.has(t));
 				if (auxDiags.length === 0 && auxUnavailable) {
-					// #2638 review: a genuine install failure (npm/pip with its
+					// #2638/#2661 review: a genuine install failure (npm/pip with its
 					// toolchain present) is a RED row, not the same "unavailable"
-					// bucket a missing platform toolchain uses.
-					const genuine = genuineInstallFailure(
+					// bucket a declined/skipped/toolchain-absent install uses.
+					const outcome = resolveUnavailabilityRow(
 						toolList,
 						unavailableTools,
-						toolsById,
-						failureReasons,
-						toolchainPresence,
+						classifyDeps,
+						`auxiliary ${auxIds.join(",")} unavailable (tool not installed; pass --install)`,
 					);
-					if (genuine) {
-						push(
-							"fail",
-							`ensureTool(${genuine.toolId}) failed (${genuine.strategy} toolchain present): ${genuine.reason}`,
-						);
-					} else {
-						push(
-							"skip",
-							`auxiliary ${auxIds.join(",")} unavailable (tool not installed; pass --install)`,
-						);
-					}
+					push(outcome.row, outcome.detail);
 					continue;
 				}
 				push(
@@ -1817,26 +1869,15 @@ async function runLspHandshake({ langs, install, verbose }) {
 				if (!touchedDiags) {
 					// No client became ready — the alternate isn't installed (and
 					// --install wasn't passed or its install failed). Skip, unless
-					// the failure was genuine (#2638 review) — then it's a real
-					// installer defect, not an absent toolchain.
-					const genuine = genuineInstallFailure(
+					// the failure was genuine (#2638/#2661 review) — then it's a
+					// real installer defect, not an absent toolchain.
+					const outcome = resolveUnavailabilityRow(
 						fx.tools ?? [],
 						unavailableTools,
-						toolsById,
-						failureReasons,
-						toolchainPresence,
+						classifyDeps,
+						`${fx.expectServerId} unavailable (no client ready; pass --install or install ${(fx.tools ?? []).join(",")})`,
 					);
-					if (genuine) {
-						push(
-							"fail",
-							`ensureTool(${genuine.toolId}) failed (${genuine.strategy} toolchain present): ${genuine.reason}`,
-						);
-					} else {
-						push(
-							"skip",
-							`${fx.expectServerId} unavailable (no client ready; pass --install or install ${(fx.tools ?? []).join(",")})`,
-						);
-					}
+					push(outcome.row, outcome.detail);
 					continue;
 				}
 				const active = await lsp.getWarmClientForFile(absFile);
@@ -1954,24 +1995,13 @@ async function runLspHandshake({ langs, install, verbose }) {
 				// even though its toolchain was present (a real installer defect:
 				// #2638, `vscode-css-languageserver`'s E404 sat in this exact
 				// "skip" bucket every night the nightly ran).
-				const genuine = genuineInstallFailure(
+				const outcome = resolveUnavailabilityRow(
 					fx.tools ?? [],
 					unavailableTools,
-					toolsById,
-					failureReasons,
-					toolchainPresence,
+					classifyDeps,
+					`no client ready in ${LSP_CLIENT_WAIT_MS}ms (server missing/slow; try --install)`,
 				);
-				if (genuine) {
-					push(
-						"fail",
-						`ensureTool(${genuine.toolId}) failed (${genuine.strategy} toolchain present): ${genuine.reason}`,
-					);
-				} else {
-					push(
-						"skip",
-						`no client ready in ${LSP_CLIENT_WAIT_MS}ms (server missing/slow; try --install)`,
-					);
-				}
+				push(outcome.row, outcome.detail);
 			}
 		} catch (err) {
 			push("fail", `error: ${err?.message ?? err}`);

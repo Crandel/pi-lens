@@ -93,35 +93,52 @@ export function passFloorBreach(
 ): string | null;
 /** Fixtures flagged `tier1` — the scheduled parser lane's selection. */
 export function tier1Fixtures(): SmokeFixture[];
-/**
- * Whether an `ensureTool` failure for a tool of install strategy
- * `installStrategy` is a genuine installer defect (should be reported as a
- * fail) rather than "this runner lacks the toolchain" (#2638). `npm` is
- * always genuine (this harness itself runs under Node); `pip`/`gem` are
- * genuine only when `toolchainPresent` is `true`; every other strategy is
- * never genuine (unchanged toolchain-absent semantics).
- */
-export function isGenuineInstallFailure(
-	installStrategy: string | undefined,
-	toolchainPresent: boolean | undefined,
-): boolean;
 /** One TOOLS registry entry, as far as this classification cares. */
 export interface SmokeToolDefinition {
 	installStrategy?: string;
 }
+/** The installer's own record of what its last install attempt for a tool did. */
+export interface SmokeInstallAttempt {
+	outcome: "succeeded" | "failed" | "declined" | "skipped";
+	reason?: string;
+}
+export interface ClassifyInstallOutcomeDeps {
+	getInstallAttempt: (toolId: string) => SmokeInstallAttempt | undefined;
+	toolsById: ReadonlyMap<string, SmokeToolDefinition>;
+	toolchainPresence: Record<string, boolean>;
+	/** The pip command ladder to probe, in priority order (installer's own). */
+	pipCandidates: readonly string[];
+}
+export interface InstallOutcomeRow {
+	row: "fail" | "skip";
+	detail: string;
+}
 /**
- * The first genuine (non-toolchain-absent) install failure among `toolIds`,
- * or `undefined` when every unavailable tool in the list is legitimately
- * absent-toolchain. `toolchainPresence` is a per-run cache keyed by strategy
- * ("pip"/"gem"), populated lazily and reused across calls.
+ * Classify why `toolId` never resolved via `ensureTool`, using the
+ * installer's own attempt record (`getInstallAttempt`) — never the
+ * `getInstallFailureReason` refusal map alone, which cannot answer whether an
+ * install even ran (#2638/#2661). `{row: "fail"}` only for a genuine
+ * installer defect: an attempt that actually ran and failed
+ * (`outcome === "failed"`), not a transient network condition, on a strategy
+ * whose toolchain this runner has (npm always; pip/gem when confirmed
+ * present). Every other case is `{row: "skip"}`.
  */
-export function genuineInstallFailure(
+export function classifyInstallOutcome(
+	toolId: string,
+	deps: ClassifyInstallOutcomeDeps,
+): InstallOutcomeRow;
+/**
+ * The row a fixture's `ensureTool` step should report: the first GENUINE
+ * install failure among `toolIds` (`classifyInstallOutcome`), or a "skip"
+ * carrying `fallbackSkipDetail` when every unavailable tool in the list is
+ * legitimately declined/skipped/toolchain-absent/transient.
+ */
+export function resolveUnavailabilityRow(
 	toolIds: readonly string[],
 	unavailableTools: ReadonlySet<string>,
-	toolsById: ReadonlyMap<string, SmokeToolDefinition>,
-	failureReasons: ReadonlyMap<string, string>,
-	toolchainPresence: Record<string, boolean>,
-): { toolId: string; strategy: string | undefined; reason: string } | undefined;
+	deps: ClassifyInstallOutcomeDeps,
+	fallbackSkipDetail: string,
+): InstallOutcomeRow;
 export const FIXTURES: SmokeFixture[];
 export const LSP_FIXTURES: LspFixture[];
 export const FORMAT_FIXTURES: FormatFixture[];

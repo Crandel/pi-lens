@@ -4,6 +4,7 @@ import {
 	TOOLS,
 	getRefreshableManagedTools,
 	getToolVerificationTimeout,
+	pipCommandCandidates,
 } from "../../../clients/installer/index.js";
 
 // Use the real installer module, not any mock another test file registered.
@@ -371,5 +372,21 @@ describe("TOOLS registry consistency", () => {
 				`GITHUB_TOOLS entries lacking full matrix: ${extra.join(", ")}`,
 			).toEqual([]);
 		});
+	});
+
+	// #2661 review S5: the tool-smoke lane's pip-toolchain-presence probe must
+	// try the SAME candidates `installPipTool` does (a second, independently
+	// guessed ladder that tried bare `pip` only missed a `pip3`-only or
+	// python-module-only runner) — `pipCommandCandidates()` is the one list
+	// both read.
+	it("pipCommandCandidates covers pip3/pip/python3/python on POSIX, pip/py/python on Windows", () => {
+		const candidates = pipCommandCandidates();
+		expect(Array.isArray(candidates)).toBe(true);
+		expect(candidates.length).toBeGreaterThan(0);
+		if (process.platform === "win32") {
+			expect(candidates).toEqual(["pip", "py", "python"]);
+		} else {
+			expect(candidates).toEqual(["pip3", "pip", "python3", "python"]);
+		}
 	});
 });

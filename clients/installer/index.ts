@@ -1544,12 +1544,19 @@ export function getInstallFailureReason(toolId: string): string | undefined {
 /**
  * What the last install attempt for a tool actually DID (#1500 review).
  *
- * `installFailureReasons` cannot answer this and never could: it is a REFUSAL
- * map, written by the `PI_LENS_DISABLE_TOOL_INSTALL` branches and the install-lock
- * skip, and by nothing on the genuine-failure or success paths. Inferring
- * attempt-ness from it inverts the answer in both directions — a kill-switch
- * decline reads as a failed download, and a failed download reads as a policy
- * decision. So the outcome is recorded explicitly, at each branch that knows it.
+ * `installFailureReasons` cannot reliably answer this on its own: it started as
+ * a REFUSAL map (written by the `PI_LENS_DISABLE_TOOL_INSTALL` branches and the
+ * install-lock skip) and #2638 added writers on the npm/pip/gem genuine-failure
+ * paths too (so a caller that specifically needs the installer's own error TEXT
+ * for a KNOWN failure — e.g. the tool-smoke lane's row detail — can read it),
+ * but it still says nothing for github/maven/archive failures, and a decline
+ * can still overwrite a stale failure's entry or vice versa across calls.
+ * Inferring ATTEMPT-NESS (did an install even run) from presence-in-this-map
+ * would still invert the answer in both directions — so that question is
+ * answered here instead, explicitly, at each branch that knows it, and a
+ * caller that needs to tell "genuinely failed" from "declined"/"skipped" MUST
+ * gate on `outcome` first and treat `installFailureReasons`/`reason` as detail
+ * only, never as the yes/no signal itself.
  *
  *   * `succeeded`  — an install ran and reported success.
  *   * `failed`     — an install ran and did not succeed. The retry candidate.
@@ -4077,10 +4084,10 @@ async function refreshPackageManagerManagedTool(
 		tool.installStrategy === "pip"
 			? // `-U` is the whole fix: without it pip treats the installed copy as
 				// satisfying the requirement and the day-one version never moves.
-				await installPipTool(tool.packageName, { upgrade: true })
+				await installPipTool(tool.id, tool.packageName, { upgrade: true })
 			: // `gem install` always fetches the newest version that satisfies the
 				// requirement, so the install command IS the upgrade command.
-				await installGemTool(tool.packageName);
+				await installGemTool(tool.id, tool.packageName);
 	if (!installed) {
 		return {
 			ok: false,
@@ -4754,9 +4761,24 @@ async function installNpmTool(
 	}
 }
 /**
+ * The pip command ladder `installPipTool` tries, per platform, in priority
+ * order — exported so a caller that needs to know "is ANY pip toolchain
+ * reachable on this runner" (without running an install) probes the SAME
+ * candidates rather than a second, narrower guess (#2661 review F4/S5: the
+ * tool-smoke lane's own presence check tried bare `pip` only and missed a
+ * `pip3`-only or python-module-only runner).
+ */
+export function pipCommandCandidates(): string[] {
+	return process.platform === "win32"
+		? ["pip", "py", "python"]
+		: ["pip3", "pip", "python3", "python"];
+}
+
+/**
  * Install a pip package tool
  */
 async function installPipTool(
+	toolId: string,
 	packageName: string,
 	/**
 	 * Add `-U`, turning the install into an upgrade. Without it `pip install`
@@ -4773,30 +4795,17 @@ async function installPipTool(
 		const verb = options.upgrade
 			? ["install", "-U", "--user"]
 			: ["install", "--user"];
-		const pipCandidates = isWindows
-			? [
-					{ command: "pip", args: [...verb, packageName] },
-					{
-						command: "py",
-						args: ["-m", "pip", ...verb, packageName],
-					},
-					{
-						command: "python",
-						args: ["-m", "pip", ...verb, packageName],
-					},
-				]
-			: [
-					{ command: "pip3", args: [...verb, packageName] },
-					{ command: "pip", args: [...verb, packageName] },
-					{
-						command: "python3",
-						args: ["-m", "pip", ...verb, packageName],
-					},
-					{
-						command: "python",
-						args: ["-m", "pip", ...verb, packageName],
-					},
-				];
+		// Built from `pipCommandCandidates()` — the single source of truth this
+		// module and any other caller (the tool-smoke lane's toolchain-presence
+		// probe, #2661 review) share, rather than a second, independently
+		// maintained ladder that can drift.
+		const pipCandidates = pipCommandCandidates().map((command) => ({
+			command,
+			args:
+				command === "pip" || command === "pip3"
+					? [...verb, packageName]
+					: ["-m", "pip", ...verb, packageName],
+		}));
 
 		let lastError = "";
 		for (const candidate of pipCandidates) {
@@ -4904,14 +4913,19 @@ async function installPipTool(
 			`Failed to install ${packageName}: no usable pip command found (${lastError || "unknown error"})`,
 		);
 	} catch (err) {
-		logSessionStart(
-			`auto-install pip ${packageName}: exception: ${(err as Error).message}`,
-		);
+		// Same fix as `installNpmTool` (#2638/#2661 review F4): record the real
+		// error against `toolId`, not just the session log, so a caller that
+		// distinguishes a genuine installer defect from a policy decline (the
+		// tool-smoke lane) sees the actual pip error, not a generic fallback.
+		const message = (err as Error).message;
+		logSessionStart(`auto-install pip ${packageName}: exception: ${message}`);
+		installFailureReasons.set(toolId, message);
 		return undefined;
 	}
 }
 
 async function installGemTool(
+	toolId: string,
 	packageName: string,
 ): Promise<string | undefined> {
 	try {
@@ -4937,9 +4951,10 @@ async function installGemTool(
 
 		return packageName;
 	} catch (err) {
-		logSessionStart(
-			`auto-install gem ${packageName}: exception: ${(err as Error).message}`,
-		);
+		// Same fix as `installNpmTool`/`installPipTool` (#2638/#2661 review F4).
+		const message = (err as Error).message;
+		logSessionStart(`auto-install gem ${packageName}: exception: ${message}`);
+		installFailureReasons.set(toolId, message);
 		return undefined;
 	}
 }
@@ -5089,13 +5104,13 @@ export async function installTool(toolId: string): Promise<boolean> {
 
 			case "pip": {
 				if (!tool.packageName) return false;
-				const pipPath = await installPipTool(tool.packageName);
+				const pipPath = await installPipTool(tool.id, tool.packageName);
 				return finishInstallAttempt(tool.id, pipPath !== undefined, startedAt);
 			}
 
 			case "gem": {
 				if (!tool.packageName) return false;
-				const gemPath = await installGemTool(tool.packageName);
+				const gemPath = await installGemTool(tool.id, tool.packageName);
 				return finishInstallAttempt(tool.id, gemPath !== undefined, startedAt);
 			}
 
