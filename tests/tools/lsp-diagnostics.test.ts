@@ -60,42 +60,37 @@ describe("lsp_diagnostics tool", () => {
 		mocked.warmAttached = false;
 		mocked.attachedDiagnostics.mockReset();
 		reconcileScanDiagnosticsMock.mockReset();
-		mocked.service = makeLspServiceDouble(
-			{
-				openFile: vi.fn().mockResolvedValue(undefined),
-				getDiagnostics: vi.fn().mockImplementation(async (filePath: string) => {
-					if (filePath.endsWith("bad.ts")) {
-						return [
-							{
-								severity: 1,
-								message: "Type 'string' is not assignable to type 'number'.",
-								range: {
-									start: { line: 0, character: 16 },
-									end: { line: 0, character: 24 },
-								},
-								source: "ts",
+		mocked.service = makeLspServiceDouble({
+			getDiagnostics: vi.fn().mockImplementation(async (filePath: string) => {
+				if (filePath.endsWith("bad.ts")) {
+					return [
+						{
+							severity: 1,
+							message: "Type 'string' is not assignable to type 'number'.",
+							range: {
+								start: { line: 0, character: 16 },
+								end: { line: 0, character: 24 },
 							},
-						];
-					}
-					return [];
-				}),
-				getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
-				getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-				runWorkspaceDiagnostics: vi.fn(),
-			},
-			// `omit` is NOT decoration here: tools/lsp-diagnostics.ts:789 branches
-			// on `typeof serviceWithTouch.touchFile === "function"`, so a factory
-			// default silently moves this suite off the `openFile` arm its cases
-			// assert on. Proven: un-omitting `touchFile` reds 12 of the 59 cases
-			// in this file (#2592). The cases that DO want the touch arm install
-			// `touchFile` on the double themselves.
-			//
-			// `getAdvertisedCommands` is deliberately NOT omitted even though the
-			// pre-#2592 double lacked it: clients/lsp/tsserver-sync.ts bails
-			// identically on "absent" and on "advertises nothing", so an omit
-			// there is unfalsifiable — un-omitting it leaves this file green.
-			{ omit: ["touchFile"] },
-		);
+							source: "ts",
+						},
+					];
+				}
+				return [];
+			}),
+			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
+			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+			runWorkspaceDiagnostics: vi.fn(),
+			// #2598: `collectDiagnosticsForFile` now touches unconditionally —
+			// the real `LSPService` defines `touchFile` on every shape, so the
+			// probe that used to route this suite down an `openFile` arm is
+			// gone. `undefined` is what the real `touchFile` resolves to when
+			// it resolves NO client for the file (clients/lsp/index.ts, the
+			// `no_clients` return), and it is the state these cases want: the
+			// tool falls through to `getDiagnostics`, where their fixtures
+			// live. Cases that want the touch itself to answer install their
+			// own `touchFile` on the double.
+			touchFile: vi.fn(async () => undefined),
+		});
 	});
 
 	it("uses attached diagnostics for a batch without local warm-up or touches", async () => {
@@ -174,7 +169,7 @@ describe("lsp_diagnostics tool", () => {
 			expect(String(result.content[0]?.text)).toContain("Files checked: 2");
 			expect(String(result.content[0]?.text)).toContain("not assignable");
 			expect(
-				(mocked.service as { openFile: ReturnType<typeof vi.fn> }).openFile,
+				(mocked.service as { touchFile: ReturnType<typeof vi.fn> }).touchFile,
 			).toHaveBeenCalledTimes(2);
 			expect(
 				(
@@ -313,7 +308,7 @@ describe("lsp_diagnostics tool", () => {
 		// No file was opened in the language server — the worker loop saw the
 		// aborted signal and returned before scheduling any file.
 		expect(
-			(mocked.service as { openFile: ReturnType<typeof vi.fn> }).openFile,
+			(mocked.service as { touchFile: ReturnType<typeof vi.fn> }).touchFile,
 		).not.toHaveBeenCalled();
 		// Still returns a (partial) batch result, not a throw.
 		expect(result.isError).toBeUndefined();
@@ -343,7 +338,7 @@ describe("lsp_diagnostics tool", () => {
 			// abort-aware fan-out opened NONE of them in the language server — the
 			// #343 invariant: no in-flight files after the turn is abandoned.
 			expect(
-				(mocked.service as { openFile: ReturnType<typeof vi.fn> }).openFile,
+				(mocked.service as { touchFile: ReturnType<typeof vi.fn> }).touchFile,
 			).not.toHaveBeenCalled();
 			expect(result.isError).toBeUndefined();
 			expect(result.details?.mode).toBe("directory");
@@ -392,12 +387,12 @@ describe("lsp_diagnostics tool", () => {
 			expect(result.details?.totalDiagnostics).toBe(0);
 			expect(String(result.content[0]?.text)).toContain("Files scanned: 1");
 
-			const openFile = (
+			const touchFile = (
 				mocked.service as {
-					openFile: ReturnType<typeof vi.fn>;
+					touchFile: ReturnType<typeof vi.fn>;
 				}
-			).openFile;
-			const opened = openFile.mock.calls.map(([filePath]) =>
+			).touchFile;
+			const opened = touchFile.mock.calls.map(([filePath]) =>
 				path.relative(tmpDir, String(filePath)).replace(/\\/g, "/"),
 			);
 			expect(opened).toEqual(["src/good.ts"]);
@@ -429,10 +424,10 @@ describe("lsp_diagnostics tool", () => {
 			// relative order LANG_EXTENSIONS's ".ts" key had before ".py"), so the
 			// directory scans as typescript and the python file is not opened.
 			expect(result.details?.filesScanned).toBe(1);
-			const openFile = (
-				mocked.service as { openFile: ReturnType<typeof vi.fn> }
-			).openFile;
-			const opened = openFile.mock.calls.map(([filePath]) =>
+			const touchFile = (
+				mocked.service as { touchFile: ReturnType<typeof vi.fn> }
+			).touchFile;
+			const opened = touchFile.mock.calls.map(([filePath]) =>
 				path.relative(tmpDir, String(filePath)).replace(/\\/g, "/"),
 			);
 			expect(opened).toEqual(["a.ts"]);
@@ -460,10 +455,10 @@ describe("lsp_diagnostics tool", () => {
 			expect(result.isError).toBeUndefined();
 			expect(result.details?.mode).toBe("directory");
 			expect(result.details?.filesScanned).toBe(1);
-			const openFile = (
-				mocked.service as { openFile: ReturnType<typeof vi.fn> }
-			).openFile;
-			const opened = openFile.mock.calls.map(([filePath]) =>
+			const touchFile = (
+				mocked.service as { touchFile: ReturnType<typeof vi.fn> }
+			).touchFile;
+			const opened = touchFile.mock.calls.map(([filePath]) =>
 				path.relative(tmpDir, String(filePath)).replace(/\\/g, "/"),
 			);
 			expect(opened).toEqual(["config.ru"]);
@@ -509,10 +504,10 @@ describe("lsp_diagnostics tool", () => {
 			// from `.pi-lens.json` both suppress, not just the canonical dir list.
 			expect(result.isError).toBeUndefined();
 			expect(result.details?.filesScanned).toBe(1);
-			const openFile = (
-				mocked.service as { openFile: ReturnType<typeof vi.fn> }
-			).openFile;
-			const opened = openFile.mock.calls.map(([filePath]) =>
+			const touchFile = (
+				mocked.service as { touchFile: ReturnType<typeof vi.fn> }
+			).touchFile;
+			const opened = touchFile.mock.calls.map(([filePath]) =>
 				path.relative(tmpDir, String(filePath)).replace(/\\/g, "/"),
 			);
 			expect(opened).toEqual(["src/good.ts"]);

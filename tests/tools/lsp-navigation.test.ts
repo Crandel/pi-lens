@@ -39,68 +39,65 @@ const parseToolJson = (result: {
 
 describe("lsp_navigation tool", () => {
 	beforeEach(() => {
-		mocked.service = makeLspServiceDouble(
-			{
-				supportsLSP: vi.fn().mockReturnValue(true),
-				hasLSP: vi.fn().mockResolvedValue(true),
-				openFile: vi.fn().mockResolvedValue(undefined),
-				getDiagnostics: vi.fn().mockResolvedValue([]),
-				getOperationSupport: vi.fn().mockResolvedValue(null),
-				getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-				codeAction: vi
-					.fn()
-					.mockResolvedValue([
-						{ title: "Move to new file", kind: "refactor.move.newFile" },
-					]),
-				rename: vi.fn().mockResolvedValue(null),
-				renameFile: vi.fn().mockResolvedValue({
-					applied: false,
-					serverIds: [],
-					willRenameFailures: [],
-					didRenameFailures: [],
-					droppedConflicts: 0,
-					inputEditCount: 0,
-					summary: [],
-				}),
-				references: vi.fn().mockResolvedValue([
-					{
-						uri: tmpFileUrl("sample.ts"),
-						range: {
-							start: { line: 1, character: 1 },
-							end: { line: 1, character: 5 },
-						},
-					},
+		// #2598: `openFileBestEffort` no longer branches on `touchFile` being
+		// present — the real `LSPService` always has it — so the double keeps the
+		// factory's `touchFile`, and the scoped-open case below asserts the touch
+		// (with its options), which is the call production actually makes.
+		mocked.service = makeLspServiceDouble({
+			supportsLSP: vi.fn().mockReturnValue(true),
+			hasLSP: vi.fn().mockResolvedValue(true),
+			getDiagnostics: vi.fn().mockResolvedValue([]),
+			getOperationSupport: vi.fn().mockResolvedValue(null),
+			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+			codeAction: vi
+				.fn()
+				.mockResolvedValue([
+					{ title: "Move to new file", kind: "refactor.move.newFile" },
 				]),
-				typeDefinition: vi.fn().mockResolvedValue([
-					{
-						uri: tmpFileUrl("types.ts"),
-						range: {
-							start: { line: 9, character: 0 },
-							end: { line: 9, character: 4 },
-						},
+			rename: vi.fn().mockResolvedValue(null),
+			renameFile: vi.fn().mockResolvedValue({
+				applied: false,
+				serverIds: [],
+				willRenameFailures: [],
+				didRenameFailures: [],
+				droppedConflicts: 0,
+				inputEditCount: 0,
+				summary: [],
+			}),
+			references: vi.fn().mockResolvedValue([
+				{
+					uri: tmpFileUrl("sample.ts"),
+					range: {
+						start: { line: 1, character: 1 },
+						end: { line: 1, character: 5 },
 					},
-				]),
-				declaration: vi.fn().mockResolvedValue([]),
-				workspaceSymbol: vi.fn().mockResolvedValue([]),
-				getAdvertisedCommands: vi
-					.fn()
-					.mockResolvedValue(["_typescript.organizeImports"]),
-				executeCommand: vi
-					.fn()
-					.mockResolvedValue({ executed: true, result: null }),
-				documentSymbol: vi.fn().mockResolvedValue([]),
-				incomingCalls: vi.fn().mockResolvedValue([]),
-				outgoingCalls: vi.fn().mockResolvedValue([]),
-				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				getWorkspaceDiagnosticsSupport: vi
-					.fn()
-					.mockResolvedValue({ mode: "push-only" }),
-			},
-			// `openFileBestEffort` (tools/lsp-navigation.ts:709) branches on
-			// `typeof lspService.touchFile === "function"`; this suite has always
-			// taken the `openFile` arm, and a factory default would move it. #2592.
-			{ omit: ["touchFile"] },
-		);
+				},
+			]),
+			typeDefinition: vi.fn().mockResolvedValue([
+				{
+					uri: tmpFileUrl("types.ts"),
+					range: {
+						start: { line: 9, character: 0 },
+						end: { line: 9, character: 4 },
+					},
+				},
+			]),
+			declaration: vi.fn().mockResolvedValue([]),
+			workspaceSymbol: vi.fn().mockResolvedValue([]),
+			getAdvertisedCommands: vi
+				.fn()
+				.mockResolvedValue(["_typescript.organizeImports"]),
+			executeCommand: vi
+				.fn()
+				.mockResolvedValue({ executed: true, result: null }),
+			documentSymbol: vi.fn().mockResolvedValue([]),
+			incomingCalls: vi.fn().mockResolvedValue([]),
+			outgoingCalls: vi.fn().mockResolvedValue([]),
+			getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
+			getWorkspaceDiagnosticsSupport: vi
+				.fn()
+				.mockResolvedValue({ mode: "push-only" }),
+		});
 	});
 
 	it("reports cached LSP capabilities without requiring path", async () => {
@@ -806,7 +803,7 @@ describe("lsp_navigation tool", () => {
 		},
 	);
 
-	it("opens scoped file before workspaceSymbol query", async () => {
+	it("touches the scoped file, diagnostics off, before a workspaceSymbol query", async () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
 		const filePath = path.join(tmpDir, "sample.ts");
@@ -829,11 +826,19 @@ describe("lsp_navigation tool", () => {
 			);
 
 			expect(result.isError).toBeUndefined();
+			// #2598: the scoped pre-open is a `touchFile`, and the OPTIONS are the
+			// point — a `workspaceSymbol` pre-open must not pay for a diagnostics
+			// wait, and must stay on the primary server.
 			expect(
-				(mocked.service as { openFile: ReturnType<typeof vi.fn> }).openFile,
+				(mocked.service as { touchFile: ReturnType<typeof vi.fn> }).touchFile,
 			).toHaveBeenCalledWith(
 				filePath,
 				expect.stringContaining("normalizeMapKey"),
+				{
+					diagnostics: "none",
+					source: "lsp_navigation",
+					clientScope: "primary",
+				},
 			);
 			expect(
 				(mocked.service as { workspaceSymbol: ReturnType<typeof vi.fn> })

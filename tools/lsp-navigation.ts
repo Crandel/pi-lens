@@ -706,15 +706,16 @@ async function openFileBestEffort(
 	}
 	if (!fileContent) return;
 	try {
-		if (typeof lspService.touchFile === "function") {
-			await lspService.touchFile(filePath, fileContent, {
-				diagnostics: waitForDiagnostics ? "document" : "none",
-				source: "lsp_navigation",
-				clientScope: waitForDiagnostics ? "all" : "primary",
-			});
-		} else {
-			await lspService.openFile(filePath, fileContent);
-		}
+		// #2598: `touchFile` is defined unconditionally on the real `LSPService`
+		// (clients/lsp/index.ts), so the former `typeof … === "function"` hedge
+		// and its `openFile` arm were reachable only from a partial test double
+		// (AGENTS.md shape 7). Nothing here reads the result — a touch that
+		// resolves no clients is already the no-op this helper wants.
+		await lspService.touchFile(filePath, fileContent, {
+			diagnostics: waitForDiagnostics ? "document" : "none",
+			source: "lsp_navigation",
+			clientScope: waitForDiagnostics ? "all" : "primary",
+		});
 	} catch {
 		/* LSP server may not be ready yet — proceed anyway */
 	}
