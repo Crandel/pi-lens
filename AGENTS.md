@@ -2443,6 +2443,7 @@ All pi packages are `@earendil-works/*` (migrated from `@mariozechner/*` in 0.74
 - **External-contributor issues get priority** — they must not sit unlabeled (a first-time reporter's issue once sat 10 days untouched; see #673).
 - **Label issues you file yourself at creation time**, not in a later sweep.
 - **Every issue carries exactly one `priority:*` label, assigned at triage (#1676).** Priority means dispatch order, honestly: `priority:p1` — the next free worker lane takes it, and a p1 bug blocks the next release (wrong verdicts, silent data loss, crash/hang, host impact). `priority:p2` — the normal queue, batched into themed dispatch waves (hot-path perf with measured numbers, observability gaps with field evidence, contained bugs with workarounds). `priority:p3` — opportunistic: it rides along in a PR already touching the seam, or is `help wanted` material (polish, docs, cold-path costs). Rubric: severity times exposure times evidence — a field-log record upgrades one level; an existing workaround downgrades one. External contributors coordinate on `priority:p2`/`priority:p3` plus `help wanted`; p1 items are usually fleet work.
+- **Labels are created by adding them to `.github/labels.yml`, never by `gh label create` alone** — the Sync labels workflow runs the label syncer with `prune: true` on every merge-train lane merge, which deletes any live label absent from that file (#2553).
 
 ## Commands
 
