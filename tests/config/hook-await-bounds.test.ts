@@ -2215,6 +2215,13 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/source-filter.ts": 2,
 	"clients/startup-scan.ts": 3,
 	"clients/test-runner-client.ts": 4,
+	// #2507. Unlike every other entry here, this one is unbounded ON PURPOSE
+	// and must stay that way: it is `await inner.apply(...)` around a TOOL
+	// call, taken so the call holds the event loop for its own lifetime.
+	// Bounding it would abandon the tool's result mid-flight — the opposite of
+	// what the await exists for. The count may only ever fall to 0 (the wrapper
+	// removed), never rise.
+	"clients/tool-definition.ts": 1,
 	"clients/tree-sitter-shared.ts": 1,
 	"clients/trivy-client.ts": 2,
 	"clients/warm-attach.ts": 9,

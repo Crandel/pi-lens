@@ -1,0 +1,5 @@
+---
+section: Fixed
+---
+
+- **A headless pi child no longer exits 0 in the middle of a tool call (closes #2507)** — pi-lens unrefs the LSP child, its stdio pipes and several waiting timers so a settled one-shot `pi --print` can exit without waiting on a lingering language server. In a headless child (`pi --mode json -p --no-extensions`, stdin ignored, no TUI, no other extension holding a handle) that let libuv find nothing referenced mid `lsp_diagnostics`, so Node exited 0 with no error, no result and no `turn_end`. Every registered pi-lens tool now takes a counted event-loop hold for the duration of its own call, armed on the first in-flight call and released — from a `finally`, so a throw or an abort releases too — on the last, with a max-age failsafe that force-releases past the longest legitimate tool call's own ceiling and records `event_loop_hold_force_released`. Idle behaviour is unchanged: with nothing in flight nothing is referenced, and the process still exits by itself the moment the call is done.
