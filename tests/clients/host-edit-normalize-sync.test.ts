@@ -52,6 +52,27 @@ function hostTextUtilsSource(): string {
 	);
 }
 
+// Slice out ONE named top-level `export function <name>(...) { ... }`'s own
+// source, bounded by the next top-level `export function`/`export const`/EOF
+// -- so an assertion against the slice can't be satisfied by a SIBLING
+// declaration (e.g. a hypothetical `legacySplitBom` keeping the old literal
+// while the real `splitBom` drifts to something else). Good enough for this
+// file's flat, unminified shape; not a general JS parser.
+function sliceExportedFunction(source: string, name: string): string {
+	const startMarker = `export function ${name}(`;
+	const start = source.indexOf(startMarker);
+	if (start === -1) {
+		throw new Error(`could not find "${startMarker}" in host source`);
+	}
+	const nextDeclMatch = /\n(?:export (?:function|const)\b)/.exec(
+		source.slice(start + startMarker.length),
+	);
+	const end = nextDeclMatch
+		? start + startMarker.length + nextDeclMatch.index
+		: source.length;
+	return source.slice(start, end);
+}
+
 // Re-encode a code point the way the host hard-codes it: \uXXXX, 4 hex digits,
 // uppercase letters (matches the host source, e.g. ‚,  , ﻿).
 const esc = (codePoint: number) =>
@@ -120,8 +141,15 @@ describe("host-edit-normalize sync (host source drift guard)", () => {
 		// splitBom is now defined.
 		expect(src).toMatch(/import\s*\{[^}]*\bsplitBom\b[^}]*\}\s*from/);
 		expect(src).toContain("splitBom(");
-		const textUtilsSrc = hostTextUtilsSource();
-		expect(textUtilsSrc).toContain(`startsWith("${esc(HOST_BOM_CODE_POINT)}")`);
+		// Scoped to splitBom's OWN body, not "anywhere in text.js": a sibling
+		// function (e.g. a hypothetical legacySplitBom) keeping the old
+		// literal while the REAL splitBom drifts to something else must NOT
+		// satisfy this assertion.
+		const splitBomBody = sliceExportedFunction(
+			hostTextUtilsSource(),
+			"splitBom",
+		);
+		expect(splitBomBody).toContain(`startsWith("${esc(HOST_BOM_CODE_POINT)}")`);
 	});
 
 	it("host match decision is still exact-then-fuzzy, counted in fuzzy space", () => {
