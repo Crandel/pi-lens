@@ -898,6 +898,103 @@ describe("runClassifier orchestration against a mocked, STATEFUL GitHub API (#21
 
 		expect(comments).toHaveLength(1);
 	});
+
+	// #2668: a master-push run's workflow_run event carries an empty
+	// pull_requests array -- there is no PR at all, not merely an unresolved
+	// lookup. allowMissingPr lets classification and the rerun proceed
+	// without one while skipping every PR-comment step (there is no issue
+	// thread to post to).
+	describe("allowMissingPr: master-push runs with no PR to comment on (#2668)", () => {
+		function makePushApi({
+			rerunHandler,
+		}: {
+			rerunHandler?: () => { ok: boolean; status: number };
+		} = {}) {
+			const calls: Array<{ method: string; url: string }> = [];
+			const rawLog = fixture("infra-kill-wrapper-killed.real.log");
+			let rerunCallCount = 0;
+			const fetcher = async (url: string, init?: RequestInit) => {
+				const method = init?.method ?? "GET";
+				calls.push({ method, url });
+				if (url.endsWith("/actions/runs/999")) {
+					// Production-faithful: a push run's `pull_requests` array is
+					// always empty, never merely unpopulated.
+					return jsonResponse({ head_sha: "deadbeef", pull_requests: [] });
+				}
+				if (url.endsWith("/actions/runs/999/jobs")) {
+					return jsonResponse({
+						jobs: [{ id: 111, name: "Unit tests", conclusion: "failure" }],
+					});
+				}
+				if (url.endsWith("/actions/jobs/111/logs")) {
+					return textResponse(rawLog);
+				}
+				if (url.endsWith("/actions/runs/999/rerun-failed-jobs")) {
+					rerunCallCount++;
+					if (rerunHandler) {
+						const result = rerunHandler();
+						return jsonResponse({}, result.status);
+					}
+					return jsonResponse({}, 201);
+				}
+				throw new Error(`unmocked URL in test: ${method} ${url}`);
+			};
+			return {
+				fetcher,
+				calls,
+				get rerunCallCount() {
+					return rerunCallCount;
+				},
+			};
+		}
+
+		it("without allowMissingPr, a PR-less run still throws (guard unchanged)", async () => {
+			const { fetcher } = makePushApi();
+			await expect(
+				runClassifier({ fetcher, owner: "acme", repo: "repo", runId: 999 }),
+			).rejects.toThrow("has no associated pull request");
+		});
+
+		it("with allowMissingPr, classifies and reruns without ever touching the comments API", async () => {
+			const api = makePushApi();
+			const result = await runClassifier({
+				fetcher: api.fetcher,
+				owner: "acme",
+				repo: "repo",
+				runId: 999,
+				allowMissingPr: true,
+			});
+
+			expect(result.classification.kind).toBe("infra-kill");
+			expect(result.rerunTriggeredThisPass).toBe(true);
+			expect(result.prNumber).toBeNull();
+			expect(result.commentBody).toContain("ci-classifier: infra-kill");
+			expect(api.rerunCallCount).toBe(1);
+
+			// The whole point of the flag: a push run has no comment thread, so
+			// nothing in this call may hit the issues/comments endpoints.
+			const commentCalls = api.calls.filter((c) => c.url.includes("/comments"));
+			expect(commentCalls).toEqual([]);
+		});
+
+		it("with allowMissingPr, a failing rerun is still recorded honestly in the returned commentBody", async () => {
+			const api = makePushApi({
+				rerunHandler: () => ({ ok: false, status: 403 }),
+			});
+			const result = await runClassifier({
+				fetcher: api.fetcher,
+				owner: "acme",
+				repo: "repo",
+				runId: 999,
+				allowMissingPr: true,
+			});
+
+			expect(result.rerunTriggeredThisPass).toBe(false);
+			expect(result.commentBody).toContain("failed:403");
+			const commentCalls = api.calls.filter((c) => c.url.includes("/comments"));
+			expect(commentCalls).toEqual([]);
+		});
+	});
 });
 
 describe("buildCommentBody (#2103)", () => {

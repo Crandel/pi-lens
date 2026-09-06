@@ -759,7 +759,19 @@ export async function attemptRerun({ fetcher, owner, repo, runId }) {
  * round 2, V1). See shouldTriggerRerun's REAL SCOPE note (V2/V3) for what
  * "once per SHA" does and doesn't cover under concurrency.
  *
- * @param {{ fetcher: typeof fetch, owner: string, repo: string, runId: number | string, jobName?: string, prNumber?: number }} args
+ * `allowMissingPr` (#2668): a master-push run has no associated pull
+ * request at all -- `run.pull_requests` is always empty for a push event,
+ * not merely unpopulated. Without this flag that is indistinguishable from
+ * the original defect this function guards against (a PR run whose PR
+ * lookup failed) and throws. With it, classification and the rerun attempt
+ * still run in full, but every PR-comment step (find/upsert/reconcile) is
+ * skipped -- there is no issue thread to post to. That also means the
+ * cross-invocation "already reran this SHA" marker guard (shouldTriggerRerun
+ * reading `existingMarker`) has no comment to read for a push run; the
+ * workflow's own `run_attempt == 1` gate is what bounds a push rerun to
+ * once per completed run, the same way it bounds the PR path.
+ *
+ * @param {{ fetcher: typeof fetch, owner: string, repo: string, runId: number | string, jobName?: string, prNumber?: number, allowMissingPr?: boolean }} args
  */
 export async function runClassifier({
 	fetcher,
@@ -771,6 +783,7 @@ export async function runClassifier({
 	sha: shaOverride,
 	rerunKinds,
 	skipMissingJob = false,
+	allowMissingPr = false,
 }) {
 	let runAndJob;
 	try {
@@ -806,7 +819,7 @@ export async function runClassifier({
 		jobName: resolvedJobName,
 	} = runAndJob;
 	const prNumber = prNumberOverride ?? resolvedPrNumber;
-	if (!prNumber) {
+	if (!prNumber && !allowMissingPr) {
 		throw new Error(
 			`run ${runId} has no associated pull request; pass an explicit PR number`,
 		);
@@ -826,12 +839,17 @@ export async function runClassifier({
 		});
 		throw error;
 	}
-	const existingComment = await findExistingClassifierComment({
-		fetcher,
-		owner,
-		repo,
-		prNumber,
-	});
+	// No PR to read a sticky comment on for a commentless (push) run --
+	// there is never a prior marker to recover, so this pass is always the
+	// first look at this SHA.
+	const existingComment = prNumber
+		? await findExistingClassifierComment({
+				fetcher,
+				owner,
+				repo,
+				prNumber,
+			})
+		: null;
 	let classification;
 	try {
 		classification = classifyFailureLog(rawLog);
@@ -881,14 +899,19 @@ export async function runClassifier({
 	}
 
 	const commentBody = buildCommentBody({ classification, sha, rerunState });
-	const postedComment = await upsertComment({
-		fetcher,
-		owner,
-		repo,
-		prNumber,
-		existingComment,
-		body: commentBody,
-	});
+	// A push run has no issue thread to post the sticky comment to -- the
+	// classify job's own log (this function's caller prints commentBody) is
+	// the only trace for that run, by design (#2668).
+	const postedComment = prNumber
+		? await upsertComment({
+				fetcher,
+				owner,
+				repo,
+				prNumber,
+				existingComment,
+				body: commentBody,
+			})
+		: null;
 
 	let result = {
 		classification,
@@ -902,8 +925,8 @@ export async function runClassifier({
 
 	// F3: only a brand-new comment can race a concurrent invocation's brand
 	// -new comment into a duplicate -- a PATCH to an existing single comment
-	// cannot itself create one.
-	if (!existingComment) {
+	// cannot itself create one. No PR means no comment thread to reconcile.
+	if (prNumber && !existingComment) {
 		const reconciled = await reconcileDuplicateClassifierComments({
 			fetcher,
 			owner,
