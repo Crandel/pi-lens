@@ -98,6 +98,16 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"observes the real npm pack lifecycle (prepack/postpack); no in-process double is faithful",
 	},
+	// 2026-09-06 (#2591 review round 2, F1): the defect is 2^N regex
+	// backtracking through detectPythonEnvironment — the ANSWER was always
+	// right, only the time was wrong, so no non-clock assertion separates
+	// fixed from broken; header on the file states why.
+	"elapsed-time-assertion:clients/workspace-glob-globstar-collapse-budget.test.ts":
+		{
+			detector: "elapsed-time-assertion",
+			reason:
+				"the defect is wall-clock only (2^N globstar backtracking); a fake clock measures nothing",
+		},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */

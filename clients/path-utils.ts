@@ -654,6 +654,289 @@ export function direntsHaveMarkerGlobMatch(
 }
 
 /**
+ * The axes on which build tools' workspace-MEMBER glob dialects genuinely
+ * diverge (#2591). Every "does this workspace declare this directory as a
+ * member" matcher in `clients/` routes through
+ * {@link matchesWorkspaceMemberPattern} with one of the dialect constants
+ * below rather than hand-rolling its own segment regex or minimatch options
+ * block — the same single-source-of-truth rule `nameMatchesMarkerGlob` holds
+ * for marker globs.
+ *
+ * Two axes deliberately do NOT appear here because every dialect agrees on
+ * them, and a field with one value across every constant is configuration
+ * that can never be wrong:
+ *
+ * - **Case sensitivity.** Cargo's pre-fold segment regex carried no `i` flag;
+ *   uv matches with `MatchOptions { case_sensitive: true, .. }` on every
+ *   platform (`MatchOptions::new()`'s default, kept by `is_included_in_workspace`).
+ *   Matching is unconditionally case-SENSITIVE here, on Windows too.
+ * - **Leading dots.** Cargo's pre-fold `*` compiled to `[^/]*`, which matches a
+ *   leading `.` like any other character; uv passes `require_literal_leading_dot:
+ *   false` (again the `MatchOptions::new()` default), which pi-lens expressed as
+ *   minimatch's `dot: true`. A `*` matches `.hidden` in every dialect.
+ *
+ * If a fourth dialect ever disagrees on either, it becomes a field then — not
+ * before.
+ */
+export interface WorkspaceMemberGlobDialect {
+	/** Dialect name, for the dialect table in `tests/clients/path-utils.test.ts`. */
+	readonly name: string;
+	/**
+	 * `crosses-components`: a path component that is exactly `**` matches zero
+	 * or more path components (a TRAILING `/**` requires at least one, matching
+	 * minimatch and rust `glob`). `pattern-never-matches`: a pattern containing
+	 * `**` anywhere matches nothing at all.
+	 */
+	readonly globstar: "crosses-components" | "pattern-never-matches";
+	/**
+	 * Whether `*`/`?` may span a `/` — rust `glob`'s `require_literal_separator:
+	 * false`. When false (the common case) a wildcard is confined to one path
+	 * component, which is also what makes a pattern's component COUNT have to
+	 * equal the path's: `crates/*` cannot reach `crates/a/b` because `[^/]*`
+	 * cannot cross the separator. Component-count equality is therefore an
+	 * entailment of this axis, not a separate one — see the dialect table's
+	 * `segment-count mismatch` vectors, which red if `[^/]*` is widened.
+	 */
+	readonly wildcardCrossesSeparator: boolean;
+	/** Whether `[abc]`/`[!abc]` is a character class or a literal bracket run. */
+	readonly characterClasses: boolean;
+	/** Tool-specific pattern normalization, applied before compilation. */
+	readonly normalizePattern: (pattern: string) => string;
+}
+
+/**
+ * Cargo `[workspace] members`/`exclude` entries.
+ *
+ * KNOWN LIMITATION (#1671 F6, documented rather than implemented, preserved
+ * byte-for-byte by #2591's fold): a recursive `**` component is NOT supported
+ * and a pattern containing one never matches — cargo workspaces that rely on
+ * `**` to pull in an arbitrarily-nested crate tree under-hoist (the crate stays
+ * independently rooted instead of joining the workspace). Folding cargo onto
+ * uv's `crosses-components` globstar would silently change Rust-LSP root
+ * selection, so the divergence is kept as a dialect value, not resolved.
+ *
+ * `characterClasses: false` is likewise a preserved divergence, not a
+ * considered choice: cargo's pre-fold segment compiler escaped `[` and `]`
+ * into literals, so `crates/[ab]` names a directory literally called `[ab]`.
+ * Real cargo (the `glob` crate) would read it as a class; changing that here
+ * would be the same unreviewed Rust-hoisting change.
+ */
+export const CARGO_WORKSPACE_MEMBER_DIALECT: WorkspaceMemberGlobDialect = {
+	name: "cargo",
+	globstar: "pattern-never-matches",
+	wildcardCrossesSeparator: false,
+	characterClasses: false,
+	normalizePattern: (pattern) => pattern.replace(/\/+$/, ""),
+};
+
+/**
+ * uv `[tool.uv.workspace] members`, pinned to
+ * `astral-sh/uv@3c979abda4530fe9bf3d92e9bcf5c5575e3b3126`,
+ * `crates/uv-workspace/src/workspace.rs` `is_included_in_workspace`: the glob is
+ * `normalize_path`d first (so a leading `./` and any interior `.` component are
+ * not part of the pattern) and matched with
+ * `MatchOptions { require_literal_separator: true, ..MatchOptions::new() }`.
+ */
+export const UV_WORKSPACE_MEMBERS_DIALECT: WorkspaceMemberGlobDialect = {
+	name: "uv-members",
+	globstar: "crosses-components",
+	wildcardCrossesSeparator: false,
+	characterClasses: true,
+	normalizePattern: (pattern) => path.posix.normalize(toPosix(pattern)),
+};
+
+/**
+ * uv `[tool.uv.workspace] exclude`, same upstream file and SHA
+ * (`WorkspaceExclusions::matches`): an exclusion is matched with
+ * `Pattern::matches_path`, i.e. `MatchOptions::new()` defaults, where
+ * `require_literal_separator` is FALSE — so a `*` in an exclusion DOES cross
+ * `/` (`exclude = ['packages/a*c']` excludes `packages/a/b/c`). Two different
+ * option sets inside one tool, which is why the dialect is an object and the
+ * two uv constants are not one.
+ *
+ * Before #2591 this was a documented limitation: minimatch cannot express a
+ * separator-crossing `*`, so pi-lens under-excluded. The dialect object can, so
+ * it is now implemented rather than documented.
+ */
+export const UV_WORKSPACE_EXCLUDE_DIALECT: WorkspaceMemberGlobDialect = {
+	name: "uv-exclude",
+	globstar: "crosses-components",
+	wildcardCrossesSeparator: true,
+	characterClasses: true,
+	normalizePattern: (pattern) => path.posix.normalize(toPosix(pattern)),
+};
+
+/** Escape one character that carries no glob meaning into a literal. */
+function escapeRegExpChar(ch: string): string {
+	return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Index of the `]` closing the character class opened at `open`, or `-1` when
+ * the run is unterminated (in which case the `[` is a literal). A leading `!`
+ * or `^` negates, and a `]` in first position is a literal class member — the
+ * shape both minimatch and rust `glob` accept.
+ */
+function findCharacterClassEnd(segment: string, open: number): number {
+	let i = open + 1;
+	if (segment[i] === "!" || segment[i] === "^") i += 1;
+	if (segment[i] === "]") i += 1;
+	for (; i < segment.length; i += 1) if (segment[i] === "]") return i;
+	return -1;
+}
+
+/** Compile one `/`-delimited glob run into a regex source under `dialect`. */
+function globRunToRegExpSource(
+	run: string,
+	dialect: WorkspaceMemberGlobDialect,
+): string {
+	const anyRun = dialect.wildcardCrossesSeparator ? ".*" : "[^/]*";
+	const anyChar = dialect.wildcardCrossesSeparator ? "." : "[^/]";
+	let out = "";
+	for (let i = 0; i < run.length; i += 1) {
+		const ch = run[i];
+		if (ch === "*") {
+			out += anyRun;
+			continue;
+		}
+		if (ch === "?") {
+			out += anyChar;
+			continue;
+		}
+		if (ch === "[" && dialect.characterClasses) {
+			const close = findCharacterClassEnd(run, i);
+			if (close !== -1) {
+				// `\` and a first-position `]` are literal class MEMBERS in glob;
+				// left alone they would be a regex escape and an empty-class
+				// terminator (`[]ab]` is `[]` + `ab]` in JS), so both are escaped.
+				const body = run.slice(i + 1, close).replace(/[\\\]]/g, "\\$&");
+				out += `[${body.startsWith("!") ? `^${body.slice(1)}` : body}]`;
+				i = close;
+				continue;
+			}
+		}
+		out += escapeRegExpChar(ch);
+	}
+	return out;
+}
+
+/**
+ * Compile a normalized workspace-member pattern into an anchored whole-path
+ * regex, or `undefined` when the pattern cannot compile.
+ *
+ * A `**` component consumes zero or more path components — except as the LAST
+ * component, where it requires at least one (`a/**` matches `a/b`, not `a`),
+ * reproducing both minimatch's and rust `glob`'s answer.
+ *
+ * CONSECUTIVE `**` COMPONENTS COLLAPSE TO ONE (#2591 review round 2, F1),
+ * which is exactly what upstream does: `rust-lang/glob@cfa2a58f2e44373573f657ec25b3621e44714dee`,
+ * `src/lib.rs:672-684`, "collapse consecutive AnyRecursiveSequence to a single
+ * one". It is also the difference between linear and exponential matching here:
+ * each `**` emits its own `(?:.+/)?`, and N adjacent nullable `.+` groups
+ * backtrack 2^N ways against a long non-matching path. Measured through
+ * `detectPythonEnvironment` before the collapse, 21-component path: 8 chained
+ * `**` = 69ms, 10 = 701ms, 12 = 5739ms (minimatch, which collapses: ~0.2ms
+ * flat). That call is awaited with no timeout by `test-runner-client.ts`,
+ * `dispatch/runners/pyright.ts` and `lsp/server.ts`, so the blowup is a hang,
+ * not a slow answer. Collapsing is semantics-preserving — `a/**\/**\/b` and
+ * `a/**\/b` accept the same set — so this is purely the upstream-faithful
+ * normalization, not a behavior change.
+ */
+function compileWorkspaceMemberPattern(
+	pattern: string,
+	dialect: WorkspaceMemberGlobDialect,
+): RegExp | undefined {
+	const isGlobstar = (component: string): boolean =>
+		component === "**" && dialect.globstar === "crosses-components";
+	const components = pattern
+		.split("/")
+		.filter(
+			(component, i, all) => !(isGlobstar(component) && isGlobstar(all[i - 1])),
+		);
+	let source = "";
+	let needSeparator = false;
+	for (let i = 0; i < components.length; i += 1) {
+		if (!isGlobstar(components[i])) {
+			if (needSeparator) source += "/";
+			source += globRunToRegExpSource(components[i], dialect);
+			needSeparator = true;
+			continue;
+		}
+		if (i === components.length - 1) {
+			source += needSeparator ? "/.+" : ".+";
+		} else {
+			source += needSeparator ? "(?:/.+)?/" : "(?:.+/)?";
+		}
+		needSeparator = false;
+	}
+	try {
+		return new RegExp(`^${source}$`);
+	} catch {
+		// A glob character class is not a JS character class: `[z-a]` is a legal
+		// glob (matching nothing, since the range is empty) and an illegal RegExp
+		// ("Range out of order"). Fail CLOSED — an uncompilable pattern declares
+		// no member and excludes nothing — which is also the answer the deleted
+		// minimatch call gave (#2591 review round 2, F2).
+		return undefined;
+	}
+}
+
+/**
+ * Does `relativePath` — a `/`-separated path relative to the workspace root —
+ * match one declared workspace-member (or workspace-exclude) `pattern` under
+ * `dialect`?
+ *
+ * This is the ONE workspace-member matcher (#2591). `clients/lsp/server.ts`'s
+ * `cargoWorkspaceDeclaresMember` and `clients/python-environment.ts`'s
+ * `isUvWorkspaceMember` are thin callers of it; neither keeps a private segment
+ * compiler or minimatch options block any more.
+ *
+ * `clients/review-graph/workspace-modules.ts`'s `expandWorkspacePattern` is
+ * deliberately NOT a caller: npm/pnpm `workspaces` entries are EXPANDED against
+ * the filesystem (one `readdir` of the directory preceding the first `*`,
+ * yielding the directories that exist and hold a manifest) rather than tested
+ * against a candidate path. It answers "which directories does this pattern
+ * name", not "does this pattern name this directory"; folding it in would mean
+ * giving this pure function a filesystem.
+ *
+ * The supported syntax is the intersection of the two upstream dialects: `*`,
+ * `?`, `**`, `[abc]`/`[!abc]` (dialect-gated), and literals. minimatch-only
+ * extensions the pre-fold uv path inherited by accident — brace expansion,
+ * extglobs, leading-`!` negation, leading-`#` comments — are NOT honored, and
+ * uv's own `glob` crate does not honor them either (same pinned SHA), so
+ * dropping them moves uv toward upstream rather than away from it.
+ *
+ * A pattern that cannot be compiled at all answers `false` for every path —
+ * it declares no member and excludes nothing (#2591 review round 2, F2). The
+ * only such patterns today carry an empty character-class range (`[z-a]`:
+ * legal glob, illegal JS RegExp). Reachability note, recorded rather than
+ * assumed away: no such pattern can reach here through a manifest right now,
+ * because `parseTomlStringArray` (`clients/cargo-manifest.ts`) captures an
+ * array body non-greedily up to the FIRST `]`, so any entry containing a `]`
+ * loses its closing quote and is dropped before it becomes a pattern. That is
+ * a property of the TOML reader, not of this matcher, and it is not this
+ * function's to rely on — the character-class axis stays because upstream
+ * cargo and uv both support classes, and the reader's gap may be closed later.
+ */
+export function matchesWorkspaceMemberPattern(
+	pattern: string,
+	relativePath: string,
+	dialect: WorkspaceMemberGlobDialect,
+): boolean {
+	const normalized = dialect.normalizePattern(pattern);
+	if (
+		dialect.globstar === "pattern-never-matches" &&
+		normalized.includes("**")
+	) {
+		return false;
+	}
+	return (
+		compileWorkspaceMemberPattern(normalized, dialect)?.test(relativePath) ??
+		false
+	);
+}
+
+/**
  * Narrow no-break space, U+202F. macOS writes it before AM/PM in screenshot
  * file names; users type an ordinary space.
  */
