@@ -642,6 +642,13 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "::notice::host range lane '${{ matrix.pi_host }}' resolved to @earendil-works/pi-coding-agent@$VERSION"
 
+      # No --ignore-scripts here (S6505, the same noted exception as this
+      # file's `smoke` job above): the `prepare` script's dist build must run
+      # for the "Build dist" step below to have something to bundle. Plain
+      # `npm install` rather than `npm ci` is deliberate, not an S8543 gap:
+      # the `npm pkg set` just above intentionally moves the devDependency
+      # off what package-lock.json has pinned, so resolving/relocking against
+      # the NEW version is exactly the point of this step.
       - name: Pin devDependency to the resolved host + install
         shell: bash
         run: |
@@ -756,6 +763,11 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "::notice::nightly host lane resolved @earendil-works/pi-coding-agent@latest to $VERSION"
 
+      # No --ignore-scripts here (S6505, same noted exception as host-range-
+      # smoke and this file's `smoke` job above): `prepare` must run so
+      # "Build dist" has something to bundle. Plain `npm install` (not
+      # `npm ci`) is deliberate, not an S8543 gap: `npm pkg set` just above
+      # intentionally moves the devDependency off the locked version.
       - name: Pin devDependency to @latest + install
         id: install_deps
         continue-on-error: true
