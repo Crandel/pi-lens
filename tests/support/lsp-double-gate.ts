@@ -100,6 +100,7 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadAstGrepNapi } from "../../clients/deps/ast-grep-napi.js";
+import { stripSource } from "./sweep-kit.js";
 import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
 import { makeLspServiceDouble } from "./lsp-service-double.js";
 
@@ -110,15 +111,35 @@ export const repoRoot = path.resolve(
 
 /**
  * The `// lsp-double: <reason>` line a file must carry to be admitted to the
- * ratchet's baseline after minting. Half of the two-part gate in
+ * ratchet's baseline. Half of the two-part gate in
  * `tests/config/lsp-service-double-sweep.test.ts`; the other half is the
  * `ADMITTED_AFTER_BASELINE` map. Returns the reason text, or `undefined`.
+ *
+ * It must be a REAL comment. Matched on raw text (#2585 round 3), a
+ * `// lsp-double:` line sitting inside a template literal — a fixture, a
+ * generated snippet, this module's own doc examples — satisfied the gate
+ * without ever being a comment: the same
+ * comment/string-laundering attack `sweep-kit.ts` catalogues, and the same
+ * shape as AGENTS.md defect 38 one level down.
+ *
+ * The discriminator is `stripSource`'s two policies. Under
+ * `strings: "keep"` it blanks COMMENTS in place and leaves string and template
+ * contents verbatim, preserving offsets. So a match whose slice comes back all
+ * whitespace was a real comment; one that survives intact was text inside a
+ * literal, and is skipped.
  */
-const ADMISSION_HEADER = /^[ \t]*\/\/[ \t]*lsp-double:[ \t]*(.+)$/m;
+const ADMISSION_HEADER = /^[ \t]*\/\/[ \t]*lsp-double:[ \t]*(.+)$/gm;
 
 export function admissionHeader(source: string): string | undefined {
-	const match = ADMISSION_HEADER.exec(source);
-	return match ? match[1].trim() : undefined;
+	const commentsBlanked = stripSource(source, { strings: "keep" });
+	for (const match of source.matchAll(ADMISSION_HEADER)) {
+		const start = match.index ?? 0;
+		if (/\S/.test(commentsBlanked.slice(start, start + match[0].length))) {
+			continue; // survived the comment blanking: it is inside a literal
+		}
+		return match[1].trim();
+	}
+	return undefined;
 }
 
 /** The factory's own default surface — the single source of truth (#2582). */

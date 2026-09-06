@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the dispatch-runner seam, burn-down tracked in #2592
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

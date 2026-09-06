@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

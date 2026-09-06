@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the lsp tools seam, burn-down tracked in #2592
 /**
  * #671: `lsp_diagnostics`' batch/directory sweep (`collectBatchDiagnostics` /
  * `mapWithConcurrency` in tools/lsp-diagnostics.ts) used to call `touchFile`

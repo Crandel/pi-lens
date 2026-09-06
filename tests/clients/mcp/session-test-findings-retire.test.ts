@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the MCP session seam, burn-down tracked in #2592
 /**
  * #2522 review round 3, F2 — the MCP Stop-hook commit must not wipe the
  * turn-end deferral set.

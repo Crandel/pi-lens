@@ -28,20 +28,20 @@
  * it is AGENTS.md defect shape 38: a guard a one-line data edit satisfies
  * away.
  *
- * So a pin is now provenance-checked. {@link ORIGINAL_POPULATION} records what
- * was pinned when this ratchet was minted. Any baseline key outside it must
- * ALSO appear in {@link ADMITTED_AFTER_BASELINE} with a real reason naming an
- * issue, AND the admitted file must carry its own
- * `// lsp-double: <reason>` header. Two parts, in two different files, one of
- * them source-reviewed — a data edit alone admits nothing. This is the same
- * shape as `tests/clients/flake-shape-ratchet.test.ts`'s admission gate
- * (header + `wallClockBudgetInclude` membership), reused rather than
- * re-derived.
+ * So a pin costs three edits in three places, and EVERY pin pays: an entry in
+ * `tests/support/lsp-double-baseline.json` (the count), an entry in
+ * {@link ADMITTED} with a reason naming the issue that tracks it, and a
+ * `// lsp-double: <reason>` header in the file itself. One of the three is
+ * source-reviewed prose in the admitted file, so a data edit alone admits
+ * nothing. Same shape as `tests/clients/flake-shape-ratchet.test.ts`'s
+ * admission gate (header + `wallClockBudgetInclude` membership), reused rather
+ * than re-derived.
  *
- * `ORIGINAL_POPULATION` is NOT a mirror of the baseline JSON: it is an
- * append-only record of a historical fact and keeps naming files after they
- * are burned down, which is what makes "was this pin admitted or smuggled?"
- * answerable. Pruning it would let a burned-down file be re-pinned silently.
+ * Round 3 tried to spare the seventeen inherited files by exempting an
+ * `ORIGINAL_POPULATION` Set, and the verifier walked straight through it: a
+ * fresh double, one baseline line, one line in the Set, 29/29 green. An exempt
+ * tier IS a door. There is now one path in and one path out, and the seventeen
+ * carry their headers like everything else.
  *
  * ## The rules
  *
@@ -98,39 +98,63 @@ const BASELINE: Baseline = JSON.parse(
 );
 
 /**
- * The population as minted by #2585 (2026-09-06). APPEND-ONLY: an entry stays
- * here after its file is migrated, because this list answers "was this pin
- * part of the original debt?", not "what is pinned today". Pruning a
- * burned-down file would let it be re-pinned without an admission.
+ * EVERY pin, with the reason it is still hand-rolled. There is no exempt
+ * "original debt" tier: round 3 had one (`ORIGINAL_POPULATION`) and the
+ * verifier walked straight through it — a fresh double, one baseline JSON
+ * line, one line added to that Set, and the suite was 29/29 green with no
+ * reason and no header. That is #2585 round 2's escape relocated one `Set`
+ * away, and it is the Screen clause of AGENTS.md shape 38 failing on the very
+ * guard that introduced the shape.
+ *
+ * So there is ONE path in and one path out, for the seventeen files inherited
+ * from #2582 exactly as for anything added tomorrow: a pin in
+ * `tests/support/lsp-double-baseline.json`, an entry here naming the issue
+ * that tracks it, and a `// lsp-double: <reason>` header in the file itself.
+ * Burn-down removes all three; the dead-admission rule reds on any leftover.
+ *
+ * The old tier was also inverted in its own terms: keeping a burned-down file
+ * in `ORIGINAL_POPULATION` PERMITTED a silent re-pin rather than preventing
+ * one — `lsp/late-auxiliary-findings` was migrated in round 3 and stayed in
+ * the Set, so only a separate hardcoded array noticed when it came back.
+ * That array is gone too: a migrated file that regrows a double is now a
+ * `new-file` red like any other.
  */
-const ORIGINAL_POPULATION: ReadonlySet<string> = new Set([
-	"tests/clients/actionable-warnings-bounds.test.ts",
-	"tests/clients/actionable-warnings-deferred-bounds.test.ts",
-	"tests/clients/actionable-warnings-history.test.ts",
-	"tests/clients/actionable-warnings-lsp-cache.test.ts",
-	"tests/clients/actionable-warnings.test.ts",
-	"tests/clients/dispatch/runners/pyright-environment.test.ts",
-	"tests/clients/lsp-document-symbols.test.ts",
-	"tests/clients/lsp/late-auxiliary-findings.test.ts",
-	"tests/clients/mcp/analyze.test.ts",
-	"tests/clients/mcp/session-context-eviction.test.ts",
-	"tests/clients/mcp/session-test-findings-retire.test.ts",
-	"tests/clients/mcp/session.test.ts",
-	"tests/clients/warm-attach-confirmation.test.ts",
-	"tests/tools/lsp-diagnostics-cache.test.ts",
-	"tests/tools/lsp-diagnostics-inferred-project.test.ts",
-	"tests/tools/lsp-diagnostics-per-server-concurrency.test.ts",
-	"tests/tools/lsp-diagnostics.test.ts",
-	"tests/tools/lsp-navigation.test.ts",
-]);
-
-/**
- * Pins added AFTER the baseline was minted. Empty in steady state — the same
- * merge-window device as `flake-shape-ratchet.test.ts`'s map of the same name.
- * An entry here is only half an admission: the file must also carry a
- * `// lsp-double: <reason>` header of its own.
- */
-const ADMITTED_AFTER_BASELINE: Readonly<Record<string, string>> = {};
+const ADMITTED: Readonly<Record<string, string>> = {
+	"tests/clients/actionable-warnings-bounds.test.ts":
+		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
+	"tests/clients/actionable-warnings-deferred-bounds.test.ts":
+		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
+	"tests/clients/actionable-warnings-history.test.ts":
+		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
+	"tests/clients/actionable-warnings-lsp-cache.test.ts":
+		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
+	"tests/clients/actionable-warnings.test.ts":
+		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
+	"tests/clients/dispatch/runners/pyright-environment.test.ts":
+		"hand-rolled double on the dispatch-runner seam, burn-down tracked in #2592",
+	"tests/clients/lsp-document-symbols.test.ts":
+		"hand-rolled double on a seam #2582 did not scope, burn-down tracked in #2592",
+	"tests/clients/mcp/analyze.test.ts":
+		"hand-rolled double on the MCP session seam, burn-down tracked in #2592",
+	"tests/clients/mcp/session-context-eviction.test.ts":
+		"hand-rolled double on the MCP session seam, burn-down tracked in #2592",
+	"tests/clients/mcp/session-test-findings-retire.test.ts":
+		"hand-rolled double on the MCP session seam, burn-down tracked in #2592",
+	"tests/clients/mcp/session.test.ts":
+		"hand-rolled double on the MCP session seam, burn-down tracked in #2592",
+	"tests/clients/warm-attach-confirmation.test.ts":
+		"hand-rolled double on a seam #2582 did not scope, burn-down tracked in #2592",
+	"tests/tools/lsp-diagnostics-cache.test.ts":
+		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
+	"tests/tools/lsp-diagnostics-inferred-project.test.ts":
+		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
+	"tests/tools/lsp-diagnostics-per-server-concurrency.test.ts":
+		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
+	"tests/tools/lsp-diagnostics.test.ts":
+		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
+	"tests/tools/lsp-navigation.test.ts":
+		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
+};
 
 /** Shortest text this gate will accept as a reason, in either half. */
 const MIN_REASON = 15;
@@ -209,26 +233,24 @@ function describeProblem(p: RatchetProblem): string {
  * Provenance for every baseline key, and liveness for every admission.
  *
  * Pulled out as a pure function taking all four inputs so it is unit-testable
- * against fixtures directly — `ADMITTED_AFTER_BASELINE` is empty in steady
+ * against fixtures directly — `ADMITTED` is empty in steady
  * state, so a test that only iterates the real map (as the sweep does) can
  * never prove this logic is mutation-sensitive. That is the lesson
  * `flake-shape-ratchet.test.ts` records for the same gate shape.
  */
 export function auditAdmissions(
 	baseline: Readonly<Baseline>,
-	original: ReadonlySet<string>,
 	admitted: Readonly<Record<string, string>>,
 	readSource: (file: string) => string | undefined,
 ): string[] {
 	const problems: string[] = [];
 
 	for (const file of Object.keys(baseline)) {
-		if (original.has(file)) continue;
 		const reason = admitted[file];
 		if (reason === undefined) {
 			problems.push(
 				`${file}: pinned in tests/support/lsp-double-baseline.json but never ` +
-					"admitted. A pin is not a data edit: add an ADMITTED_AFTER_BASELINE " +
+					"admitted. A pin is not a data edit: add an ADMITTED " +
 					"entry naming the issue that tracks it, AND a `// lsp-double: " +
 					"<reason>` header in the file itself. Both parts are required " +
 					`(AGENTS.md shape 38). Or ${SEED_ADVICE}.`,
@@ -237,11 +259,11 @@ export function auditAdmissions(
 		}
 		if (reason.trim().length < MIN_REASON) {
 			problems.push(
-				`${file}: ADMITTED_AFTER_BASELINE reason is under ${MIN_REASON} characters — say why this double cannot use the factory`,
+				`${file}: ADMITTED reason is under ${MIN_REASON} characters — say why this double cannot use the factory`,
 			);
 		} else if (!/#\d+/.test(reason)) {
 			problems.push(
-				`${file}: ADMITTED_AFTER_BASELINE reason names no issue — an admission must point at tracked work (#NNN)`,
+				`${file}: ADMITTED reason names no issue — an admission must point at tracked work (#NNN)`,
 			);
 		}
 		const source = readSource(file);
@@ -252,7 +274,7 @@ export function auditAdmissions(
 		const header = admissionHeader(source);
 		if (!header) {
 			problems.push(
-				`${file}: admitted in ADMITTED_AFTER_BASELINE but carries no ` +
+				`${file}: admitted in ADMITTED but carries no ` +
 					"`// lsp-double: <reason>` header. Both parts are required " +
 					"(AGENTS.md shape 38).",
 			);
@@ -266,7 +288,7 @@ export function auditAdmissions(
 	for (const file of Object.keys(admitted)) {
 		if (!(file in baseline)) {
 			problems.push(
-				`${file}: ADMITTED_AFTER_BASELINE names a file with no pin — delete the dead admission`,
+				`${file}: ADMITTED names a file with no pin — delete the dead admission`,
 			);
 		}
 	}
@@ -293,75 +315,36 @@ describe("#2582 hand-rolled LSPService double ratchet", () => {
 		expect(auditAgainstBaseline(live).map(describeProblem)).toEqual([]);
 	});
 
-	it("every pin is either original debt or a two-part admission", () => {
-		expect(
-			auditAdmissions(
-				BASELINE,
-				ORIGINAL_POPULATION,
-				ADMITTED_AFTER_BASELINE,
-				readRepoSource,
-			),
-		).toEqual([]);
-	});
-
-	it("the migrated pipeline and runtime-session seams stay on the factory", () => {
-		// The files #2582 migrated. Naming them explicitly means a later edit
-		// that hand-rolls a double back into one of them fails HERE with a
-		// readable message, not only as a "new-file" line above.
-		const migrated = [
-			"tests/clients/cascade-compute.test.ts",
-			"tests/clients/dispatch/lazy-liveness.test.ts",
-			"tests/clients/dispatch/runners/runner-status-semantics.test.ts",
-			"tests/clients/formatters-lazy-liveness.test.ts",
-			"tests/clients/lsp/late-auxiliary-findings.test.ts",
-			"tests/clients/pi-host-contract.test.ts",
-			"tests/clients/pipeline-lsp-sync.test.ts",
-			"tests/clients/pipeline.test.ts",
-			"tests/clients/runtime-session-warm.test.ts",
-			"tests/clients/runtime-session-warmup-oneshot.test.ts",
-			"tests/clients/runtime-session-warmup-prewarm.test.ts",
-			"tests/clients/runtime-session-warmup-supersession.test.ts",
-			"tests/clients/runtime-session.test.ts",
-			"tests/clients/runtime-tool-call.test.ts",
-			"tests/clients/word-index-lifecycle.test.ts",
-			"tests/clients/write-autofix-attachment-message.test.ts",
-		];
-		expect(migrated.filter((file) => file in live)).toEqual([]);
+	it("every pin carries a reason and the file carries its header", () => {
+		expect(auditAdmissions(BASELINE, ADMITTED, readRepoSource)).toEqual([]);
 	});
 });
 
 // ── The admission machine, cell by cell ──────────────────────────────────
 
 /**
- * One (state × writer) cell of the PR-body table each. `ADMITTED_AFTER_BASELINE`
+ * One (state × writer) cell of the PR-body table each. `ADMITTED`
  * is empty in steady state, so these drive `auditAdmissions` against synthetic
  * inputs — the only way this logic is mutation-sensitive at all.
  */
 describe("#2582 admission gate — the state space", () => {
 	const NEW = "tests/clients/fresh-double.test.ts";
-	const PINNED = "tests/tools/lsp-navigation.test.ts";
 	const header = (reason: string) => `// lsp-double: ${reason}\nconst x = 1;\n`;
 	const GOOD_REASON = "different seam, tracked in #2592";
 	const noSource = () => undefined;
 	const withHeader = (reason: string) => () => header(reason);
 
 	it("C2: a bare pin — one baseline JSON line and nothing else — reds", () => {
-		const problems = auditAdmissions(
-			{ [NEW]: 1 },
-			new Set(),
-			{},
-			withHeader(GOOD_REASON),
-		);
+		const problems = auditAdmissions({ [NEW]: 1 }, {}, withHeader(GOOD_REASON));
 		expect(problems).toHaveLength(1);
 		expect(problems[0]).toContain("never admitted");
-		expect(problems[0]).toContain("ADMITTED_AFTER_BASELINE");
+		expect(problems[0]).toContain("ADMITTED");
 		expect(problems[0]).toContain("lsp-double:");
 	});
 
 	it("C3: the ADMITTED map alone, without the file's header, reds", () => {
 		const problems = auditAdmissions(
 			{ [NEW]: 1 },
-			new Set(),
 			{ [NEW]: GOOD_REASON },
 			() => "const x = 1;\n",
 		);
@@ -371,12 +354,7 @@ describe("#2582 admission gate — the state space", () => {
 	});
 
 	it("C4: the header alone, without an ADMITTED entry, reds", () => {
-		const problems = auditAdmissions(
-			{ [NEW]: 1 },
-			new Set(),
-			{},
-			withHeader(GOOD_REASON),
-		);
+		const problems = auditAdmissions({ [NEW]: 1 }, {}, withHeader(GOOD_REASON));
 		expect(problems).toEqual([expect.stringContaining("never admitted")]);
 	});
 
@@ -384,7 +362,6 @@ describe("#2582 admission gate — the state space", () => {
 		expect(
 			auditAdmissions(
 				{ [NEW]: 1 },
-				new Set(),
 				{ [NEW]: GOOD_REASON },
 				withHeader(GOOD_REASON),
 			),
@@ -393,12 +370,7 @@ describe("#2582 admission gate — the state space", () => {
 
 	it("C6: an empty ADMITTED reason reds", () => {
 		expect(
-			auditAdmissions(
-				{ [NEW]: 1 },
-				new Set(),
-				{ [NEW]: "   " },
-				withHeader(GOOD_REASON),
-			),
+			auditAdmissions({ [NEW]: 1 }, { [NEW]: "   " }, withHeader(GOOD_REASON)),
 		).toEqual([expect.stringContaining(`under ${MIN_REASON} characters`)]);
 	});
 
@@ -406,7 +378,6 @@ describe("#2582 admission gate — the state space", () => {
 		expect(
 			auditAdmissions(
 				{ [NEW]: 1 },
-				new Set(),
 				{ [NEW]: "this one is special, honestly" },
 				withHeader(GOOD_REASON),
 			),
@@ -415,44 +386,50 @@ describe("#2582 admission gate — the state space", () => {
 
 	it("C8: a header reason too short to be real reds", () => {
 		expect(
-			auditAdmissions(
-				{ [NEW]: 1 },
-				new Set(),
-				{ [NEW]: GOOD_REASON },
-				withHeader("todo"),
-			),
+			auditAdmissions({ [NEW]: 1 }, { [NEW]: GOOD_REASON }, withHeader("todo")),
 		).toEqual([expect.stringContaining("a marker is not a reason")]);
 	});
 
-	it("C9/C20: an original pin needs no admission, before or after burn-down", () => {
-		// Still pinned: no provenance problem.
-		expect(
-			auditAdmissions({ [PINNED]: 1 }, ORIGINAL_POPULATION, {}, noSource),
-		).toEqual([]);
-		// Burned down (pin removed): ORIGINAL_POPULATION keeps naming it, and
-		// that is not a stale-entry problem — it is the record that stops a
-		// silent re-pin.
-		expect(auditAdmissions({}, ORIGINAL_POPULATION, {}, noSource)).toEqual([]);
+	it("C16/C17: an ADMITTED entry with no pin reds as a dead admission", () => {
+		expect(auditAdmissions({}, { [NEW]: GOOD_REASON }, noSource)).toEqual([
+			expect.stringContaining("no pin — delete the dead admission"),
+		]);
 	});
 
-	it("C16/C17: an ADMITTED entry with no pin reds as a dead admission", () => {
+	it("C23: a `// lsp-double:` line inside a string is not a header", () => {
+		// #2585 round 4, F3. The header used to be matched on raw file text, so
+		// a marker inside a template literal or a plain string admitted a file
+		// without ever being a comment — sweep-kit's comment/string-laundering
+		// attack, one level down from the gate it defends. Real fixture files,
+		// read from disk, not strings built here.
+		const readFixture = (name: string) => () =>
+			fs.readFileSync(path.join(FIXTURES, name), "utf8");
 		expect(
-			auditAdmissions({}, new Set(), { [NEW]: GOOD_REASON }, noSource),
-		).toEqual([expect.stringContaining("no pin — delete the dead admission")]);
+			auditAdmissions(
+				{ [NEW]: 1 },
+				{ [NEW]: GOOD_REASON },
+				readFixture("header-inside-a-string.ts"),
+			),
+		).toEqual([
+			expect.stringContaining("carries no `// lsp-double: <reason>` header"),
+		]);
+		// The same file's sibling, with the marker as a genuine comment, passes.
+		expect(
+			auditAdmissions(
+				{ [NEW]: 1 },
+				{ [NEW]: GOOD_REASON },
+				readFixture("header-real-comment.ts"),
+			),
+		).toEqual([]);
 	});
 
 	it("C15: removing pin, admission and doubles together passes", () => {
-		expect(auditAdmissions({}, new Set(), {}, noSource)).toEqual([]);
+		expect(auditAdmissions({}, {}, noSource)).toEqual([]);
 	});
 
 	it("admits a file that has vanished from disk only as a problem", () => {
 		expect(
-			auditAdmissions(
-				{ [NEW]: 1 },
-				new Set(),
-				{ [NEW]: GOOD_REASON },
-				noSource,
-			),
+			auditAdmissions({ [NEW]: 1 }, { [NEW]: GOOD_REASON }, noSource),
 		).toEqual([expect.stringContaining("the file does not exist")]);
 	});
 });
