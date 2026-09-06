@@ -1279,6 +1279,16 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 	"warm-attach.ts":
 		"the warm-attach IPC server and incumbent-PID role, which belong to the process instance, not the session; its served-diagnostic dedupe is keyed by content hash, so a carried entry can only mean the answer is unchanged",
 
+	// #2507: the in-flight tool-call keep-alive. Deliberately NOT reset at a
+	// session boundary: a session_start can land mid-turn (see
+	// clients/bootstrap.ts), and clearing a hold there would un-hold a tool
+	// call that is still running — reintroducing the exact drain (a headless
+	// child exiting 0 mid `lsp_diagnostics`) the hold exists to prevent. The
+	// hold is scoped to one call's try/finally and bounded by its own max-age
+	// failsafe, not by the session.
+	"event-loop-hold.ts":
+		"in-flight tool-call keep-alive; scoped to one call's try/finally and force-released by its own max-age failsafe — a session boundary that cleared it would un-hold a still-running call and reintroduce #2507",
+
 	// --- Configuration and feature-flag memos: read from env or a config file
 	// whose own loader owns invalidation. A stale value here is a config read,
 	// not a session verdict about a tool. ---
@@ -1464,6 +1474,7 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"dispatch/runners/utils/lazy-installer.ts": 2,
 	"dispatch/runners/utils/runner-helpers.ts": 7,
 	"disposition-publish.ts": 0,
+	"event-loop-hold.ts": 0,
 	"extension-log.ts": 2,
 	"format-events-publish.ts": 0,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
