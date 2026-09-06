@@ -8,6 +8,7 @@ import {
 	HOST_PROVIDED_TYPE_ONLY_PACKAGES,
 	LAZY_NATIVE_PACKAGES,
 } from "../scripts/lib/host-provided-deps.mjs";
+import { USER_PROFILE_PATH_RE } from "./support/user-profile-path-pattern.js";
 
 // These tests pin the published-package contract: pi-lens ships a precompiled
 // dist/ and points its entry at compiled JS, so pi does NOT jiti-transpile ~200
@@ -412,6 +413,37 @@ describe("bundled dist entry shape (#335)", () => {
 			expect(src).toContain("pathToFileURL");
 		},
 	);
+
+	// #2594 review F1/F2: scripts/bundle-dist.mjs's `npm exec --package
+	// esbuild@…` spawn originally ran with `cwd: root`, but esbuild bakes its
+	// bundled-module-path banner COMMENTS relative to esbuild's own cwd. A
+	// since-reverted fix moved that cwd to a temp directory to dodge a
+	// project-tree dependency collision (#2590) and, as a side effect, baked
+	// the temp path (and this machine's home directory, via the temp dir's
+	// full path) into every one of those comments in the shipped
+	// dist/index.js — the exact #1718/#1728 hardcoded-machine-path shape,
+	// just introduced by the bundler instead of a hand-typed literal. The fix
+	// keeps `cwd: root` (so esbuild's own relative paths stay correct) and
+	// isolates npm's tree lookup via `--prefix` instead. Reuses the same
+	// regex `tests/scripts/no-hardcoded-machine-paths.test.ts` scans source
+	// with, so the two guards cannot drift onto different patterns.
+	it.runIf(built)("bakes no user-profile absolute path into the bundle", () => {
+		// Reviewed, named exception — never a blanket skip (same policy as
+		// no-hardcoded-machine-paths.test.ts's own ALLOWLIST). This is a real,
+		// pre-existing, unrelated match: clients/knip-client.ts's own doc
+		// comment discusses a historical incident with the literal example path
+		// "/home/v" (a one-letter example username), which the regex's
+		// `[A-Za-z0-9_.-]+` (1-or-more) legitimately matches. It has nothing to
+		// do with this bundle's build tooling and is present in every build,
+		// buggy or not — excluding it by exact value leaves the check exactly as
+		// strict against the actual defect shape (hundreds of distinct
+		// `/home/<real-user>` occurrences from esbuild's own banner comments).
+		const KNOWN_BENIGN_MATCHES = new Set(["/home/v"]);
+		const matches = (src.match(USER_PROFILE_PATH_RE) ?? []).filter(
+			(m) => !KNOWN_BENIGN_MATCHES.has(m),
+		);
+		expect(matches).toEqual([]);
+	});
 });
 
 describe("tsconfig.dist.json", () => {
