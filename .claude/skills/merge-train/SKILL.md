@@ -12,7 +12,8 @@ reviewed, zero unreviewed merges). Apply it to each PR in the queue.
 
 1. **Review.** Spawn `pi-lens-reviewer` (worktree isolation) with the PR
    number, a one-paragraph summary of the claim, and any PR-specific attack
-   angles. Self-authored and small PRs get reviewed too — no exceptions.
+   angles. Self-authored and small PRs get reviewed too — the depth follows
+   the review tier below, never the priority label.
 2. **Fix rounds.** Send findings back to the PR's original author agent when
    its worktree survives (SendMessage — cheapest context); otherwise spawn
    `pi-lens-fixer` on the branch with the findings inlined.
@@ -173,6 +174,32 @@ operator's private notes, so a different orchestrator can run the same train.
   2026-09-06 entry: the autoqa witness/reachability rules and the release-QA
   layer came from a maintainer link, not from the train's own retrospective
   on #2587.
+- **Review tier follows what the diff touches, never the priority label
+  (2026-09-06).** The record: the two most dangerous regressions of that day
+  came from p3 follow-ups — #2595 (a 125 s stall on an awaited path, a latent
+  crash) and #2604 (broke offline installs in r2, broke `npm install` on
+  Windows in r3) — and both were caught only by full review; the p3s where
+  review found nothing were the ones touching no production code.
+  - **Tier A — full adversarial review, any priority:** anything under
+    `clients/`, `tools/`, `mcp/`, `scripts/`, `.github/`, or a package
+    manifest / lockfile.
+  - **Tier B — one scoped review pass, scope stated in the brief:** tests-only
+    diffs that are not governance sweeps or ratchets (those are Tier A: a
+    guard is production for the train).
+  - **Tier C — no reviewer agent:** docs, comments, rename-only, data files.
+    Orchestrator read plus CI on the exact head.
+  A prescribed-remedy fix round stays "merge on green" in every tier.
+- **Same-seam siblings batch into the open PR (2026-09-06).** When a review
+  finds a sibling of the same shape on the same seam, it goes into the current
+  PR as another round — reusing the fixer's context and the reviewer's probes
+  — when all three hold: same dependent sweep, remedy prescribed rather than
+  designed, and the PR is not on the critical path of an external or p1 fix.
+  Otherwise file it with the sibling list and the reason. The record: #2598
+  out of #2599 and #2593 out of #2594 each cost a fresh fixer spin-up plus a
+  fresh review (and #2604 then needed three rounds under a review that was
+  already armed on that file); #2603 out of #2595 and #2592 out of #2585 were
+  rightly separate (a new matcher; seventeen per-seam reads). #2596 was filed
+  as a follow-up and closed as a duplicate — pure waste.
 - **Refill order** when the quota gate is open: p1 first, then the queued
   follow-ups in ledger order, then the program work (#2421 → #2416 → #2383/#195).
 
