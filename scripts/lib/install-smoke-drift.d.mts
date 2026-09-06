@@ -3,18 +3,32 @@
 
 export const INSTALL_SMOKE_DRIFT_TITLE: string;
 
-export type StepOutcome = "success" | "failure" | "skipped";
+export type StepOutcome = "success" | "failure" | "cancelled" | "skipped";
+
+export const VALID_STEP_OUTCOMES: readonly StepOutcome[];
 
 export interface InstallSmokeDriftReport {
 	version: string;
-	steps: { name: string; outcome: StepOutcome }[];
+	steps: { name: string; outcome: string }[];
 }
+
+export function isValidReport(report: InstallSmokeDriftReport): boolean;
 
 export function firstFailingStep(
 	report: InstallSmokeDriftReport,
 ): string | null;
 
 export function hasDrift(report: InstallSmokeDriftReport): boolean;
+
+export function isCleanRun(report: InstallSmokeDriftReport): boolean;
+
+export type DriftAction =
+	| "file-or-refresh"
+	| "close-if-open"
+	| "no-action"
+	| "unknown";
+
+export function decideAction(report: InstallSmokeDriftReport): DriftAction;
 
 export function buildInstallSmokeDriftBody(
 	report: InstallSmokeDriftReport,

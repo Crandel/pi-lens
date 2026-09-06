@@ -15,7 +15,24 @@
  * expressions are the single source of truth for what happened — this
  * script never re-derives success/failure itself.
  *
- * Required env (each: success | failure | skipped, except RESOLVED_VERSION):
+ * F1 (round 2 review): a real GitHub Actions step outcome is one of FOUR
+ * values (success/failure/cancelled/skipped), not two. This script takes
+ * FOUR actions depending on which of those the run's steps produced —
+ * see scripts/lib/install-smoke-drift.mjs's module doc and
+ * isValidReport/hasDrift/isCleanRun for the exact conditions:
+ *   - some step "failure"                -> file or refresh the tracker
+ *   - EVERY step "success"               -> close an existing tracker
+ *   - a mix with no failure, not all success (cancelled/skipped in the mix,
+ *     e.g. concurrency's cancel-in-progress interrupting a nightly run)
+ *                                         -> NO action (logged, not an error)
+ *   - any step outcome missing/not one of the four real values (a wiring
+ *     bug: an env var the workflow step forgot to set)
+ *                                         -> NO action, but a WARNING (this
+ *                                            is a defect in the CALLER, not
+ *                                            a normal run state)
+ *
+ * Required env (each: success | failure | cancelled | skipped, except
+ * RESOLVED_VERSION):
  *   RESOLVED_VERSION           the @latest version this run installed
  *   RESOLVE_OUTCOME            resolving that version itself (a registry
  *                              failure here leaves every step below
@@ -37,7 +54,9 @@
  *
  * Never lets an internal error escape as a nonzero exit — this step's own
  * `continue-on-error`/advisory framing means filing/closing an issue is a
- * side effect, not a build gate, mirroring notify-clean-signal-drift.mjs.
+ * side effect, not a build gate, mirroring notify-clean-signal-drift.mjs
+ * (whose own close condition is a computed finding COUNT, not this file's
+ * step-outcome shape — it does not share this defect).
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -47,7 +66,7 @@ import { findDriftTrackingIssue } from "./lib/drift-issue.mjs";
 import {
 	buildInstallSmokeDriftBody,
 	buildInstallSmokeDriftComment,
-	hasDrift,
+	decideAction,
 	INSTALL_SMOKE_DRIFT_TITLE,
 } from "./lib/install-smoke-drift.mjs";
 
@@ -69,14 +88,17 @@ function gh(args) {
 	return execFileSync("gh", args, { encoding: "utf8" });
 }
 
+/**
+ * Reads each step's RAW env value with no fallback/guess (#2613 F1): an env
+ * var the workflow step forgot to wire up must read as "not a real outcome"
+ * (isValidReport catches it), never silently become "skipped" — that
+ * guess is exactly what let a wiring bug masquerade as an ordinary run.
+ */
 function readReport(env) {
-	const version = env.RESOLVED_VERSION ?? "unknown";
+	const version = env.RESOLVED_VERSION || "unknown";
 	const steps = STEP_NAMES.map(([envVar, name]) => ({
 		name,
-		outcome:
-			/** @type {import("./lib/install-smoke-drift.d.mts").StepOutcome} */ (
-				env[envVar] ?? "skipped"
-			),
+		outcome: env[envVar] ?? "",
 	}));
 	return { version, steps };
 }
@@ -119,21 +141,41 @@ function writeBodyToTempFile(body) {
 
 function main(env) {
 	const report = readReport(env);
-	const body = buildInstallSmokeDriftBody(report, {
-		runUrl: workflowRunUrl(env),
-	});
+	const action = decideAction(report);
+
+	if (action === "unknown") {
+		const msg =
+			`[notify-install-smoke-drift] one or more step outcomes are missing or not a real ` +
+			`GitHub Actions outcome (success/failure/cancelled/skipped) — this is a wiring bug, ` +
+			`not a normal run state; taking NO action. Steps: ${JSON.stringify(report.steps)}`;
+		console.error(dryRun ? msg : `::warning::${msg}`);
+		return;
+	}
 
 	if (dryRun) {
+		const body = buildInstallSmokeDriftBody(report, {
+			runUrl: workflowRunUrl(env),
+		});
 		console.log(
-			`[notify-install-smoke-drift] DRY RUN — drift=${hasDrift(report)}. Plan body:\n`,
+			`[notify-install-smoke-drift] DRY RUN — action=${action}. Plan body:\n`,
 		);
 		console.log(body);
 		return;
 	}
 
+	if (action === "no-action") {
+		console.log(
+			"[notify-install-smoke-drift] run was cancelled/skipped (no failure, not fully clean) — taking no action.",
+		);
+		return;
+	}
+
 	const existing = findTrackingIssue();
 
-	if (hasDrift(report)) {
+	if (action === "file-or-refresh") {
+		const body = buildInstallSmokeDriftBody(report, {
+			runUrl: workflowRunUrl(env),
+		});
 		const bodyFile = writeBodyToTempFile(body);
 		try {
 			if (existing) {
@@ -169,6 +211,7 @@ function main(env) {
 		return;
 	}
 
+	// action === "close-if-open"
 	if (existing) {
 		try {
 			gh([

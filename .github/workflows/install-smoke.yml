@@ -53,6 +53,21 @@ on:
       - "scripts/rpc-load-check.mjs"
       - "scripts/resolve-newest-in-range-host.mjs"
       - "scripts/lib/resolve-newest-in-range-host.mjs"
+      # Review F3: these four are on host-range-smoke/host-latest-smoke's
+      # critical path (the retry wrapper both installs go through, the
+      # drift-notifier and its pure report/body builder) but were missing
+      # from this filter — a PR touching only one of them would have gotten
+      # NO install-smoke coverage at all, PR-gating or otherwise.
+      - "scripts/npm-retry.mjs"
+      - "scripts/lib/retry.mjs"
+      - "scripts/notify-install-smoke-drift.mjs"
+      - "scripts/lib/install-smoke-drift.mjs"
+      # findDriftTrackingIssue is a load-bearing import of the above, not
+      # just tool-smoke.yml's own dependency, now that this workflow uses it.
+      - "scripts/lib/drift-issue.mjs"
+      # Review F3: invoked directly as its own step now (T2 restructure),
+      # not just transitively through the `prepare` lifecycle script.
+      - "scripts/download-grammars.js"
       - ".github/workflows/install-smoke.yml"
   # PR-gating (#2613): only the host-range-smoke job below runs on
   # pull_request (guarded by `if: github.event_name != 'pull_request'` on

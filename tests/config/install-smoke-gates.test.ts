@@ -24,8 +24,9 @@ import yaml from "../../clients/deps/js-yaml.js";
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 
-type Job = { if?: unknown };
-type Workflow = { jobs?: Record<string, Job> };
+type Step = { name?: unknown; run?: unknown };
+type Job = { if?: unknown; steps?: unknown };
+type Workflow = { env?: unknown; jobs?: Record<string, Job> };
 
 function loadWorkflow(source?: string): Workflow {
 	const text =
@@ -41,6 +42,25 @@ function readJobIf(workflow: Workflow, jobName: string): string {
 		);
 	}
 	return ifExpr;
+}
+
+function readStepRun(
+	workflow: Workflow,
+	jobName: string,
+	stepNameSubstring: string,
+): string {
+	const steps = workflow.jobs?.[jobName]?.steps;
+	const step = Array.isArray(steps)
+		? (steps as Step[]).find(
+				(s) => typeof s.name === "string" && s.name.includes(stepNameSubstring),
+			)
+		: undefined;
+	if (typeof step?.run !== "string") {
+		throw new Error(
+			`${WORKFLOW_PATH}: jobs.${jobName} has no step named like "${stepNameSubstring}" with a run: string`,
+		);
+	}
+	return step.run;
 }
 
 function evaluateIf(expr: string, eventName: string): boolean {
@@ -152,4 +172,119 @@ describe("install-smoke.yml job event gates (#2613 review T1)", () => {
 			expect(mutatedWorkflow.jobs?.[jobName]?.if).toBeUndefined();
 		});
 	}
+});
+
+// Round-2 review F3: every script on host-range-smoke/host-latest-smoke's
+// critical path must be in the push/pull_request `paths:` filter, or a PR
+// that touches ONLY that script gets zero install-smoke coverage at all --
+// not even the PR-gating lane #2613 exists to run on exactly such a PR.
+describe("install-smoke.yml paths: filter names every critical-path script (#2613 review F3)", () => {
+	const workflow = loadWorkflow() as unknown as {
+		on?: { push?: { paths?: unknown }; pull_request?: { paths?: unknown } };
+	};
+	const pushPaths = workflow.on?.push?.paths;
+	const pullRequestPaths = workflow.on?.pull_request?.paths;
+
+	const REQUIRED_PATHS = [
+		"scripts/npm-retry.mjs",
+		"scripts/lib/retry.mjs",
+		"scripts/notify-install-smoke-drift.mjs",
+		"scripts/lib/install-smoke-drift.mjs",
+		"scripts/lib/drift-issue.mjs",
+		"scripts/download-grammars.js",
+	];
+
+	it("push: and pull_request: share the exact same paths list (the YAML anchor/alias)", () => {
+		expect(Array.isArray(pushPaths)).toBe(true);
+		expect(pullRequestPaths).toEqual(pushPaths);
+	});
+
+	it.each(REQUIRED_PATHS)("names %s", (p) => {
+		expect(pushPaths).toContain(p);
+	});
+});
+
+// Round-2 review F2: the classify step's master-conclusion comparator was
+// fixed in round 1 (only "success" means "passes on master") but left
+// UNPINNED -- the #2675 MUT-J precedent ("today nothing reds on that") that
+// a regression back to `[ -n "$CONCLUSION" ]` (any non-empty conclusion,
+// which "cancelled"/"skipped"/"timed_out" all satisfy) would leave every
+// existing test green, since none of them read this step's actual bash.
+describe("host-range-smoke's classify step names the master conclusion exactly (#2613 review F2)", () => {
+	const workflow = loadWorkflow();
+	const stepRun = readStepRun(
+		workflow,
+		"host-range-smoke",
+		"Classify newest-in-range failure",
+	);
+
+	it('treats ONLY "success" as "passes on master"', () => {
+		expect(stepRun).toContain('[ "$CONCLUSION" = "success" ]');
+	});
+
+	it('treats "failure" as upstream drift (both branches present, not merged)', () => {
+		expect(stepRun).toContain('[ "$CONCLUSION" = "failure" ]');
+	});
+
+	// Mutation-proof: the exact regression F2 named -- `-n` (non-empty) wrongly
+	// admits "cancelled"/"skipped"/"timed_out" as if they meant "passes".
+	it('mutation-proof: the `-n "$CONCLUSION"` regression this test would catch', () => {
+		const mutated = stepRun.replace(
+			'[ "$CONCLUSION" = "success" ]',
+			'[ -n "$CONCLUSION" ]',
+		);
+		expect(mutated).not.toBe(stepRun);
+		expect(mutated).not.toContain('[ "$CONCLUSION" = "success" ]');
+	});
+});
+
+// Round-2 review F5: PI_HOST_SUPPORTED_RANGE is the ONLY thing keeping the
+// wildcard peerDependencies range from making the newest-in-range lane
+// silently unbounded (review S1). A future edit setting it to "*" (or any
+// range with no upper comparator, e.g. a bare "x") would restore exactly
+// that bug while every OTHER test here (which all supply their own
+// PI_HOST_SUPPORTED_RANGE fixture) stays green.
+describe("PI_HOST_SUPPORTED_RANGE is a genuinely bounded range, never a wildcard (#2613 review F5)", () => {
+	const workflow = loadWorkflow();
+	const env = (workflow as { env?: Record<string, unknown> }).env;
+	const range = env?.PI_HOST_SUPPORTED_RANGE;
+
+	it("is declared as a non-empty string", () => {
+		expect(typeof range).toBe("string");
+		expect((range as string).trim().length).toBeGreaterThan(0);
+	});
+
+	it('is not the bare wildcard "*" or "x"', () => {
+		expect((range as string).trim()).not.toBe("*");
+		expect((range as string).trim()).not.toBe("x");
+	});
+
+	it("carries an upper-bound comparator (< or <=), so it is not open-ended above", () => {
+		expect(range as string).toMatch(/<=?\s*\d/);
+	});
+
+	// Mutation-proof: apply the SAME assertions this describe-block runs
+	// against the real value to the exact regression F5 named ("*" and a
+	// bare "x"), proving they would have failed had the workflow actually
+	// regressed to either.
+	function isBoundedNonWildcard(value: string): boolean {
+		const trimmed = value.trim();
+		return (
+			trimmed.length > 0 &&
+			trimmed !== "*" &&
+			trimmed !== "x" &&
+			/<=?\s*\d/.test(value)
+		);
+	}
+
+	it("the real configured value passes this file's own bounded-range check", () => {
+		expect(isBoundedNonWildcard(range as string)).toBe(true);
+	});
+
+	it.each(["*", "x", ">=0.80.10"])(
+		"mutation-proof: %s fails this file's own bounded-range check (the exact F5 regression)",
+		(regressed) => {
+			expect(isBoundedNonWildcard(regressed)).toBe(false);
+		},
+	);
 });
