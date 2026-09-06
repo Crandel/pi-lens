@@ -28,6 +28,7 @@ import {
 	BLOCKING_CONCLUSIONS,
 	isAdvisoryCheck,
 	isBlockingConclusion,
+	isUncertainConclusion,
 	REQUIRED_CHECKS,
 	resolveLatestByName,
 } from "./ci-checks.mjs";
@@ -288,8 +289,29 @@ export function evaluateMergeGate(pr, health, { approvedBy } = {}) {
 	// the two were behaviorally identical here, but a second hand-rolled
 	// case-sensitive comparison of the SAME set is exactly the duplication
 	// `isBlockingConclusion` exists to remove (ci-checks.mjs).
+	//
+	// #2632: `isUncertainConclusion` (a bare CANCELLED, ci-checks.mjs) is
+	// excluded here too, porting ci-verdict.mjs's #2618 fix-round-2 F2 grace to
+	// this, the REAL shipped merge gate. `cancel-in-progress: true`
+	// (ci.yml:15-16) leaves a stale CANCELLED row as the ONLY entry `byName`
+	// has for a name for several minutes before its replacement posts
+	// (live-probed on PR #2607's "Record post-merge validation": three
+	// check-suites on one commit, the oldest cancelled) -- reading that window
+	// as FAILING_CHECK denies a legitimate merge on a check that is not done
+	// reporting, not one that failed. This exemption reaches only NAMES NOT IN
+	// `REQUIRED_CHECKS`: a required check's CANCELLED conclusion never even
+	// reaches this filter, because the required-check loop above already
+	// denied (REQUIRED_CHECK_NOT_SUCCESS) the moment it saw anything but a
+	// literal SUCCESS -- so a required check's cancellation still hard-fails,
+	// matching #2618's "a REQUIRED row gets NO conclusion exemption" and this
+	// issue's own explicit carve-out. Every OTHER blocking conclusion
+	// (FAILURE, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE, STALE) still
+	// denies unconditionally -- only CANCELLED gets the uncertainty grace.
 	const failing = [...byName.values()].filter(
-		(c) => !isAdvisoryCheck(c.name) && isBlockingConclusion(c.conclusion),
+		(c) =>
+			!isAdvisoryCheck(c.name) &&
+			!isUncertainConclusion(c.conclusion) &&
+			isBlockingConclusion(c.conclusion),
 	);
 	if (failing.length > 0)
 		return deny(

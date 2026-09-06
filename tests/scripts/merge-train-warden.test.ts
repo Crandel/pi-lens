@@ -2484,6 +2484,109 @@ describe("merge-lane gate (#2185)", () => {
 		).toMatchObject({ merge: true });
 	});
 
+	// #2632: a discovered (non-required) check-run's CANCELLED conclusion is a
+	// concurrency-superseded artifact, not a failure -- `cancel-in-progress:
+	// true` (ci.yml:15-16) leaves a stale CANCELLED row as the ONLY entry for
+	// its name for several minutes before its replacement posts (live-probed
+	// on PR #2607's "Record post-merge validation": three check-suites on one
+	// commit, the oldest cancelled). Porting ci-verdict.mjs's #2618 fix-round-2
+	// F2 grace (`isUncertainConclusion`) to this, the REAL shipped merge gate.
+	it("RED PROOF (#2632): a lone cancelled discovered check (no replacement posted yet) does not block the merge", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					...greenChecks(),
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "CANCELLED",
+						startedAt: "2026-09-06T17:21:06Z",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({ merge: true, reason: MERGE_GATE_REASON.GREEN });
+	});
+
+	// #2618's own rule stays intact: a REQUIRED check's CANCELLED conclusion
+	// gets NO grace, regardless of the #2632 exemption above -- it never even
+	// reaches the `failing` filter, because the required-check loop above
+	// already denies (REQUIRED_CHECK_NOT_SUCCESS) the instant it sees anything
+	// but a literal SUCCESS. "Do not weaken the every non-advisory check gates
+	// rule" (#2632's own constraint) pinned here.
+	it("#2632 does not exempt a REQUIRED check's cancelled conclusion -- it still denies", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					{ name: "Unit tests", status: "COMPLETED", conclusion: "CANCELLED" },
+					{
+						name: "Lint & type-check",
+						status: "COMPLETED",
+						conclusion: "SUCCESS",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: false,
+			reason: MERGE_GATE_REASON.REQUIRED_CHECK_NOT_SUCCESS,
+		});
+	});
+
+	// Mutation contrast (both directions of the #2632 exemption): a discovered
+	// check that genuinely FAILED (not cancelled) must still deny -- proves
+	// the new exemption is scoped to CANCELLED alone, not to "any discovered
+	// conclusion" or "isBlockingConclusion dropped entirely".
+	it("#2632's cancelled exemption does not mask a discovered check that genuinely failed", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					...greenChecks(),
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "FAILURE",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: false,
+			reason: MERGE_GATE_REASON.FAILING_CHECK,
+		});
+	});
+
+	// "Superseded by a newer sibling" regression guard: once the replacement
+	// run HAS posted, `resolveLatestByName`'s own started-at ordering (already
+	// shipped, untouched by #2632) drops the older cancelled row before the
+	// `failing` filter ever sees it -- a genuinely NEW failure on the newer
+	// run must still deny, not be hidden behind the older cancellation.
+	it("a newer, genuinely-failing sibling still denies even though an older duplicate was cancelled", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					...greenChecks(),
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "CANCELLED",
+						startedAt: "2026-09-06T17:21:06Z",
+					},
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "FAILURE",
+						startedAt: "2026-09-06T17:25:29Z",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: false,
+			reason: MERGE_GATE_REASON.FAILING_CHECK,
+		});
+	});
+
 	// Review round 1, F3: this repository marks a check advisory by NAME
 	// SUFFIX, not by a vendor allowlist. These four names are live job names,
 	// and the oxfmt one was genuinely FAILURE on this PR's own head, so the
