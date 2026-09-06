@@ -114,6 +114,20 @@ export type DegradationKind =
 	 */
 	| "lsp-client-skipped-unavailable-command"
 	/**
+	 * #2518: the session-root registry hit its cap and dropped a root this
+	 * process was serving, together with that root's loaded LSP config — so the
+	 * operator's `lsp.disabledServers` denial for it stops applying until the
+	 * next session start or tool call NAMING that root loads it again
+	 * (`shouldInitializeSessionRoot` guarantees those two entry points do,
+	 * which is why this is a degradation and not a fault; the readers of the
+	 * denial trigger no load). Subject is the cap itself, so a process cycling
+	 * through hundreds of roots keys ONE tally rather than one per dropped root
+	 * — and it is a TALLY (`incrementDegradationCount`), because the number of
+	 * roots this process has had to drop is exactly what an operator tunes the
+	 * cap against. The reason names the first root dropped.
+	 */
+	| "lsp-session-root-evicted"
+	/**
 	 * A warm-only client lookup (`getWarmClientForFile`) found no live client
 	 * for a file that HAS a language server with a resolvable root (#1934).
 	 * Subject is the candidate `serverId:root` set, so the ledger still answers

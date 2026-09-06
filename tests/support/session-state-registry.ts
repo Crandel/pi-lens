@@ -1167,7 +1167,7 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		policy: "process_lifetime",
 		resetName: "resetSessionRootsForTests",
 		reason:
-			"#2052: the set of project roots this PROCESS serves. A root enters it when `initLSPConfig` runs for that cwd, and that same call warms an LSP client fleet rooted there which stays alive for the process, not the session. Clearing at session_start would decline files for roots that are still being served, and it could not self-heal: `ensureLSPConfigInitialized` (index.ts) dedupes on `_lspConfigInitializedCwds`, so it would not re-run `initLSPConfig` for an already-initialized cwd and the root would never re-register. Accumulating roots is also the SAFE direction here — an extra registered root only means a file is served as it was before #2052, whereas a missing root means a hard refusal to answer.",
+			"#2052: the project roots this PROCESS serves, each mapped to the LSP config loaded for it (#2518 merged the two — see that module's header for why one entry per root is what keeps an operator's denial from being evicted out from under a live root). A root enters it when `initLSPConfig` runs for that cwd, and that same call warms an LSP client fleet rooted there which stays alive for the process, not the session: clearing at session_start would decline files for roots this process is still serving, with warm clients still attached to them. Accumulating roots is also the SAFE direction — an extra registered root only means a file is served as it was before #2052, whereas a missing root means a hard refusal to answer. (Before #2518 this entry also argued that a session_start clear could not self-heal, because index.ts deduped on `_lspConfigInitializedCwds` alone; that half is obsolete — both readiness memos now consult `shouldInitializeSessionRoot`, so a cleared root re-registers on its next session start or tool call. The two arguments above are the ones that still hold.)",
 		probe: {
 			arm: () => {
 				resetSessionRootsForTests();
@@ -1527,8 +1527,12 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
 	// #2427 review round 2 took this to 3 for a `silentInFlight` set; round 3
 	// deleted the set with the `initLSPConfig` call that needed it, so the file
-	// is back to `workspaceConfigs` + `configInFlight`.
-	"lsp/config.ts": 2,
+	// was back to `workspaceConfigs` + `configInFlight`.
+	// #2518: 2 -> 1. `workspaceConfigs` is gone — the per-root config is now the
+	// session-root registry's own value (`lsp/session-roots.ts`), so a config
+	// cannot be evicted while its root is still served. `configInFlight` alone
+	// remains here.
+	"lsp/config.ts": 1,
 	"lsp/index.ts": 2,
 	// #2000 phase 2: the pending-baseline store (one slot per cwd:generation)
 	// plus the process-global Symbol.for slot; cleared via resetOpaqueMutationState.

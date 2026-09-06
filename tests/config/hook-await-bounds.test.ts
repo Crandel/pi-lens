@@ -1494,7 +1494,10 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"(runtime-turn.ts:2882).",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#ensureLSPConfigInitialized:a10dd3b9~bb9d4558": {
+	// #2518 re-keyed this occurrence: the neighbourhood suffix hashes the
+	// lines around the await, and the memo check above it became a
+	// `shouldInitializeSessionRoot` call. Same await, same reason, new key.
+	"index.ts#ensureLSPConfigInitialized:a10dd3b9~ad96a95f": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
