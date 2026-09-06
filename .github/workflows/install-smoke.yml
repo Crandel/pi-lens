@@ -619,6 +619,16 @@ jobs:
         with:
           bun-version: latest
 
+      # --ignore-scripts: this bootstrap install exists only so the resolver
+      # script below can `import "semver"` — the committed lockfile's tree,
+      # not yet pointed at any target host. Running lifecycle scripts here
+      # would build:dist against whatever host happens to be pinned right
+      # now, which the "Pin devDependency + install" step below immediately
+      # invalidates anyway; skip straight to the real (scripted) install once
+      # the target host is known.
+      - name: Bootstrap deps (for the resolver script)
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
       - name: Resolve target host (${{ matrix.pi_host }})
         id: resolve
         shell: bash
