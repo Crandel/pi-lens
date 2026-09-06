@@ -46,12 +46,20 @@ on:
     types: [merge-train-post-merge]
   push:
     branches: [master]
-    paths:
+    paths: &install-smoke-paths
       - "package.json"
       - "package-lock.json"
       - "scripts/install-selftest.mjs"
       - "scripts/rpc-load-check.mjs"
+      - "scripts/resolve-newest-in-range-host.mjs"
+      - "scripts/lib/resolve-newest-in-range-host.mjs"
       - ".github/workflows/install-smoke.yml"
+  # PR-gating (#2613): only the host-range-smoke job below runs on
+  # pull_request (guarded by `if: github.event_name != 'pull_request'` on
+  # every pre-existing job) -- the full os x pm x pi-install matrices stay
+  # push/nightly/dispatch-only, unchanged from before this lane existed.
+  pull_request:
+    paths: *install-smoke-paths
 
 # A merge made with GITHUB_TOKEN suppresses its push event. Replayed
 # repository_dispatch runs validate the exact merge commit, and duplicate
@@ -61,6 +69,13 @@ concurrency:
   cancel-in-progress: true
 
 permissions: {}
+
+env:
+  # Single source of truth for "the oldest host we promise" (#731) -- both
+  # the existing pi-load/mise-repro pins below AND host-range-smoke's floor
+  # matrix cell read this ONE value, so the pin can never drift apart between
+  # sites the way three independent hardcoded literals eventually would.
+  PI_HOST_FLOOR_VERSION: "0.80.10"
 
 jobs:
   validate-merge-train-dispatch:
@@ -88,7 +103,8 @@ jobs:
   record-post-merge-validation:
     name: Record post-merge validation
     if: always() && github.event_name == 'repository_dispatch' && needs.validate-merge-train-dispatch.result == 'success'
-    needs: [validate-merge-train-dispatch, smoke, pi-load, mise-repro]
+    needs:
+      [validate-merge-train-dispatch, smoke, pi-load, mise-repro, host-range-smoke]
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -101,11 +117,12 @@ jobs:
           SMOKE_RESULT: ${{ needs.smoke.result }}
           PI_LOAD_RESULT: ${{ needs.pi-load.result }}
           MISE_RESULT: ${{ needs.mise-repro.result }}
+          HOST_RANGE_RESULT: ${{ needs.host-range-smoke.result }}
         run: |
           set -euo pipefail
           state=succeeded
           unknown=0
-          for result in "$SMOKE_RESULT" "$PI_LOAD_RESULT" "$MISE_RESULT"; do
+          for result in "$SMOKE_RESULT" "$PI_LOAD_RESULT" "$MISE_RESULT" "$HOST_RANGE_RESULT"; do
             case "$result" in
               success) ;;
               failure) state=failed ;;
@@ -124,6 +141,9 @@ jobs:
 
   smoke:
     name: ${{ matrix.os }} · ${{ matrix.pm }}
+    # Unchanged from before #2613: this os x pm x pm-flavor matrix stays off
+    # pull_request entirely -- host-range-smoke is the new PR-gating lane.
+    if: github.event_name != 'pull_request'
     needs: validate-merge-train-dispatch
     runs-on: ${{ matrix.os }}
     permissions:
@@ -241,6 +261,7 @@ jobs:
   # users get) — guards the shipped artifact; the `smoke` job guards current code.
   pi-load:
     name: pi-load · ${{ matrix.os }} · ${{ matrix.pi_install }}
+    if: github.event_name != 'pull_request'
     needs: validate-merge-train-dispatch
     runs-on: ${{ matrix.os }}
     permissions:
@@ -299,10 +320,13 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
-          # Pinned deliberately (bump by hand when a newer pi release is
-          # verified — see #731): keeps a token-bearing CI job from pulling an
-          # arbitrary newest-on-registry version of a third-party package.
-          PKG="@earendil-works/pi-coding-agent@0.80.10"
+          # Pinned deliberately (bump PI_HOST_FLOOR_VERSION by hand when a
+          # newer pi release is verified — see #731): keeps a token-bearing CI
+          # job from pulling an arbitrary newest-on-registry version of a
+          # third-party package. Read from env.PI_HOST_FLOOR_VERSION (#2613)
+          # so this floor and host-range-smoke's "floor" matrix cell can never
+          # drift apart.
+          PKG="@earendil-works/pi-coding-agent@${{ env.PI_HOST_FLOOR_VERSION }}"
           case "${{ matrix.pi_install }}" in
             npm-global)
               # pi-lens-ignore: zizmor:adhoc-packages
@@ -383,6 +407,7 @@ jobs:
   # of #285 coverage.
   mise-repro:
     name: mise repro (#285) · ${{ matrix.os }} · ${{ matrix.pi_via }}
+    if: github.event_name != 'pull_request'
     needs: validate-merge-train-dispatch
     runs-on: ${{ matrix.os }}
     permissions:
@@ -478,9 +503,9 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
-          # Pinned deliberately (bump by hand when a newer pi release is
-          # verified — see #731).
-          PKG="@earendil-works/pi-coding-agent@0.80.10"
+          # Pinned deliberately (bump PI_HOST_FLOOR_VERSION by hand when a
+          # newer pi release is verified — see #731 and #2613).
+          PKG="@earendil-works/pi-coding-agent@${{ env.PI_HOST_FLOOR_VERSION }}"
           case "${{ matrix.pi_via }}" in
             mise-node)
               # node from mise; pi as a plain npm-global under that node.
@@ -525,3 +550,316 @@ jobs:
           printf '{ "name": "d", "version": "1.0.0", "type": "module" }\n' > package.json
           git add -A && git commit -qm init
           node "$GITHUB_WORKSPACE/scripts/rpc-load-check.mjs" "$(command -v pi)"
+
+  # PR-gating host-tree lanes (#2613, the #2590 recurrence). #2590's bug (a
+  # newer @earendil-works/pi-coding-agent devDependency nesting a
+  # same-version esbuild broke bundle:dist's `npm exec` resolution) was
+  # invisible to every job above -- `smoke` builds/packs the CURRENT repo
+  # too, but only ever against whatever host version happens to be pinned in
+  # package.json's devDependencies right now; `pi-load`/`mise-repro` install
+  # a PUBLISHED pi-lens, never building dist at all. It surfaced only by
+  # accident, when #2588 happened to bump that devDependency pin.
+  #
+  # This job makes the exercise deliberate: it overrides the
+  # pi-coding-agent devDependency to two specific hosts before building --
+  # the pinned floor (PI_HOST_FLOOR_VERSION, the oldest host we promise,
+  # #731) and the newest host the declared `peerDependencies` range admits
+  # (resolved at run time by scripts/resolve-newest-in-range-host.mjs, so a
+  # range bump like #2588 is exercised on the exact host it newly admits,
+  # by construction) -- then runs the SAME tarball-install + install-selftest
+  # + build:dist sequence `smoke` runs. Both cells are BLOCKING (no
+  # continue-on-error): a real regression in either is the PR's to fix,
+  # unless the "Classify" step below finds the same failure already on
+  # master, in which case it is upstream drift instead.
+  host-range-smoke:
+    name: host range · ${{ matrix.pi_host }}
+    needs: validate-merge-train-dispatch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # read master's last install-smoke run to classify drift
+    strategy:
+      fail-fast: false
+      matrix:
+        pi_host: [floor, newest-in-range]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
+          persist-credentials: false
+
+      - name: Validate merge-train dispatch payload
+        if: github.event_name == 'repository_dispatch'
+        env:
+          PAYLOAD_REPOSITORY: ${{ github.event.client_payload.repository }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PAYLOAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::repository_dispatch repository does not match this repository"
+            exit 1
+          fi
+          if [[ ! "$PAYLOAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::repository_dispatch SHA must be a 40-hex commit"
+            exit 1
+          fi
+          checked_sha="$(git rev-parse --verify HEAD)"
+          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+            echo "::error::checkout does not match the repository_dispatch SHA"
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Resolve target host (${{ matrix.pi_host }})
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.pi_host }}" = "floor" ]; then
+            VERSION="${{ env.PI_HOST_FLOOR_VERSION }}"
+          else
+            VERSION="$(node scripts/resolve-newest-in-range-host.mjs "@earendil-works/pi-coding-agent")"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "::notice::host range lane '${{ matrix.pi_host }}' resolved to @earendil-works/pi-coding-agent@$VERSION"
+
+      - name: Pin devDependency to the resolved host + install
+        shell: bash
+        run: |
+          set -euxo pipefail
+          npm pkg set "devDependencies.@earendil-works/pi-coding-agent=${{ steps.resolve.outputs.version }}"
+          npm install --no-audit --no-fund
+
+      # THE step #2590 broke: bundle:dist's `npm exec --package esbuild`
+      # spawn used to resolve against the WHOLE dependency tree (including
+      # this devDependency's own nested node_modules), so a host version that
+      # nests a same-version esbuild made npm skip its own npx-cache install
+      # and leave nothing on PATH. #2594 fixed this with `--prefix` isolation
+      # (scripts/lib/exec-isolation.mjs); this step is what would have caught
+      # it, for whichever host version is newest at build time.
+      - name: Build dist (host=${{ matrix.pi_host }})
+        run: npm run build:dist
+
+      - name: Pack the current repo
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TARBALL="$(npm pack --silent | tail -1)"
+          echo "TARBALL=$PWD/$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Install tarball into a clean project
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          npm init -y >/dev/null
+          # pi-lens-ignore: zizmor:adhoc-packages
+          npm install "$TARBALL"
+
+      - name: Selftest under bun (strictest resolver)
+        shell: bash
+        run: |
+          set -uxo pipefail
+          cd "$RUNNER_TEMP/proj"
+          SELFTEST="$(node -e 'console.log(require.resolve("pi-lens/scripts/install-selftest.mjs"))')"
+          bun "$SELFTEST" --allow-soft
+
+      # Acceptance (#2613): a newest-in-range failure that ALSO fails on
+      # master is upstream drift, not this PR's regression. Compares against
+      # the same named job's conclusion on the last completed master run of
+      # this workflow. No baseline yet (e.g. the very first run of this PR,
+      # before #2613 itself has ever run on master) prints a plain warning
+      # rather than guessing.
+      - name: Classify newest-in-range failure (PR regression vs upstream drift)
+        if: failure() && matrix.pi_host == 'newest-in-range'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          JOB_NAME="host range · newest-in-range"
+          RUN_ID="$(gh run list --repo "$GITHUB_REPOSITORY" --branch master \
+            --workflow install-smoke.yml --status completed --limit 1 \
+            --json databaseId --jq '.[0].databaseId' 2>/dev/null)"
+          if [ -z "$RUN_ID" ]; then
+            echo "::warning::no completed master run of install-smoke.yml found yet — cannot classify this failure as a PR regression or upstream drift"
+            exit 0
+          fi
+          CONCLUSION="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" \
+            --paginate --jq ".jobs[] | select(.name == \"$JOB_NAME\") | .conclusion" 2>/dev/null | head -1)"
+          if [ -z "$CONCLUSION" ]; then
+            echo "::warning::master run $RUN_ID has no '$JOB_NAME' job yet — cannot classify this failure"
+          elif [ "$CONCLUSION" = "failure" ]; then
+            echo "::error::upstream drift — the newest-in-range host also fails on master (run $RUN_ID); not a PR regression"
+          else
+            echo "::error::PR regression — the newest-in-range host lane passes on master (run $RUN_ID, conclusion=$CONCLUSION) but fails on this PR"
+          fi
+
+  # Nightly advisory lane (#2613): @latest unconditionally. Failing here is
+  # EXPECTED sometimes -- a pi release the peer range does not yet admit is
+  # not a PR's fault -- so this never runs on pull_request/push and never
+  # fails the workflow (every risky step is continue-on-error, chained by
+  # `if: steps.<previous>.outcome == 'success'` so one failure short-circuits
+  # the rest instead of e.g. trying to pack a dist/ that was never built). On
+  # failure it files/refreshes ONE persistent issue by fixed title, naming
+  # the installed version and the failing step -- the compat-smoke / #2581
+  # pattern (.github/workflows/compat-smoke.yml's own alert step), reused
+  # near-verbatim. Like compat-smoke, it never auto-closes; a human closes it
+  # once a compatible release ships.
+  host-latest-smoke:
+    name: host latest (nightly, advisory)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # file/refresh the drift tracking issue on failure
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Resolve @latest
+        id: resolve
+        shell: bash
+        run: |
+          set -euxo pipefail
+          VERSION="$(npm view @earendil-works/pi-coding-agent@latest version)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "::notice::nightly host lane resolved @earendil-works/pi-coding-agent@latest to $VERSION"
+
+      - name: Pin devDependency to @latest + install
+        id: install_deps
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euxo pipefail
+          npm pkg set "devDependencies.@earendil-works/pi-coding-agent=${{ steps.resolve.outputs.version }}"
+          npm install --no-audit --no-fund
+
+      - name: Build dist
+        id: build_dist
+        continue-on-error: true
+        if: steps.install_deps.outcome == 'success'
+        run: npm run build:dist
+
+      - name: Pack the current repo
+        id: pack
+        continue-on-error: true
+        if: steps.build_dist.outcome == 'success'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TARBALL="$(npm pack --silent | tail -1)"
+          echo "TARBALL=$PWD/$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Install tarball into a clean project
+        id: install_tarball
+        continue-on-error: true
+        if: steps.pack.outcome == 'success'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          npm init -y >/dev/null
+          # pi-lens-ignore: zizmor:adhoc-packages
+          npm install "$TARBALL"
+
+      - name: Selftest under bun (strictest resolver)
+        id: selftest
+        continue-on-error: true
+        if: steps.install_tarball.outcome == 'success'
+        shell: bash
+        run: |
+          set -uxo pipefail
+          cd "$RUNNER_TEMP/proj"
+          SELFTEST="$(node -e 'console.log(require.resolve("pi-lens/scripts/install-selftest.mjs"))')"
+          bun "$SELFTEST" --allow-soft
+
+      - name: Alert on install drift (create-or-update tracking issue)
+        if: >-
+          steps.install_deps.outcome == 'failure' ||
+          steps.build_dist.outcome == 'failure' ||
+          steps.pack.outcome == 'failure' ||
+          steps.install_tarball.outcome == 'failure' ||
+          steps.selftest.outcome == 'failure'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
+          INSTALL_DEPS_OUTCOME: ${{ steps.install_deps.outcome }}
+          BUILD_DIST_OUTCOME: ${{ steps.build_dist.outcome }}
+          PACK_OUTCOME: ${{ steps.pack.outcome }}
+          INSTALL_TARBALL_OUTCOME: ${{ steps.install_tarball.outcome }}
+          SELFTEST_OUTCOME: ${{ steps.selftest.outcome }}
+        run: |
+          set -uo pipefail
+          TITLE="install-smoke: pi-coding-agent@latest install drift detected"
+          FAILING_STEP="pin devDependency + install"
+          [ "$BUILD_DIST_OUTCOME" = "failure" ] && FAILING_STEP="build:dist"
+          [ "$PACK_OUTCOME" = "failure" ] && FAILING_STEP="npm pack"
+          [ "$INSTALL_TARBALL_OUTCOME" = "failure" ] && FAILING_STEP="install tarball"
+          [ "$SELFTEST_OUTCOME" = "failure" ] && FAILING_STEP="install-selftest"
+          BODY_FILE="$RUNNER_TEMP/install-smoke-latest-alert-body.md"
+          {
+            echo "The nightly [install-smoke](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})" \
+              "advisory lane installed \`@earendil-works/pi-coding-agent@${RESOLVED_VERSION}\`" \
+              "(the \`latest\` dist-tag, resolved at run time) and hit a failure — a pi" \
+              "release outside this repo's declared peerDependencies range broke the" \
+              "install path (#2613)."
+            echo ""
+            echo "- Installed version: **${RESOLVED_VERSION}**"
+            echo "- Failing step: **${FAILING_STEP}**"
+            echo ""
+            echo "| step | outcome |"
+            echo "| --- | --- |"
+            echo "| pin devDependency + install | ${INSTALL_DEPS_OUTCOME} |"
+            echo "| build:dist | ${BUILD_DIST_OUTCOME} |"
+            echo "| npm pack | ${PACK_OUTCOME} |"
+            echo "| install tarball | ${INSTALL_TARBALL_OUTCOME} |"
+            echo "| install-selftest | ${SELFTEST_OUTCOME} |"
+            echo ""
+            echo "See the [run log](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) for details."
+            echo ""
+            echo "_This issue is auto-refreshed by the nightly \`install-smoke\` workflow's" \
+              "advisory lane — do not close it while the check is failing. Once a" \
+              "compatible pi-coding-agent release ships (or the peer range is widened)," \
+              "close it._"
+          } > "$BODY_FILE"
+
+          EXISTING_ISSUE="$(
+            gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+              --search "in:title \"$TITLE\"" --json number,title \
+              --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1
+          )"
+          if [ -n "$EXISTING_ISSUE" ]; then
+            echo "updating existing issue #$EXISTING_ISSUE"
+            gh issue edit "$EXISTING_ISSUE" \
+              --repo "$GITHUB_REPOSITORY" --body-file "$BODY_FILE"
+            COMMENT="Still failing: installed ${RESOLVED_VERSION}, failing step: ${FAILING_STEP}."
+            gh issue comment "$EXISTING_ISSUE" --repo "$GITHUB_REPOSITORY" \
+              --body "$COMMENT"
+          else
+            echo "creating new alert issue"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --body-file "$BODY_FILE" \
+              --label "area:installer,area:tests"
+          fi

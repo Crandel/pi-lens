@@ -38,7 +38,10 @@ let pkg;
 try {
 	pkg = JSON.parse(fs.readFileSync("package.json", "utf-8"));
 } catch (err) {
-	fail(2, `cannot read package.json: ${err instanceof Error ? err.message : err}`);
+	fail(
+		2,
+		`cannot read package.json: ${err instanceof Error ? err.message : err}`,
+	);
 }
 
 let range;
@@ -50,11 +53,9 @@ try {
 
 let versions;
 try {
-	const raw = execFileSync(
-		"npm",
-		["view", packageName, "versions", "--json"],
-		{ encoding: "utf-8" },
-	);
+	const raw = execFileSync("npm", ["view", packageName, "versions", "--json"], {
+		encoding: "utf-8",
+	});
 	versions = JSON.parse(raw);
 } catch (err) {
 	fail(
@@ -62,13 +63,6 @@ try {
 		`npm view ${packageName} versions --json failed: ${err instanceof Error ? err.message : err}`,
 	);
 }
-if (!Array.isArray(versions)) {
-	// A package with exactly one published version returns a bare string
-	// (not an array) from `npm view ... versions --json` — treat it as a
-	// singleton list rather than mis-parsing it as "no versions".
-	versions = typeof versions === "string" ? [versions] : [];
-}
-
 const resolved = pickNewestInRange(versions, range);
 if (!resolved) {
 	fail(

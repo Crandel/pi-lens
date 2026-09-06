@@ -346,6 +346,9 @@ const wallClockBudgetInclude = [
 	// #2369: the fixture-ordering defect lives in the CLI's own module-load
 	// order; only a real child process is the script under test.
 	"tests/scripts/smoke-tools-lsp-fixture-registration.test.ts",
+	// #2613: the resolver CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT
+	// write are the subject under test; no in-process double is faithful.
+	"tests/scripts/resolve-newest-in-range-host.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL

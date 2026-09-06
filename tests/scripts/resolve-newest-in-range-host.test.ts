@@ -1,3 +1,8 @@
+// flake-shape: real-process-spawn — the CLI's actual exit code (2 vs. 4) and
+// its GITHUB_OUTPUT side effect are the subject under test; an in-process
+// stub of resolve-newest-in-range-host.mjs would just re-assert whatever
+// exit code the test author typed, not what the script actually does on a
+// bad usage vs. an empty semver match (#2613).
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -116,15 +121,19 @@ describe("resolve-newest-in-range-host.mjs CLI (#2613)", () => {
 		);
 		const outputFile = path.join(root, "gh-output");
 		fs.writeFileSync(outputFile, "");
-		const stdout = execFileSync(process.execPath, [CLI, "@earendil-works/pi-coding-agent"], {
-			cwd: root,
-			env: {
-				...process.env,
-				PATH: `${binDir}:${process.env.PATH}`,
-				GITHUB_OUTPUT: outputFile,
+		const stdout = execFileSync(
+			process.execPath,
+			[CLI, "@earendil-works/pi-coding-agent"],
+			{
+				cwd: root,
+				env: {
+					...process.env,
+					PATH: `${binDir}:${process.env.PATH}`,
+					GITHUB_OUTPUT: outputFile,
+				},
+				encoding: "utf-8",
 			},
-			encoding: "utf-8",
-		});
+		);
 		expect(stdout.trim()).toBe("0.85.9");
 		expect(fs.readFileSync(outputFile, "utf-8")).toBe("version=0.85.9\n");
 	});
@@ -132,9 +141,9 @@ describe("resolve-newest-in-range-host.mjs CLI (#2613)", () => {
 	it("exits 4 with a message when the range matches no published version", () => {
 		const root = fixtureRoot("^0.90.0");
 		const binDir = stubNpm(root, JSON.stringify(["0.84.1", "0.85.1"]));
-		expect(() => runCli(root, binDir, ["@earendil-works/pi-coding-agent"])).toThrow(
-			expect.objectContaining({ status: 4 }),
-		);
+		expect(() =>
+			runCli(root, binDir, ["@earendil-works/pi-coding-agent"]),
+		).toThrow(expect.objectContaining({ status: 4 }));
 		try {
 			runCli(root, binDir, ["@earendil-works/pi-coding-agent"]);
 			expect.unreachable("expected the CLI to exit nonzero");

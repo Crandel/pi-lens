@@ -40,6 +40,7 @@
 		"scripts/prune-agent-worktrees.test.ts": 5,
 		"scripts/rekey-hook-await-exemptions.test.ts": 2,
 		"scripts/release-qa.test.ts": 3,
+		"scripts/resolve-newest-in-range-host.test.ts": 3,
 		"scripts/rule-catalogs.test.ts": 2,
 		"scripts/rule-language-case.test.ts": 4,
 		"scripts/smoke-tools-lsp-fixture-registration.test.ts": 2,

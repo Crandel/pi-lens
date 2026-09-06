@@ -27,9 +27,10 @@ import semver from "semver";
  * @returns {string}
  */
 export function readPeerRange(pkg, packageName) {
-	const range = /** @type {Record<string, unknown> | undefined} */ (
-		pkg?.peerDependencies
-	)?.[packageName];
+	const range =
+		/** @type {Record<string, unknown> | undefined} */ (
+			pkg?.peerDependencies
+		)?.[packageName];
 	if (typeof range !== "string" || range.trim() === "") {
 		throw new Error(
 			`package.json has no peerDependencies["${packageName}"] entry`,
@@ -43,16 +44,17 @@ export function readPeerRange(pkg, packageName) {
  * excluding prereleases (a prerelease is never a real "newest stable host").
  * Returns null when nothing satisfies — the caller turns that into exit 4.
  *
+ * `semver.maxSatisfying` already tolerates invalid/garbage version strings
+ * (skips them rather than throwing) and, with `includePrerelease: false`
+ * (its own default), already excludes prereleases — a separate pre-filter
+ * for either would be dead code, so `versions` is passed straight through.
+ *
  * @param {string[]} versions
  * @param {string} range
  * @returns {string | null}
  */
 export function pickNewestInRange(versions, range) {
-	const candidates = (versions ?? []).filter(
-		(v) => semver.valid(v) !== null && semver.prerelease(v) === null,
-	);
-	const inRange = semver.maxSatisfying(candidates, range, {
+	return semver.maxSatisfying(versions ?? [], range, {
 		includePrerelease: false,
 	});
-	return inRange ?? null;
 }
