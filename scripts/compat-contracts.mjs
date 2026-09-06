@@ -310,7 +310,6 @@ async function main() {
 	if (!opts.keep) fs.rmSync(dir, { recursive: true, force: true });
 
 	const anyDrift = results.some((r) => r.outcome === "drift");
-	const anyInfra = results.some((r) => r.outcome === "infra");
 	const allVerified = results.every((r) => r.outcome === "verified");
 	const outcome = allVerified ? "verified" : anyDrift ? "drift" : "infra";
 	writeOutcomeOutput(outcome);

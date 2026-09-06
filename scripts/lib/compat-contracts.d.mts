@@ -35,3 +35,13 @@ export function runAllContractChecks(inputs: ContractCheckInputs): {
 	results: ContractCheckEntry[];
 	allPass: boolean;
 };
+
+export interface ContractDefinition {
+	id: string;
+	package: string;
+	description: string;
+	inputKey: keyof ContractCheckInputs;
+	check: (source: string) => ContractCheckResult;
+}
+
+export const CONTRACTS: ContractDefinition[];
