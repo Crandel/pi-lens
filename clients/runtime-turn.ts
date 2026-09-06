@@ -2886,15 +2886,26 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 									cleanFiles,
 								);
 							}
-							mergeGitGuardTestFailure(
-								cacheManager,
-								cwd,
-								runtime,
-								content,
-								resultValues
-									.filter((value) => value.failed > 0)
-									.map((value) => value.file),
-							);
+							// #2532: `runnerErrorOnly` (computed above for the turn-end
+							// delivery framing) is true exactly when nothing in this
+							// batch is a genuine failing test — every entry is a
+							// runner error the agent did not introduce. Without this
+							// gate, an all-runner-error batch still called
+							// `mergeGitGuardTestFailure` with an EMPTY failed-files
+							// list, which unconditionally sets `hasBlockers: true`:
+							// the identical event the turn-end message reports as
+							// advisory read as "COMMIT BLOCKED" under --lens-guard.
+							if (!runnerErrorOnly) {
+								mergeGitGuardTestFailure(
+									cacheManager,
+									cwd,
+									runtime,
+									content,
+									resultValues
+										.filter((value) => value.failed > 0)
+										.map((value) => value.file),
+								);
+							}
 						}
 						dbg(
 							`turn_end: ${failures.length} test failure(s) cached for pull diagnostics and post-agent delivery${stale ? " (stale — turn advanced while tests ran)" : ""}`,

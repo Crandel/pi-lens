@@ -68,6 +68,26 @@ export interface TestResult {
 	error?: string; // if runner itself failed
 }
 
+/**
+ * #2532: the ONE classification seam for "this `TestResult` is a RUNNER
+ * error (timeout, missing provider/binary, a config failure — the harness
+ * never produced a verdict) rather than a genuine failing test". `failed` is
+ * 0 by construction whenever `error` is set (see `TestResult.error` above),
+ * exactly the fact `runtime-turn.ts`'s turn-end delivery framing already
+ * keys off (`hasRealFailure`/`runnerErrorOnly`, #2522) to report these as
+ * advisory rather than "fix before continuing" — the agent introduced
+ * nothing here to fix.
+ *
+ * `testResultToProjectDiagnostics` (`lens_diagnostics mode=full`) and the
+ * `--lens-guard` merge call in `handleTurnEnd` (`runtime-turn.ts`) route
+ * through this SAME predicate (#2532) instead of re-deriving it, so the
+ * identical `TestResult` cannot read as blocking on one surface and
+ * advisory on another.
+ */
+export function isRunnerErrorResult(result: TestResult): boolean {
+	return result.failed === 0 && !!result.error;
+}
+
 export interface TestFailure {
 	name: string; // test name
 	message: string; // failure message

@@ -2305,6 +2305,94 @@ describe("turn_end test runner — a runner-error result does not clear a real g
 	});
 });
 
+// ── #2532: an all-runner-error batch must not itself BECOME a git-guard ──────
+// blocker under --lens-guard.
+//
+// #2528/#2522 gave the turn-end DELIVERY message advisory framing for a
+// batch made entirely of runner errors (timeout, missing provider/binary —
+// the suite never started). `mergeGitGuardTestFailure`'s call site in
+// `handleTurnEnd` never got the same memo: it ran unconditionally whenever
+// `failures.length > 0`, regardless of `runnerErrorOnly`, so a runner-error
+// batch with NO prior blocker still flipped `hasBlockers: true` on the
+// git-guard record — the identical event reading "advisory" in the turn-end
+// message and "COMMIT BLOCKED" under `--lens-guard`.
+describe("turn_end test runner — a runner-error-only batch does not itself block git-guard (#2532)", () => {
+	it("does not set hasBlockers for an all-runner-error batch with no prior blocker", async () => {
+		const env = setupTestEnvironment("pi-lens-test-guard-runner-error-only-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "guard-runner-error-session" });
+			const cacheManager = new CacheManager(false);
+
+			const srcFile = path.join(env.tmpDir, "src/main.go");
+			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+			fs.writeFileSync(srcFile, "package main\n");
+			cacheManager.addModifiedRange(
+				srcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"guard-runner-error-session",
+			);
+
+			// No pre-existing blocker — a clean slate, exactly like the
+			// production scenario a runner-error-only batch is delivered
+			// advisory for (#2522).
+			expect(evaluateGitGuard(runtime, cacheManager, env.tmpDir).block).toBe(
+				false,
+			);
+
+			const goTestFile = path.join(env.tmpDir, "src/main_test.go");
+			fs.writeFileSync(goTestFile, "package main\n");
+			const runnerErrorResult = {
+				file: goTestFile,
+				sourceFile: srcFile,
+				runner: "go",
+				passed: 0,
+				failed: 0,
+				skipped: 0,
+				failures: [],
+				duration: 1,
+				error: "Runner go exited with 1",
+			};
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					getFlag: (flag: string) => flag === "lens-guard",
+					testRunnerClient: {
+						getTestRunTarget: () => ({
+							testFile: goTestFile,
+							runner: "go",
+							config: {} as any,
+							strategy: "related" as const,
+						}),
+						runTestFileAsync: async () => runnerErrorResult,
+						formatResult: (r: {
+							error?: string;
+							passed: number;
+							failed: number;
+						}) =>
+							r.error && r.passed === 0 && r.failed === 0
+								? `[Tests] ⚠ Could not run tests: ${r.error}`
+								: "",
+					},
+				}),
+			);
+			await new Promise((resolve) => setImmediate(resolve));
+
+			// A runner error the batch never turned into a real failure must
+			// not become a NEW git-guard blocker — the same event the
+			// turn-end message reports as advisory.
+			expect(evaluateGitGuard(runtime, cacheManager, env.tmpDir).block).toBe(
+				false,
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
 // ── #1479: the turn-end line must not print a measurement it does not have ────
 //
 // `(0ms)` was printed both for a run that took under a millisecond and for one

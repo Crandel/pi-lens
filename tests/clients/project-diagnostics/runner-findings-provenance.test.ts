@@ -77,6 +77,64 @@ describe("test finding provenance adapter (#1413)", () => {
 		).toMatchObject({ severity: "info", semantic: "none" });
 	});
 
+	/**
+	 * #2532: `lens_diagnostics mode=full` rendered a runner error (timeout,
+	 * missing provider/binary — the suite itself never produced a verdict) as
+	 * `semantic: "blocking"`, the identical event the turn-end message
+	 * (#2522) already delivers as advisory. `failed === 0` alongside `error`
+	 * is a runner-error result by construction (see `TestResult.error`'s
+	 * doc comment in `test-runner-client.ts`) — it must classify the same
+	 * way here as it does in the turn-end delivery framing.
+	 */
+	it("makes a runner-error result advisory instead of blocking", () => {
+		const { cwd, provenance, file } = fixture();
+		const runnerErrorResult = {
+			file,
+			sourceFile: file,
+			runner: "pytest",
+			passed: 0,
+			failed: 0,
+			skipped: 0,
+			failures: [],
+			duration: 1,
+			error: "pytest: error: unrecognized arguments (exit code 4)",
+		};
+		expect(
+			testRunnerFindingsToProjectDiagnostics(
+				{ content: "fail", results: [runnerErrorResult], provenance },
+				cwd,
+			)[0],
+		).toMatchObject({ severity: "info", semantic: "none" });
+	});
+
+	/**
+	 * #2532 inversion guard: a genuine failing test reported only as a bare
+	 * count (no per-test `failures[]` detail — some parsers summarize this
+	 * way) must NOT be swept into the same advisory treatment as a runner
+	 * error just because it also falls through to the "no individual
+	 * failures listed" branch. `failed > 0` with no `error` is a real test
+	 * failure, always blocking.
+	 */
+	it("keeps a genuine failing test blocking even with no per-test failure detail", () => {
+		const { cwd, provenance, file } = fixture();
+		const countOnlyFailure = {
+			file,
+			sourceFile: file,
+			runner: "vitest",
+			passed: 0,
+			failed: 3,
+			skipped: 0,
+			failures: [],
+			duration: 1,
+		};
+		expect(
+			testRunnerFindingsToProjectDiagnostics(
+				{ content: "fail", results: [countOnlyFailure], provenance },
+				cwd,
+			)[0],
+		).toMatchObject({ severity: "error", semantic: "blocking" });
+	});
+
 	it("drops deleted targets and returns none after consumption", () => {
 		const { cwd, file, provenance, result } = fixture();
 		fs.unlinkSync(file);
