@@ -2505,7 +2505,10 @@ describe("merge-lane gate (#2185)", () => {
 				],
 			}),
 		);
-		expect(gate).toMatchObject({ merge: true, reason: MERGE_GATE_REASON.GREEN });
+		expect(gate).toMatchObject({
+			merge: true,
+			reason: MERGE_GATE_REASON.GREEN,
+		});
 	});
 
 	// #2618's own rule stays intact: a REQUIRED check's CANCELLED conclusion
