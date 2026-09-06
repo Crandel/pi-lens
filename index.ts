@@ -1799,8 +1799,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// lives in dist/ but skills/ stays at the package root, so a module-relative
 		// join lands on the non-existent dist/skills/ and skills silently fail to load
 		// (#205). resolveSkillPaths walks up to package.json (same as
-		// resolvePackagePath) and additionally reports the absent-or-empty case
-		// instead of silently returning a path that yields zero skills (#2626).
+		// resolvePackagePath) and ALWAYS returns that path — pi handles an absent
+		// directory gracefully and the manifest may register the same dir — while
+		// separately recording a bounded skills-dir-missing degradation when pi's
+		// own discovery rule (root SKILL.md, nested SKILL.md, loose root .md) would
+		// load nothing there (#2626). Never turn the health check into a [] return:
+		// that inversion dropped real skills on four pi layouts in #2637 round 1.
 		return {
 			skillPaths: resolveSkillPaths(import.meta.url),
 		};
