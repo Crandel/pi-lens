@@ -89,8 +89,76 @@ export function coverageArithmetic(
 export function renderCoverageLine(coverage: Coverage): string;
 export function shipVerdict(
 	results: ReadonlyArray<RowResult>,
-	options?: { blocked?: boolean; blockedReason?: string },
+	options?: {
+		blocked?: boolean;
+		blockedReason?: string;
+		candidateFailure?: string;
+	},
 ): Verdict;
+/**
+ * The refusal message for a dirty checkout, or null when it is clean. A
+ * `--from tree` run packs `git archive HEAD`, so an uncommitted edit would be
+ * QA'd as its last commit — a usage error (exit 4), not a candidate failure.
+ */
+export function dirtyCheckoutRefusal(porcelain: string): string | null;
+
+/** Which of the two non-row failures a run hit, if either. */
+export function classifyRunFailure(observed: {
+	bootProbeOk: boolean;
+	bootProbeReason?: string;
+	candidateError?: string;
+	candidateRpcReason?: string;
+}): { blocked: boolean; blockedReason: string; candidateFailure: string };
+
+/** The skills row's verdict as a pure function of the get_commands response. */
+export function classifySkillsRegistration(
+	commands: ReadonlyArray<{
+		source?: string;
+		name?: string;
+		sourceInfo?: { path?: string; source?: string };
+	}>,
+	installedPkgDir: string,
+): { status: string; detail: string; shows: string };
+
+/** Hard Rule 1 as code: a PASS with no witness is downgraded to UNTESTED. */
+export function finalizeRowOutcome(
+	classified: { outcome: string; detail: string },
+	witnessPath: string | undefined,
+): { outcome: string; detail: string };
+
+/**
+ * Shell-free `npm` under the pinned scratch env.
+ *
+ * `env` is optional in the TYPE and required at RUNTIME (it throws when
+ * absent). Deliberate: the runner is plain `.mjs`, so tsc never checks its call
+ * sites, and the guard that matters is the runtime one — which the unit suite
+ * can only exercise by making the mistake on purpose.
+ */
+export function npm(
+	args: string[],
+	cwd: string,
+	env?: NodeJS.ProcessEnv,
+): string;
+
+/**
+ * What to do with one baseline row before any probe runs: drive its probe, or
+ * short-circuit it (no probe / blocked / candidate failure) without counting
+ * it in the coverage triple's `rows`.
+ */
+export function rowProbeRequest(run: {
+	hasProbe: boolean;
+	blocked?: boolean;
+	blockedReason?: string;
+	candidateFailure?: string;
+}): { attempted: boolean; probe?: { status: string; detail?: string } };
+
+/**
+ * Split `supply-host-provided-deps.mjs --install-args` output into argv
+ * entries — newline-delimited, because a peer range may contain a space
+ * (`^0.84.1 || ^0.85.0`, #2586).
+ */
+export function parseSupplyArgs(stdout: string): string[];
+
 /**
  * The runner's exit-code contract.
  *
@@ -106,20 +174,6 @@ export function shipVerdict(
  * is SKIPPED without `--git-ref`. A CI lane treats 2 as a warning, 1/3/4 as
  * failures.
  */
-/**
- * The refusal message for a dirty checkout, or null when it is clean. A
- * `--from tree` run packs `git archive HEAD`, so an uncommitted edit would be
- * QA'd as its last commit — a usage error (exit 4), not a candidate failure.
- */
-export function dirtyCheckoutRefusal(porcelain: string): string | null;
-
-/**
- * Split `supply-host-provided-deps.mjs --install-args` output into argv
- * entries — newline-delimited, because a peer range may contain a space
- * (`^0.84.1 || ^0.85.0`, #2586).
- */
-export function parseSupplyArgs(stdout: string): string[];
-
 export function verdictExitCode(verdict: string): number;
 
 /**

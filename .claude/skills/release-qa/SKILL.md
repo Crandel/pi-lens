@@ -126,6 +126,13 @@ is REFUSED rather than packed as its last commit, because a report whose "QA
 target" is not what the operator is looking at is the failure this runner
 exists to end.
 
+**Cost and cleanup.** A run installs a production dependency tree twice (the
+export, then the scratch project) and builds `dist/`, so budget **~1.1 GB under
+`/tmp`** and about a minute of wall clock. The scratch root is removed on exit
+unless `--keep` — but an INTERRUPTED run leaves it behind, so
+`ls -d /tmp/pi-lens-release-qa-*` after a Ctrl-C session, and remove what you
+find.
+
 **Remaining side effects on the checkout: none that persist.** `git archive` and
 `git status` are reads. The runner writes `release-qa-report.md` and
 `release-qa-evidence/` into `--out` (the cwd by default; both are gitignored at

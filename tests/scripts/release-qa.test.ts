@@ -1,9 +1,13 @@
-// flake-shape: real-process-spawn — the hermeticity canary (#2619 review F1)
-// spawns a REAL child under scratchEnv() and reads back what that child
-// resolved. The defect it pins is precisely that a child inherited the
-// ambient environment; an in-process assertion on the env object would have
-// passed while npm() ignored it, which is how 41 records reached the
-// maintainer's real ~/.pi-lens/install.log.
+// flake-shape: real-process-spawn — three spawns, each pinning something no
+// in-process double can reach. (1) `npm pack` of a two-line fixture package
+// whose `prepare` writes through `os.homedir()`: the F1 defect was npm
+// IGNORING the env it was handed, so an assertion on scratchEnv()'s OUTPUT
+// passed throughout the defect's life (#2619 review N1). (2) a `node -e` child
+// reporting what IT resolved for HOME/PI_LENS_INSTALL_LOG — `os.homedir()` in
+// the test process can only ever report the ambient home. (3) the real
+// release-qa CLI, run out of a throwaway dirty tree, because main()'s CALL to
+// the dirty-checkout refusal is reachable only through the process entry
+// point (#2619 review N3, MP-E).
 /**
  * #2606 — the release-QA runner's pure core.
  *
@@ -30,20 +34,26 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
+import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
+import { execFileSync, spawnSync } from "node:child_process";
 import * as os from "node:os";
 import {
 	BASELINE_COLUMNS,
 	classifyRowOutcome,
+	classifyRunFailure,
+	classifySkillsRegistration,
 	coverageArithmetic,
 	formatOutcome,
 	implementedRowIds,
 	parseArgs,
 	dirtyCheckoutRefusal,
+	finalizeRowOutcome,
+	npm,
 	parseBaselineRows,
 	parseSupplyArgs,
 	PINNED_ENV_KEYS,
 	pollToTerminal,
+	rowProbeRequest,
 	scratchEnv,
 	renderCoverageLine,
 	renderReport,
@@ -56,6 +66,17 @@ const REPO_ROOT = path.resolve(
 	"../..",
 );
 const BASELINE_PATH = path.join(REPO_ROOT, "docs", "release-qa-baseline.md");
+
+/** A throwaway git repo, through the helper the git-fixture governance requires. */
+function gitInit(dir: string): void {
+	for (const args of [
+		["init", "-q"],
+		["config", "user.email", "t@t.t"],
+		["config", "user.name", "t"],
+	]) {
+		gitExecFileSync(args, { cwd: dir });
+	}
+}
 
 function baselineText(): string {
 	return fs.readFileSync(BASELINE_PATH, "utf8");
@@ -485,6 +506,68 @@ describe("release-QA scratch hermeticity (#2619 review F1)", () => {
 		);
 	});
 
+	it("refuses to spawn npm without the pinned env", () => {
+		// #2619 review N1: `env` was an OPTIONAL positional, so dropping it at a
+		// call site reproduced the F1 defect while every test stayed green. npm
+		// runs pi-lens's OWN prepare/prepack, which write through os.homedir().
+		// REPO_ROOT, not a made-up path: with the guard removed the call must
+		// SUCCEED (and silently inherit the ambient env), so the red is "no
+		// throw", never an incidental ENOENT from a nonexistent cwd.
+		expect(() => npm(["--version"], REPO_ROOT)).toThrow(
+			/npm\(\) requires the pinned scratch env/,
+		);
+	});
+
+	it("keeps a packed package's own lifecycle script inside the scratch root", () => {
+		// The canary the env pin actually needs: an assertion on scratchEnv()'s
+		// OUTPUT cannot see npm ignoring it. This packs a two-line fixture
+		// package whose `prepare` writes through `os.homedir()` — the same shape
+		// as scripts/warm-loader-cache.mjs — through the REAL npm() helper, and
+		// checks where the record landed.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-qa-canary-"));
+		const ambient = path.join(root, "ambient-home");
+		const fixture = path.join(root, "fixture");
+		fs.mkdirSync(ambient, { recursive: true });
+		fs.mkdirSync(fixture, { recursive: true });
+		fs.writeFileSync(
+			path.join(fixture, "package.json"),
+			JSON.stringify({
+				name: "release-qa-env-canary",
+				version: "1.0.0",
+				private: true,
+				scripts: { prepare: "node ./write-marker.mjs" },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(fixture, "write-marker.mjs"),
+			'import fs from "node:fs";import os from "node:os";import path from "node:path";' +
+				'const f=path.join(os.homedir(),".pi-lens","canary.log");' +
+				'fs.mkdirSync(path.dirname(f),{recursive:true});fs.appendFileSync(f,"prepare ran\\n");',
+		);
+		try {
+			// HOME in the env we hand npm is the SCRATCH home; the fixture's
+			// `prepare` resolves os.homedir() from it.
+			npm(
+				["pack", "--json", "--pack-destination", root],
+				fixture,
+				scratchEnv(root, {
+					HOME: path.join(root, "home"),
+					USERPROFILE: path.join(root, "home"),
+				}),
+			);
+			expect(
+				fs.existsSync(path.join(root, "home", ".pi-lens", "canary.log")),
+				"the packed package's prepare should write inside the scratch root",
+			).toBe(true);
+			expect(
+				fs.existsSync(path.join(ambient, ".pi-lens")),
+				"nothing should reach a home outside the scratch root",
+			).toBe(false);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+		}
+	}, 120_000);
+
 	it("gives a REAL child a home and an install log inside the scratch root", () => {
 		// A real child, not an in-process assertion: the bug was a child
 		// inheriting the ambient environment, and `os.homedir()` in THIS process
@@ -510,6 +593,221 @@ describe("release-QA scratch hermeticity (#2619 review F1)", () => {
 		);
 		expect(seen.piLensHome).toBe(path.join(scratchRoot, "home", ".pi-lens"));
 		expect(seen.npmCache).toBe(path.join(scratchRoot, "npm-cache"));
+	});
+});
+
+describe("release-QA verdict state space (#2619 review round 3)", () => {
+	// The rail's cell list, one case per reachable cell. The table lives in the
+	// PR body; these are the cells as executable claims.
+
+	// --- C1 vs C2: BLOCKED is about the HOST, never about the candidate -----
+	it("C1: pi that will not boot at all is BLOCKED, no candidate blamed", () => {
+		const classified = classifyRunFailure({
+			bootProbeOk: false,
+			bootProbeReason: "pi exited early (code 1)",
+		});
+		expect(classified.blocked).toBe(true);
+		expect(classified.blockedReason).toContain(
+			"pi could not boot without the candidate",
+		);
+		expect(classified.candidateFailure).toBe("");
+		const verdict = shipVerdict([], {
+			blocked: true,
+			blockedReason: classified.blockedReason,
+		});
+		expect(verdict.verdict).toBe("BLOCKED");
+		expect(verdictExitCode(verdict.verdict)).toBe(3);
+	});
+
+	it("C2: a candidate that will not install, on a pi that boots, is DO-NOT-SHIP", () => {
+		const classified = classifyRunFailure({
+			bootProbeOk: true,
+			candidateError: "npm ERR! code ETARGET",
+		});
+		expect(classified.blocked).toBe(false);
+		expect(classified.candidateFailure).toContain(
+			"candidate could not be installed or activated",
+		);
+		expect(classified.candidateFailure).toContain("ETARGET");
+	});
+
+	it("C2: a candidate that stops a booted pi from starting is DO-NOT-SHIP", () => {
+		const classified = classifyRunFailure({
+			bootProbeOk: true,
+			candidateRpcReason: "no get_commands response within 60000ms",
+		});
+		expect(classified.blocked).toBe(false);
+		expect(classified.candidateFailure).toContain(
+			"pi booted bare but not with the candidate installed",
+		);
+	});
+
+	it("C2: every row reads UNTESTED and none is counted in rows", () => {
+		// The N2 defect: this cell used to FAIL all eleven rows with the copied
+		// cause and write ZERO witnesses — a verdict with no witness, against
+		// Hard Rule 1 and against the legend's definition of `rows`.
+		const cause = "candidate could not be installed or activated: ETARGET";
+		const classified = classifyRowOutcome({
+			status: "candidate-failure",
+			detail: cause,
+		});
+		expect(classified.outcome).toBe("UNTESTED");
+		expect(classified.detail).toBe(cause);
+
+		const results = ["a", "b", "c"].map((id) => ({
+			id,
+			outcome: classified.outcome,
+			detail: classified.detail,
+			implemented: false,
+		}));
+		const coverage = coverageArithmetic(results, 3);
+		expect(coverage).toMatchObject({
+			discovered: 3,
+			rows: 0,
+			pass: 0,
+			fail: 0,
+			untested: 3,
+			balanced: true,
+		});
+	});
+
+	it("C2: no probe is driven for any row, and none is FAILED", () => {
+		// The N2 defect, at its own seam: the candidate failure used to be
+		// copied onto every row as a FAIL.
+		const request = rowProbeRequest({
+			hasProbe: true,
+			candidateFailure:
+				"candidate could not be installed or activated: ETARGET",
+		});
+		expect(request.attempted).toBe(false);
+		expect(request.probe?.status).toBe("candidate-failure");
+		expect(classifyRowOutcome(request.probe).outcome).toBe("UNTESTED");
+	});
+
+	it("C1: a blocked run drives no probe either", () => {
+		const request = rowProbeRequest({
+			hasProbe: true,
+			blocked: true,
+			blockedReason: "pi could not boot",
+			candidateFailure: "ignored — blocked outranks it",
+		});
+		expect(request.attempted).toBe(false);
+		expect(request.probe).toEqual({
+			status: "blocked",
+			detail: "pi could not boot",
+		});
+	});
+
+	it("C8: a row with no probe is not counted in rows", () => {
+		const request = rowProbeRequest({ hasProbe: false });
+		expect(request.attempted).toBe(false);
+		expect(request.probe?.status).toBe("unimplemented");
+	});
+
+	it("C3-C6: a healthy run drives the row's own probe", () => {
+		expect(rowProbeRequest({ hasProbe: true })).toEqual({ attempted: true });
+	});
+
+	it("C2: the candidate failure is the verdict's own cause, not a row's", () => {
+		const results = [row("a", "UNTESTED", "…", false)];
+		const verdict = shipVerdict(results, {
+			candidateFailure:
+				"candidate could not be installed or activated: ETARGET",
+		});
+		expect(verdict.verdict).toBe("DO-NOT-SHIP");
+		expect(verdict.reason).toContain("the candidate never activated");
+		expect(verdict.reason).toContain("ETARGET");
+		// Not INCONCLUSIVE: zero rows passed, but the run has a definite answer.
+		expect(verdictExitCode(verdict.verdict)).toBe(1);
+	});
+
+	it("C1 outranks C2 when both are somehow set", () => {
+		const verdict = shipVerdict([], {
+			blocked: true,
+			blockedReason: "pi could not boot",
+			candidateFailure: "also this",
+		});
+		expect(verdict.verdict).toBe("BLOCKED");
+	});
+
+	// --- C7: Hard Rule 1 as code -------------------------------------------
+	it("C7: a probe that claims PASS with no witness is downgraded to UNTESTED", () => {
+		const downgraded = finalizeRowOutcome(
+			{ outcome: "PASS", detail: "4 skills" },
+			"",
+		);
+		expect(downgraded.outcome).toBe("UNTESTED");
+		expect(downgraded.detail).toContain("no witness");
+	});
+
+	it("C7: a PASS with a witness is left alone, and non-PASS outcomes pass through", () => {
+		const kept = finalizeRowOutcome(
+			{ outcome: "PASS", detail: "4 skills" },
+			"release-qa-evidence/skills-registered.json",
+		);
+		expect(kept).toEqual({ outcome: "PASS", detail: "4 skills" });
+		expect(
+			finalizeRowOutcome({ outcome: "SKIPPED", detail: "no ref" }, ""),
+		).toEqual({ outcome: "SKIPPED", detail: "no ref" });
+	});
+});
+
+describe("release-QA skills-registration verdict (#2619 review N3)", () => {
+	const PKG = "/proj/node_modules/pi-lens";
+	const skill = (name: string, over: Record<string, unknown> = {}) => ({
+		source: "skill",
+		name: `skill:${name}`,
+		sourceInfo: {
+			path: `${PKG}/skills/${name}/SKILL.md`,
+			source: "extension:index",
+			...over,
+		},
+	});
+	const four = () => [
+		skill("pi-lens-ast-grep"),
+		skill("pi-lens-lsp-navigation"),
+		skill("pi-lens-write-ast-grep-rule"),
+		skill("pi-lens-write-tree-sitter-rule"),
+	];
+
+	it("passes four in-package skills registered by the extension's own handler", () => {
+		const verdict = classifySkillsRegistration(four(), PKG);
+		expect(verdict.status).toBe("pass");
+		expect(verdict.shows).toContain("4/4 via extension:index");
+	});
+
+	it("fails when a skill was registered by the manifest instead of the handler", () => {
+		// The F2 fix, as its own case: #2587 proved one registrar can be broken
+		// for four releases while the other silently covers for it, so the row
+		// names which half is load-bearing.
+		const commands = four();
+		commands[0].sourceInfo.source = "package:manifest";
+		const verdict = classifySkillsRegistration(commands, PKG);
+		expect(verdict.status).toBe("fail");
+		expect(verdict.shows).toContain("3/4 via extension:index");
+	});
+
+	it("fails when a skill resolved outside the installed package", () => {
+		const commands = four();
+		commands[1].sourceInfo.path = "/somewhere/else/skills/x/SKILL.md";
+		expect(classifySkillsRegistration(commands, PKG).status).toBe("fail");
+	});
+
+	it("fails when fewer than the four shipped skills registered", () => {
+		expect(classifySkillsRegistration(four().slice(0, 3), PKG).status).toBe(
+			"fail",
+		);
+		const none = classifySkillsRegistration([], PKG);
+		expect(none.status).toBe("fail");
+		expect(none.shows).toContain("(none)");
+	});
+
+	it("ignores non-skill commands in the same response", () => {
+		const commands = [
+			...four(),
+			{ source: "extension", name: "lens-health", sourceInfo: { path: PKG } },
+		];
+		expect(classifySkillsRegistration(commands, PKG).status).toBe("pass");
 	});
 });
 
@@ -545,6 +843,45 @@ describe("release-QA dirty-checkout refusal (#2619 review F1)", () => {
 		expect(refusal).toContain("M scripts/release-qa.mjs");
 		expect(refusal).toContain("--from npm:<spec>");
 	});
+
+	it("exits 4 from the real CLI when its own checkout is dirty", () => {
+		// #2619 review N3 / MP-E: the pure refusal above is covered, but main()'s
+		// CALL to it was not — disabling that call left every test green. The
+		// runner resolves REPO_ROOT from its own file location, so running the
+		// real script out of a throwaway tree with a dirty git repo at its root
+		// exercises the call site itself. No pi, no network: the refusal fires
+		// before the scratch root is created.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-qa-dirty-"));
+		try {
+			fs.mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
+			for (const rel of [
+				"scripts/release-qa.mjs",
+				"scripts/lib/md-matrix.mjs",
+				"scripts/lib/git-fixture-env.mjs",
+			]) {
+				fs.copyFileSync(path.join(REPO_ROOT, rel), path.join(root, rel));
+			}
+			gitInit(root);
+			fs.writeFileSync(path.join(root, "uncommitted.txt"), "dirty\n");
+
+			const result = spawnSync(
+				process.execPath,
+				[
+					path.join(root, "scripts", "release-qa.mjs"),
+					"--from",
+					"tree",
+					"--baseline",
+					BASELINE_PATH,
+				],
+				{ encoding: "utf8", timeout: 60_000 },
+			);
+			expect(result.status).toBe(4);
+			expect(result.stderr).toContain("the checkout is dirty");
+			expect(result.stderr).toContain("uncommitted.txt");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+		}
+	}, 120_000);
 });
 
 describe("release-QA argument parsing (#2606)", () => {

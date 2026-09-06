@@ -86,6 +86,17 @@ import { parseTable } from "./lib/md-matrix.mjs";
 // ===========================================================================
 
 /**
+ * pi's own label for the registrar that put a skill on the session, as
+ * reported in `get_commands`' `sourceInfo.source`. `extension:index` is
+ * `index.ts`'s `resources_discover` handler (#205) — pi-lens registering its
+ * own skills — as opposed to a `pi.skills` manifest entry pi resolved itself.
+ * Read off live pi 0.80.10 and 0.85.1 responses, both identical.
+ */
+const EXPECTED_SKILL_REGISTRAR = "extension:index";
+/** How many skills pi-lens ships: one SKILL.md per dir under `skills`. */
+const MIN_SHIPPED_SKILLS = 4;
+
+/**
  * Short, schema-stable marker for the baseline's matrix table. Deliberately the
  * first two columns only: a marker naming a column that a later revision adds
  * or renames would stop finding the table and the runner would silently report
@@ -213,6 +224,12 @@ export function classifyRowOutcome(probe) {
 				outcome: OUTCOME.UNTESTED,
 				detail: detail || "run BLOCKED before this row was attempted",
 			};
+		case "candidate-failure":
+			return {
+				outcome: OUTCOME.UNTESTED,
+				detail:
+					detail || "the candidate never activated, so no probe was driven",
+			};
 		default:
 			return {
 				outcome: OUTCOME.UNTESTED,
@@ -294,6 +311,19 @@ export function shipVerdict(results, options = {}) {
 			caveats: [],
 		};
 	}
+	// #2619 review N2, cell C2. A candidate that will not install or activate on
+	// a pi that boots fine is a RESULT — do-not-ship — but it is not a row
+	// failure: no probe ran, nothing was witnessed. Carrying it here, the way
+	// `blocked` is carried, is what lets every row stay honestly UNTESTED while
+	// the run still refuses to ship. Copying the cause onto eleven rows instead
+	// produced eleven FAILs with an empty evidence dir.
+	if (options.candidateFailure) {
+		return {
+			verdict: "DO-NOT-SHIP",
+			reason: `the candidate never activated: ${options.candidateFailure}`,
+			caveats: [],
+		};
+	}
 	const list = results ?? [];
 	const failed = list.filter((r) => r.outcome === OUTCOME.FAIL);
 	if (failed.length > 0) {
@@ -354,6 +384,144 @@ export function parseSupplyArgs(stdout) {
 		.split(/\r?\n/)
 		.map((line) => line.trim())
 		.filter(Boolean);
+}
+
+/**
+ * Which of the two non-row failures a run hit, if either (#2619 review N3).
+ *
+ * The distinction is the one round 2 introduced and round 3 mechanises: BLOCKED
+ * is about the HOST — a pi that cannot start a bare RPC session, probed BEFORE
+ * anything is installed, so nothing about the candidate was measured. A
+ * candidate that will not pack, install, or activate on a pi that boots fine is
+ * a RESULT: do-not-ship. Living in `main()` as two `if`s, the distinction was
+ * mutation-inert — re-classifying a candidate failure as BLOCKED left every
+ * test green (MP-B).
+ *
+ * @param {{ bootProbeOk: boolean, bootProbeReason?: string, candidateError?: string, candidateRpcReason?: string }} observed
+ * @returns {{ blocked: boolean, blockedReason: string, candidateFailure: string }}
+ */
+export function classifyRunFailure(observed) {
+	const none = { blocked: false, blockedReason: "", candidateFailure: "" };
+	if (!observed?.bootProbeOk) {
+		return {
+			blocked: true,
+			blockedReason: `pi could not boot without the candidate: ${
+				observed?.bootProbeReason || "no reason recorded"
+			}`,
+			candidateFailure: "",
+		};
+	}
+	if (observed.candidateError) {
+		return {
+			...none,
+			candidateFailure: `candidate could not be installed or activated: ${observed.candidateError}`,
+		};
+	}
+	if (observed.candidateRpcReason) {
+		return {
+			...none,
+			candidateFailure: `pi booted bare but not with the candidate installed: ${observed.candidateRpcReason}`,
+		};
+	}
+	return none;
+}
+
+/**
+ * The skills row's verdict, as a pure function of the `get_commands` response
+ * (#2619 review N3).
+ *
+ * Three independent conditions, each of which has been the whole defect at some
+ * point:
+ *   - at least four skills registered at all (#2587's headline);
+ *   - every one resolved INSIDE the installed package (a foreign tree adopted
+ *     from a parent directory would otherwise read as success);
+ *   - every one registered by `extension:index` — pi-lens's own
+ *     `resources_discover` handler (#205) rather than the `pi.skills` manifest.
+ *     #2587 is the proof that one registrar can be broken for four releases
+ *     while the other silently covers for it.
+ *
+ * Lived inline in the probe, so deleting the third condition — the F2 fix
+ * itself — left every test green (MP-D).
+ *
+ * @param {ReadonlyArray<{ source?: string, name?: string, sourceInfo?: { path?: string, source?: string } }>} commands
+ * @param {string} installedPkgDir
+ */
+export function classifySkillsRegistration(commands, installedPkgDir) {
+	const skills = (commands ?? []).filter((c) => c.source === "skill");
+	const inPackage = skills.filter((c) =>
+		String(c.sourceInfo?.path ?? "").startsWith(String(installedPkgDir ?? "")),
+	);
+	const byHandler = skills.filter(
+		(c) => c.sourceInfo?.source === EXPECTED_SKILL_REGISTRAR,
+	);
+	const registrars = [
+		...new Set(skills.map((c) => String(c.sourceInfo?.source ?? "(none)"))),
+	];
+	const shows =
+		`${skills.length} skill command(s): ` +
+		`${skills.map((c) => c.name).join(", ") || "(none)"}; ` +
+		`${inPackage.length} resolved inside the installed package; ` +
+		`registrar(s): ${registrars.join(", ") || "(none)"} ` +
+		`(${byHandler.length}/${skills.length} via ${EXPECTED_SKILL_REGISTRAR})`;
+	const ok =
+		skills.length >= MIN_SHIPPED_SKILLS &&
+		inPackage.length === skills.length &&
+		byHandler.length === skills.length;
+	return { status: ok ? "pass" : "fail", detail: shows, shows };
+}
+
+/**
+ * What to do with one baseline row before any probe runs (#2619 review N2).
+ *
+ * Pure because the three non-probe paths are exactly where round 2 went wrong:
+ * a candidate failure used to be copied onto every row as a FAIL, producing
+ * eleven FAILed rows and an EMPTY evidence dir. Living as `else if`s inside
+ * `main()`, that was mutation-inert.
+ *
+ * `attempted` is what the coverage triple's `rows` counts — rows this run
+ * actually DROVE a probe for. All three non-probe paths set it false.
+ *
+ * @param {{ hasProbe: boolean, blocked?: boolean, blockedReason?: string, candidateFailure?: string }} run
+ * @returns {{ attempted: boolean, probe?: { status: string, detail?: string } }}
+ */
+export function rowProbeRequest(run) {
+	if (!run?.hasProbe) {
+		return { attempted: false, probe: { status: "unimplemented" } };
+	}
+	if (run.blocked) {
+		return {
+			attempted: false,
+			probe: { status: "blocked", detail: run.blockedReason },
+		};
+	}
+	if (run.candidateFailure) {
+		return {
+			attempted: false,
+			probe: { status: "candidate-failure", detail: run.candidateFailure },
+		};
+	}
+	return { attempted: true };
+}
+
+/**
+ * Hard Rule 1, as code: a row is PASS only when an artifact SHOWS the pass
+ * criterion (#2619 review, cell C7). A probe that reports success but captures
+ * nothing is downgraded to UNTESTED rather than counted as a witnessed pass —
+ * "it ran without throwing" is not a witness.
+ *
+ * @param {{ outcome: string, detail: string }} classified
+ * @param {string | undefined} witnessPath
+ */
+export function finalizeRowOutcome(classified, witnessPath) {
+	if (classified.outcome === OUTCOME.PASS && !witnessPath) {
+		return {
+			outcome: OUTCOME.UNTESTED,
+			detail:
+				"probe reported pass but captured no witness " +
+				"(hard rule: no witness, no verdict)",
+		};
+	}
+	return classified;
 }
 
 /**
@@ -438,6 +606,17 @@ export function renderReport({
 				"so nothing about the candidate was measured.",
 		);
 	}
+	if (
+		verdict.verdict === "DO-NOT-SHIP" &&
+		verdict.reason.startsWith("the candidate never activated")
+	) {
+		lines.push("");
+		lines.push(
+			"No row was driven: pi booted, the candidate did not. Every row is " +
+				"UNTESTED, and the run refuses to ship on the activation failure " +
+				"alone.",
+		);
+	}
 	if (verdict.verdict === "INCONCLUSIVE") {
 		lines.push("");
 		lines.push(
@@ -493,14 +672,6 @@ const DEFAULT_POLL_CAP_MS = 120_000;
 const NPM_TIMEOUT_MS = 600_000;
 const RPC_TIMEOUT_MS = 60_000;
 const MCP_CALL_TIMEOUT_MS = 180_000;
-/**
- * pi's own label for the registrar that put a skill on the session, as
- * reported in `get_commands`' `sourceInfo.source`. `extension:index` is
- * `index.ts`'s `resources_discover` handler (#205) — pi-lens registering its
- * own skills — as opposed to a `pi.skills` manifest entry pi resolved itself.
- * Read off live pi 0.80.10 and 0.85.1 responses, both identical.
- */
-const EXPECTED_SKILL_REGISTRAR = "extension:index";
 
 export function parseArgs(argv) {
 	const opts = {
@@ -561,7 +732,18 @@ function log(message) {
  * `warm_loader_cache` records in the maintainer's real
  * `~/.pi-lens/install.log`, timestamped across them.
  */
-function npm(args, cwd, env) {
+export function npm(args, cwd, env) {
+	// #2619 review N1: `env` was an OPTIONAL positional, so dropping it at a
+	// call site reproduced the exact F1 defect — npm running OUR lifecycle
+	// scripts against the maintainer's real HOME — while every test stayed
+	// green. A missing env is now a loud crash, not a silent leak.
+	if (!env) {
+		throw new Error(
+			"npm() requires the pinned scratch env: npm runs pi-lens's own " +
+				"prepare/prepack, which write through os.homedir() and " +
+				"PI_LENS_INSTALL_LOG (#2619 review F1/N1)",
+		);
+	}
 	return execFileSync(NPM_BIN, args, {
 		cwd,
 		encoding: "utf8",
@@ -1001,40 +1183,12 @@ const ROW_PROBES = {
 		if (!capture?.ok) {
 			return { status: "fail", detail: capture?.reason ?? "no RPC capture" };
 		}
-		const skills = capture.commands.filter((c) => c.source === "skill");
-		const inPackage = skills.filter((c) =>
-			String(c.sourceInfo?.path ?? "").startsWith(ctx.installedPkgDir),
+		const verdict = classifySkillsRegistration(
+			capture.commands,
+			ctx.installedPkgDir,
 		);
-		// The row pins WHICH path registered them, not merely that some path
-		// did (#2619 review F2). pi-lens has two independent registrars — the
-		// `pi.skills` manifest and `index.ts`'s own `resources_discover` handler
-		// (#205) — and #2587 is the proof that one half can be broken for four
-		// releases while the other silently covers for it. `sourceInfo.source`
-		// is pi's own label for the registrar (`extension:index` for the
-		// handler); verified identical on pi 0.80.10 and 0.85.1. The observed
-		// values are printed either way, so a pi-side rename reads as a
-		// diagnosable mismatch rather than a mystery.
-		const registrars = [
-			...new Set(skills.map((c) => String(c.sourceInfo?.source ?? "(none)"))),
-		];
-		const byHandler = skills.filter(
-			(c) => c.sourceInfo?.source === EXPECTED_SKILL_REGISTRAR,
-		);
-		const shows =
-			`${skills.length} skill command(s): ` +
-			`${skills.map((c) => c.name).join(", ") || "(none)"}; ` +
-			`${inPackage.length} resolved inside the installed package; ` +
-			`registrar(s): ${registrars.join(", ") || "(none)"} ` +
-			`(${byHandler.length}/${skills.length} via ${EXPECTED_SKILL_REGISTRAR})`;
 		return {
-			status:
-				skills.length >= 4 &&
-				inPackage.length === skills.length &&
-				byHandler.length === skills.length
-					? "pass"
-					: "fail",
-			detail: shows,
-			shows,
+			...verdict,
 			witness: {
 				ext: "json",
 				content: JSON.stringify(capture.raw ?? capture, null, 2),
@@ -1351,7 +1505,10 @@ async function main() {
 	fs.mkdirSync(evidenceDir, { recursive: true });
 
 	log(`scratch root: ${scratchRoot}`);
-	log(`HOME / PI_LENS_HOME / PILENS_DATA_DIR pinned under ${home}`);
+	log(
+		`pinned under ${scratchRoot}: ${PINNED_ENV_KEYS.join(", ")} ` +
+			"(nothing this run spawns can reach the ambient home)",
+	);
 
 	let blocked = false;
 	let blockedReason = "";
@@ -1378,9 +1535,13 @@ async function main() {
 		cwd: projectDir,
 		env,
 	});
-	if (!bootProbe.ok) {
-		blocked = true;
-		blockedReason = `pi could not boot without the candidate: ${bootProbe.reason}`;
+	{
+		const classified = classifyRunFailure({
+			bootProbeOk: bootProbe.ok,
+			bootProbeReason: bootProbe.reason,
+		});
+		blocked = classified.blocked;
+		blockedReason = classified.blockedReason;
 	}
 
 	try {
@@ -1477,11 +1638,17 @@ async function main() {
 		if (!rpc.ok) {
 			// pi answered the boot probe moments ago, so this is the candidate
 			// breaking it, not an unbootable host.
-			candidateFailure = `pi booted bare but not with the candidate installed: ${rpc.reason}`;
+			candidateFailure = classifyRunFailure({
+				bootProbeOk: true,
+				candidateRpcReason: rpc.reason,
+			}).candidateFailure;
 		}
 	} catch (err) {
 		if (!blocked) {
-			candidateFailure = `candidate could not be installed or activated: ${err?.message || err}`;
+			candidateFailure = classifyRunFailure({
+				bootProbeOk: true,
+				candidateError: `${err?.message || err}`,
+			}).candidateFailure;
 		}
 	}
 
@@ -1537,14 +1704,15 @@ async function main() {
 	for (const row of rows) {
 		const probe = ROW_PROBES[row.id];
 		let raw;
-		let attempted = Boolean(probe);
-		if (!probe) {
-			raw = { status: "unimplemented" };
-		} else if (blocked) {
-			attempted = false;
-			raw = { status: "blocked", detail: blockedReason };
-		} else if (candidateFailure) {
-			raw = { status: "fail", detail: candidateFailure };
+		const request = rowProbeRequest({
+			hasProbe: Boolean(probe),
+			blocked,
+			blockedReason,
+			candidateFailure,
+		});
+		const attempted = request.attempted;
+		if (!attempted) {
+			raw = request.probe;
 		} else {
 			log(`row ${row.id}`);
 			try {
@@ -1553,19 +1721,22 @@ async function main() {
 				raw = { status: "error", detail: `${err?.message || err}` };
 			}
 		}
-		const classified = classifyRowOutcome(raw);
-		let witnessPath = "—";
+		const probeOutcome = classifyRowOutcome(raw);
+		let witnessPath = "";
 		if (raw.witness) {
 			const file = path.join(evidenceDir, `${row.id}.${raw.witness.ext}`);
 			fs.writeFileSync(file, raw.witness.content ?? "");
 			witnessPath = path.relative(opts.out, file).replaceAll("\\", "/");
 		}
+		// Hard Rule 1 as code (cell C7): a pass with nothing to show is not a
+		// pass. Downgraded here rather than trusted.
+		const classified = finalizeRowOutcome(probeOutcome, witnessPath);
 		results.push({
 			id: row.id,
 			outcome: classified.outcome,
 			detail: classified.detail,
 			implemented: attempted,
-			witnessPath,
+			witnessPath: witnessPath || "—",
 			shows: raw.shows ?? classified.detail,
 		});
 		log(`  → ${formatOutcome(classified)}`);
@@ -1574,7 +1745,11 @@ async function main() {
 	if (mcp) await mcp.close();
 
 	const coverage = coverageArithmetic(results, rows.length);
-	const verdict = shipVerdict(results, { blocked, blockedReason });
+	const verdict = shipVerdict(results, {
+		blocked,
+		blockedReason,
+		candidateFailure,
+	});
 	const report = renderReport({
 		rows,
 		results,

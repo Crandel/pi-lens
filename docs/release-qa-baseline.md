@@ -137,13 +137,24 @@ no ship verdict either.
 
 Ship line, from the outcomes:
 
-| condition | verdict | exit |
-| --- | --- | --- |
-| pi did not boot with NO candidate installed | BLOCKED — no verdict | 3 |
-| any FAIL, including a candidate that would not install or activate | do not ship | 1 |
-| pi booted but zero rows PASSED | INCONCLUSIVE — no verdict | 3 |
-| any UNTESTED or SKIPPED, at least one PASS | ship with caveats, each named | 2 |
-| all PASS | ship | 0 |
+| condition | verdict | exit | rows |
+| --- | --- | --- | --- |
+| pi did not boot with NO candidate installed | BLOCKED — no verdict | 3 | 0 |
+| pi booted, the candidate would not install or activate | do not ship, cause named on the verdict | 1 | 0 |
+| any row FAILED | do not ship | 1 | N |
+| pi booted but zero rows PASSED | INCONCLUSIVE — no verdict | 3 | N |
+| any UNTESTED or SKIPPED, at least one PASS | ship with caveats, each named | 2 | N |
+| all PASS | ship | 0 | N |
+
+A candidate that never activated leaves **every row UNTESTED, none FAILED, and
+`rows` at 0** — no probe ran, so nothing was witnessed and nothing can honestly
+be called a failure of that row. The activation failure is the verdict's own
+cause. (An earlier revision copied it onto all eleven rows as FAILs and wrote an
+empty evidence dir — a verdict with no witness, against the first hard rule.)
+
+**A row is PASS only if a witness was captured.** A probe that reports success
+and produces no artifact is recorded UNTESTED, not PASS; the hard rule is
+enforced in code, not just documented here.
 
 A usage or self-check error (bad option, unparseable matrix, arithmetic
 mismatch) exits **4**. **Exit 2 is the EXPECTED verdict for a working-tree run**:
