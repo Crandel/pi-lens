@@ -1,3 +1,9 @@
+// flake-shape: real-process-spawn — the subject IS the script's actual stdout
+// bytes (whether the delimiter is a real newline vs. a real space), which
+// only a real child process invocation can prove; an in-process stub of
+// `supply-host-provided-deps.mjs` would just re-assert whatever delimiter
+// the test author typed, not what the script actually prints (#2586 review
+// F1).
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -18,7 +24,11 @@ import { HOST_PROVIDED_RUNTIME_PACKAGES } from "../../scripts/lib/host-provided-
 // pins the actual property every caller depends on: the output splits on
 // NEWLINES ONLY into exactly one token per runtime package, regardless of
 // whether a package's range itself contains a space.
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const root = path.resolve(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"..",
+	"..",
+);
 const scriptPath = path.join(root, "scripts", "supply-host-provided-deps.mjs");
 
 function runInstallArgs(): string {

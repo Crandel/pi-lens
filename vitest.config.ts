@@ -323,6 +323,9 @@ const wallClockBudgetInclude = [
 	// window. Keep child-process CPU sampling and this wall-clock lower bound in
 	// the fully serialized, dead-last phase.
 	"tests/clients/lsp/service-notify-cpu-liveness.test.ts",
+	// #2586 review F1: proves the ACTUAL stdout bytes supply-host-provided-deps.mjs
+	// prints (real child process, flake-shape admission).
+	"tests/scripts/supply-host-provided-deps.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL
