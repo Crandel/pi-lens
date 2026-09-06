@@ -6,6 +6,9 @@ export declare const BLOCKING_CONCLUSIONS: Set<string>;
 export declare function isBlockingConclusion(
 	conclusion: string | null | undefined,
 ): boolean;
+export declare function isUncertainConclusion(
+	conclusion: string | null | undefined,
+): boolean;
 
 export interface CheckRunRecord {
 	name: string;

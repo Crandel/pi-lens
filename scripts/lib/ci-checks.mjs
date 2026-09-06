@@ -40,6 +40,12 @@ export const ADVISORY_CHECKS = new Set([
 	// spawns are a DIFFERENT, unrelated set of check-run names this list does
 	// NOT cover, and they gate like any other non-advisory check).
 	"CodeQL",
+	// .github/workflows/greetings.yml's `greeting` job (the job KEY -- no
+	// `name:` override), posted by `actions/first-interaction` on
+	// `pull_request_target: types: [opened]` only. A cosmetic
+	// first-time-contributor welcome bot; a token or action-version failure
+	// in it must never block the train (#2618 fix-round-2 F3).
+	"greeting",
 ]);
 
 export function isAdvisoryCheck(name) {
@@ -73,6 +79,27 @@ export const BLOCKING_CONCLUSIONS = new Set([
 
 export function isBlockingConclusion(conclusion) {
 	return BLOCKING_CONCLUSIONS.has(String(conclusion ?? "").toUpperCase());
+}
+
+// #2618 fix-round-2, F2: `CANCELLED` sits in `BLOCKING_CONCLUSIONS` above
+// because a check a HUMAN cancelled genuinely is not passing -- but
+// `cancel-in-progress: true` (ci.yml:15-16) cancels the PREVIOUS in-flight
+// run of a concurrency group on every new push/dispatch to the SAME ref, and
+// that cancelled check-run can be the ONLY row present for its name for
+// several minutes before its replacement posts (live-probed 2026-09-06 on
+// PR #2607's head: three "Record post-merge validation" check-suites on ONE
+// commit -- 17:21:06 cancelled, 17:25:29 skipped, 17:32:15 skipped --
+// `resolveLatestByName` correctly drops the cancelled one once a newer row
+// exists, but at 17:21-17:25 it was the newest, and only, row). Reading that
+// window as a hard FAILURE (as `isBlockingConclusion` alone would) is a
+// false positive on a check that is not done reporting, not a check that
+// failed -- callers gate a DISCOVERED (non-required) row's "cancelled"
+// conclusion through this predicate instead, to PEND rather than fail. A
+// REQUIRED row gets no such grace: it must reach a literal "success" as
+// ANY other terminal state means it, or a run superseding it, was
+// interrupted or is stale evidence -- see ci-verdict.mjs's `computeVerdict`.
+export function isUncertainConclusion(conclusion) {
+	return String(conclusion ?? "").toUpperCase() === "CANCELLED";
 }
 
 function startedAtOf(run) {

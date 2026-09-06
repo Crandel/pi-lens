@@ -18,23 +18,38 @@
  * GitHub reports on the head is now a row, and every row GATES unless it is
  * on the advisory allowlist (`scripts/lib/ci-checks.mjs`'s
  * `isAdvisoryCheck` -- the SAME list #2185's real merge-train gate already
- * uses) or its conclusion is "skipped"/"neutral" (a job-level `if:` that
- * evaluated false, not a failure -- see computeVerdict's own doc comment).
- * `run()` also attempts a LIVE read of `master`'s branch-protection
- * `required_status_checks.contexts` via `gh api`, and treats those names as
+ * uses). `run()` also attempts a LIVE read of `master`'s branch-protection
+ * required-status-check names via `gh api`, and treats those names as
  * gating unconditionally (never excusable by the static advisory allowlist)
  * when that read succeeds; when it does not (no permission, no ruleset,
  * transport error), the constant `REQUIRED_CHECKS` pair is the fallback --
  * either way, "every check-run not on the advisory allowlist gates" holds.
  *
+ * #2618 fix-round-2: a gating row's conclusion is judged differently
+ * depending on whether it is one of those confirmed-required names or
+ * merely discovered. A REQUIRED row must reach a literal "success" --
+ * ANYTHING else (skipped, neutral, cancelled, a real failure) is non-zero,
+ * because a required check that skipped or was cancelled is stale or
+ * interrupted evidence, never proof of a pass (round 1's bug: it exempted
+ * skipped/neutral on EVERY gating row, so a required `Unit tests` skipped by
+ * a failed `needs:` dependency read as a clean pass). A DISCOVERED row's
+ * "skipped"/"neutral" conclusion is a genuine non-failure (a job-level
+ * `if:` that evaluated false -- see computeVerdict's own doc comment), and
+ * its "cancelled" conclusion is UNCERTAIN rather than failing: this repo's
+ * `cancel-in-progress: true` (ci.yml:15-16) leaves a stale cancelled row as
+ * the only entry for its name for several minutes before a replacement
+ * posts, and reading that window as a hard failure is a false positive on a
+ * check still in flight, not one that failed.
+ *
  *   node scripts/ci-verdict.mjs <pr-number|sha> [--wait <seconds>]
  *
  * Exit codes:
- *   0  -- every gating check-run concluded "success" (or a non-blocking
- *         terminal conclusion: "skipped"/"neutral")
- *   1  -- a gating check-run completed with a blocking, non-success
- *         conclusion (failure/timed_out/cancelled/action_required/stale/
- *         startup_failure)
+ *   0  -- every gating check-run concluded "success", or (discovered rows
+ *         only) a non-blocking terminal conclusion: "skipped"/"neutral"
+ *   1  -- a gating check-run completed with a conclusion that fails it: any
+ *         non-"success" conclusion on a REQUIRED row, or (on a discovered
+ *         row) a blocking one -- failure/timed_out/action_required/stale/
+ *         startup_failure, or cancelled with no uncertainty grace applied
  *   2  -- the PR's head is genuinely merge-conflicted (`gh pr view --json
  *         mergeable` reads "CONFLICTING"), regardless of whether the required
  *         checks are present or absent in check-runs (round 3, F1): a
@@ -133,6 +148,7 @@ import { fileURLToPath } from "node:url";
 import {
 	isAdvisoryCheck,
 	isBlockingConclusion,
+	isUncertainConclusion,
 	REQUIRED_CHECKS,
 	resolveLatestByName,
 } from "./lib/ci-checks.mjs";
@@ -292,16 +308,43 @@ export function computeVerdict(
 		typeof totalCount === "number" && totalCount > checkRuns.length;
 	const mergeState = mergeable ?? "n/a";
 
-	const failingGatingRows = rows.filter(
-		(row) =>
-			row.gating &&
-			row.present &&
-			row.status === "completed" &&
-			isBlockingConclusion(row.conclusion),
-	);
-	const pendingGatingRows = rows.filter(
-		(row) => row.gating && row.status !== "completed",
-	);
+	// #2618 fix-round-2, F1: a REQUIRED row gets NO conclusion exemption --
+	// it must reach a literal "success". `isBlockingConclusion`'s skip/neutral
+	// exemption (and F2's cancelled-uncertain exemption below) apply ONLY to
+	// DISCOVERED rows. Applying them to required rows too (round 1's bug) let
+	// a required `Unit tests` that reported "skipped" (reachable: ci.yml:253's
+	// `test` job has `needs: validate-merge-train-dispatch` with no `if:`, so
+	// a failed dependency skips it outright) read as a clean pass --
+	// `merge-train-lane.mjs`'s real gate never had this bug: its required-row
+	// loop already demands `run.conclusion === PASSING_CONCLUSION` (line
+	// ~262) with no such exemption.
+	//
+	// #2618 fix-round-2, F2: a DISCOVERED row's "cancelled" conclusion is
+	// UNCERTAIN, not a failure -- `isUncertainConclusion` (ci-checks.mjs)
+	// excludes it here and instead routes it into `pendingGatingRows` below,
+	// because `cancel-in-progress: true` (ci.yml:15-16) leaves a stale
+	// cancelled check-run as the ONLY row for its name for several minutes
+	// before a replacement posts (live-probed on PR #2607's
+	// "Record post-merge validation": three check-suites on one commit, the
+	// oldest cancelled). A REQUIRED row's "cancelled" conclusion gets NO such
+	// grace -- it fails the literal-success test above like any other
+	// non-success conclusion, so it stays non-zero.
+	const failingGatingRows = rows.filter((row) => {
+		if (!row.gating || !row.present || row.status !== "completed") return false;
+		if (requiredNameSet.has(row.name)) return row.conclusion !== "success";
+		if (isUncertainConclusion(row.conclusion)) return false;
+		return isBlockingConclusion(row.conclusion);
+	});
+	const pendingGatingRows = rows.filter((row) => {
+		if (!row.gating) return false;
+		if (row.status !== "completed") return true;
+		// The F2 "uncertain cancellation" grace, discovered rows only (a
+		// required row's cancelled conclusion was already routed to
+		// `failingGatingRows` above and never reaches here as pending).
+		return (
+			!requiredNameSet.has(row.name) && isUncertainConclusion(row.conclusion)
+		);
+	});
 
 	let exitCode;
 	let reason;
@@ -509,15 +552,28 @@ export const PROTECTED_BRANCH = "master";
  * Reads the LIVE required-status-check names GitHub enforces on
  * `PROTECTED_BRANCH`, via `gh api repos/<repo>/branches/<branch>/protection`
  * (classic branch protection; this repository has no ruleset configured --
- * `gh api repos/.../rulesets` returned `[]` when probed 2026-09-06, so
- * `required_status_checks.contexts` on the branch-protection endpoint is the
- * live source of truth today). Returns `null` on ANY failure -- insufficient
- * permission, 404, malformed JSON, an unexpected response shape, a `gh`
- * timeout -- never throws, so an unreadable ruleset always falls back to
- * `run()`'s constant `REQUIRED_CHECKS` default rather than aborting the
- * whole verdict read (#2609's acceptance criterion: "the required checks
- * from the repository ruleset / branch protection via `gh api` WHEN
- * READABLE, else an explicit ADVISORY allowlist").
+ * `gh api repos/.../rulesets` returned `[]` when probed 2026-09-06). Returns
+ * `null` on ANY failure -- insufficient permission, 404, malformed JSON, an
+ * unexpected response shape, a `gh` timeout -- never throws, so an
+ * unreadable ruleset always falls back to `run()`'s constant
+ * `REQUIRED_CHECKS` default rather than aborting the whole verdict read
+ * (#2609's acceptance criterion: "the required checks from the repository
+ * ruleset / branch protection via `gh api` WHEN READABLE, else an explicit
+ * ADVISORY allowlist").
+ *
+ * `required_status_checks.checks[].context` is read in PREFERENCE to the
+ * legacy `.contexts` string array (#2618 fix-round-2 reviewer note): GitHub's
+ * own docs mark `contexts` deprecated, and a check added purely through the
+ * newer per-app `checks` shape (an `app_id`-scoped context, as opposed to a
+ * plain commit-status context) is not guaranteed to also appear in the
+ * legacy array -- reading only `contexts` risks silently missing such a
+ * required name, which would then never gate via the branch-protection
+ * source at all and could pend forever waiting on a check this function
+ * never told the caller to expect. `.contexts` remains the fallback when
+ * `.checks` is absent (older API responses, or a repository whose
+ * protection predates the field) -- this repository's own live response
+ * carries both today and they agree (probed 2026-09-06: `checks: [{context:
+ * "Lint & type-check", ...}, {context: "Unit tests", ...}]`).
  */
 export function resolveRequiredCheckNames(
 	repository,
@@ -529,7 +585,18 @@ export function resolveRequiredCheckNames(
 			["api", `repos/${repository}/branches/${PROTECTED_BRANCH}/protection`],
 			{ timeoutMs },
 		);
-		const contexts = JSON.parse(raw)?.required_status_checks?.contexts;
+		const requiredStatusChecks = JSON.parse(raw)?.required_status_checks;
+		const checks = requiredStatusChecks?.checks;
+		const contextsFromChecks = Array.isArray(checks)
+			? checks.map((check) => check?.context).filter(Boolean)
+			: [];
+		// An empty (or absent) `.checks` falls all the way back to the legacy
+		// array -- an empty modern array is more likely an unpopulated field on
+		// an older API response than a repository with zero required checks.
+		const contexts =
+			contextsFromChecks.length > 0
+				? contextsFromChecks
+				: requiredStatusChecks?.contexts;
 		if (!Array.isArray(contexts) || contexts.length === 0) return null;
 		return contexts.map(String);
 	} catch {

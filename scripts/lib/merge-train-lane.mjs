@@ -27,6 +27,7 @@ import {
 	ADVISORY_SUFFIX,
 	BLOCKING_CONCLUSIONS,
 	isAdvisoryCheck,
+	isBlockingConclusion,
 	REQUIRED_CHECKS,
 	resolveLatestByName,
 } from "./ci-checks.mjs";
@@ -276,12 +277,14 @@ export function evaluateMergeGate(pr, health, { approvedBy } = {}) {
 
 	// Judge the RESOLVED run per name, so a superseded duplicate cannot block
 	// a head whose current run passed, and a newer failing duplicate cannot be
-	// hidden by an older passing one.
+	// hidden by an older passing one. `isBlockingConclusion` (#2618
+	// fix-round-2, F5 net-count fold), not a direct `BLOCKING_CONCLUSIONS.has`
+	// -- this repo's GraphQL rollup already reports UPPERCASE conclusions so
+	// the two were behaviorally identical here, but a second hand-rolled
+	// case-sensitive comparison of the SAME set is exactly the duplication
+	// `isBlockingConclusion` exists to remove (ci-checks.mjs).
 	const failing = [...byName.values()].filter(
-		(c) =>
-			!isAdvisoryCheck(c.name) &&
-			c.conclusion != null &&
-			BLOCKING_CONCLUSIONS.has(c.conclusion),
+		(c) => !isAdvisoryCheck(c.name) && isBlockingConclusion(c.conclusion),
 	);
 	if (failing.length > 0)
 		return deny(
