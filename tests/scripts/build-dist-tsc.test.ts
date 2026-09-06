@@ -1,8 +1,12 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { buildTscExecInvocation } from "../../scripts/build-dist-tsc.mjs";
+import {
+	planTscInvocation,
+	resolveLocalTsc,
+} from "../../scripts/build-dist-tsc.mjs";
 import { createIsolatedExecPrefix } from "../../scripts/lib/exec-isolation.mjs";
 
 // #2593: build:dist's `npx --yes -p typescript@7.0.2 tsc --project
@@ -17,62 +21,127 @@ import { createIsolatedExecPrefix } from "../../scripts/lib/exec-isolation.mjs";
 // see scripts/lib/exec-isolation.mjs's header comment for the full
 // mechanism writeup (shared with #2590's original finding).
 //
-// Unlike #2590, this is currently LATENT: `typescript` is a genuine
-// top-level devDependency and no dependency nests a second matching copy
-// anywhere in this repo's tree today (confirmed via package-lock.json), so
-// there is no natural collision to reproduce. This test instead pins the
-// exact production argv+options the same way
-// tests/scripts/bundle-dist.test.ts's "buildEsbuildExecInvocation (#2594
-// review F2)" pins the esbuild call site: a test that only exercised the
-// shared builder or the prefix resolver in isolation would stay green even
-// if this call site stopped using either (e.g. reverting to `cwd:
-// execPrefix`, or dropping `--prefix` entirely) — so this asserts the real
-// argv+options object buildTscExecInvocation hands to `execFileSync`.
-describe("buildTscExecInvocation (#2593, refs #2590)", () => {
+// #2593 review round 2, F1: round 1's fix ran the isolated `npm exec
+// --package typescript@<version> --prefix <empty temp dir>` path
+// UNCONDITIONALLY, even though `typescript` is a genuine top-level
+// devDependency whose local `node_modules/typescript/bin/tsc` already
+// exists at the exact pinned version under any normal install. `--prefix
+// <empty dir>` forces npm to skip its local-tree lookup entirely, which
+// means it ALSO forces a registry fetch on every single build — reproduced
+// with a dead registry: `npm exec --yes --package typescript@7.0.2 -- tsc
+// --version` (no --prefix) prints `Version 7.0.2` with zero network calls,
+// while the same command WITH `--prefix <empty dir>` fails with
+// ECONNREFUSED trying to reach the registry. `resolveLocalTsc` +
+// `planTscInvocation` fix this: prefer the local pinned binary (no npm
+// exec, no network at all) when present and version-matching, falling back
+// to the isolated npm-exec path only when it's absent or mismatched (the
+// actual `--omit=dev` from-source install case this was written for).
+describe("resolveLocalTsc (#2593 review round 2, F1)", () => {
+	function makeFixtureRoot(tscVersion: string | undefined) {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pilens-resolve-local-tsc-"),
+		);
+		if (tscVersion !== undefined) {
+			const tsDir = path.join(root, "node_modules", "typescript");
+			const binDir = path.join(tsDir, "bin");
+			fs.mkdirSync(binDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(tsDir, "package.json"),
+				JSON.stringify({ name: "typescript", version: tscVersion }),
+			);
+			fs.writeFileSync(path.join(binDir, "tsc"), "#!/usr/bin/env node\n");
+			fs.chmodSync(path.join(binDir, "tsc"), 0o755);
+		}
+		return root;
+	}
+
+	it("returns the local bin path when the installed version exactly matches the pin", () => {
+		const root = makeFixtureRoot("7.0.2");
+		try {
+			const bin = resolveLocalTsc({ root, version: "7.0.2" });
+			expect(bin).toBe(
+				path.join(root, "node_modules", "typescript", "bin", "tsc"),
+			);
+			expect(fs.existsSync(bin ?? "")).toBe(true);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("returns null when the installed version does not match the pin", () => {
+		const root = makeFixtureRoot("6.9.9");
+		try {
+			expect(resolveLocalTsc({ root, version: "7.0.2" })).toBeNull();
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("returns null when typescript is not installed at all (--omit=dev shape)", () => {
+		const root = makeFixtureRoot(undefined);
+		try {
+			expect(resolveLocalTsc({ root, version: "7.0.2" })).toBeNull();
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("planTscInvocation local-vs-fallback branching (#2593 review round 2, F1)", () => {
 	const root = path.resolve(
 		path.dirname(fileURLToPath(import.meta.url)),
 		"..",
 		"..",
 	);
 
-	it("spawns with cwd: root and a --prefix pointing outside root", () => {
+	it("runs the local bin DIRECTLY, building no npm-exec argv at all, when a local binary is given", () => {
+		const localTscBin = "/fake/node_modules/typescript/bin/tsc";
+		const { command, argv, options } = planTscInvocation({
+			localTscBin,
+			root,
+			version: "7.0.2",
+			npmCli: "/fake/npm-cli.js",
+			execPrefix: undefined,
+			tsconfigProject: "tsconfig.dist.json",
+		});
+
+		// The whole point of this branch: spawn the local binary directly, no
+		// `npm exec` wrapper, no `--package`, no `--prefix`, no network.
+		expect(command).toBe(localTscBin);
+		expect(argv).not.toContain("exec");
+		expect(argv).not.toContain("--package");
+		expect(argv).not.toContain("--prefix");
+		expect(argv).toEqual(["--project", "tsconfig.dist.json", "--noCheck"]);
+
+		// cwd stays root even in this branch (#2593 review round 2, F2): tsc
+		// resolves a relative --project argument against its OWN cwd, not the
+		// tsconfig file's directory.
+		expect(options.cwd).toBe(root);
+	});
+
+	it("falls back to the isolated npm-exec path, unchanged, when no local binary is given", () => {
 		const execPrefix = createIsolatedExecPrefix();
 		try {
-			const { options, argv } = buildTscExecInvocation({
+			const { options, argv } = planTscInvocation({
+				localTscBin: null,
+				root,
+				version: "7.0.2",
 				npmCli: "/fake/npm-cli.js",
 				execPrefix,
 				tsconfigProject: "tsconfig.dist.json",
 			});
 
-			// tsc has no esbuild-style emitted-path hazard (tsconfig.dist.json's
-			// rootDir/outDir resolve relative to the tsconfig file's own
-			// location, not cwd, and sourceMap/declaration are both off), but
-			// cwd stays root regardless — unchanged from before this fix, and
-			// asserted directly rather than inferred from the absence of a cwd
-			// override.
+			// Load-bearing: cwd stays root in the fallback branch too — only the
+			// npm-exec resolution prefix ever moves, never tsc's own cwd (#2594
+			// F1's lesson, reapplied here in #2593 review round 2, F2).
 			expect(options.cwd).toBe(root);
 
-			// Load-bearing: without --prefix pointed outside root, npm's tree
-			// lookup falls back to walking up from cwd (root), reintroducing the
-			// same collision shape #2590 fixed for esbuild.
 			const prefixIndex = argv.indexOf("--prefix");
 			expect(prefixIndex).toBeGreaterThanOrEqual(0);
 			const prefixArg = argv[prefixIndex + 1];
 			expect(prefixArg).not.toBe(root);
 			expect(path.relative(root, prefixArg ?? "").startsWith("..")).toBe(true);
-		} finally {
-			fs.rmSync(execPrefix, { recursive: true, force: true });
-		}
-	});
 
-	it("passes --package typescript@<version> and the tsc invocation with the given project", () => {
-		const execPrefix = createIsolatedExecPrefix();
-		try {
-			const { argv } = buildTscExecInvocation({
-				npmCli: "/fake/npm-cli.js",
-				execPrefix,
-				tsconfigProject: "tsconfig.dist.json",
-			});
 			const packageIndex = argv.indexOf("--package");
 			expect(packageIndex).toBeGreaterThanOrEqual(0);
 			expect(argv[packageIndex + 1]).toMatch(/^typescript@\d+\.\d+\.\d+$/);

@@ -1,43 +1,65 @@
 #!/usr/bin/env node
 /**
- * Run `tsc --project <tsconfig> --noCheck` (the first step of `build:dist`)
- * through the same `npm exec --package` isolation scripts/bundle-dist.mjs
- * uses for its esbuild spawn — see scripts/lib/exec-isolation.mjs for why.
+ * Run `tsc --project <tsconfig> --noCheck` (the first step of `build:dist`),
+ * preferring the LOCAL pinned `typescript` devDependency binary — no `npm
+ * exec`, no network — and falling back to the same isolated `npm exec
+ * --package` path scripts/bundle-dist.mjs uses for its esbuild spawn only
+ * when that local binary is absent or a mismatched version.
  *
- * WHY `typescript` GOES THROUGH `npm exec` AT ALL (#437, #2593)
+ * WHY LOCAL-FIRST (#2593 review round 2, F1)
  * `typescript` is a genuine top-level devDependency, so under a normal
- * install `node_modules/.bin/tsc` already exists and this indirection is
- * unnecessary there. But `build:dist` also runs from a from-source
- * `--omit=dev` install (a `git:` install's `prepare` step, before any dev
- * tooling is present) where that symlink does NOT exist; `npm exec
- * --package typescript@<version>` resolves (or installs into npm's own
- * cache) a matching `tsc` in either case, mirroring the exact
- * resolve-your-own-toolchain approach already used for esbuild.
+ * install `node_modules/typescript/bin/tsc` already exists at the exact
+ * pinned version and needs no `npm exec` at all. An earlier version of this
+ * fix (#2593 round 1) ran `npm exec --package typescript@<version> --prefix
+ * <empty temp dir>` UNCONDITIONALLY — which forces a registry fetch on
+ * EVERY `build:dist` run, even when the correct local binary is sitting
+ * right there, because `--prefix <empty dir>` guarantees Arborist's tree
+ * lookup finds nothing and npm always installs fresh. Reproduced: with the
+ * registry unreachable and a cold npm cache, `npm exec --yes --package
+ * typescript@7.0.2 -- tsc --version` (no `--prefix`, matching the pre-#2590
+ * pattern) prints `Version 7.0.2` with zero network calls (npm resolves the
+ * top-level match), while the SAME command with `--prefix <empty dir>`
+ * fails with `ECONNREFUSED`/`ETARGET` trying to reach the registry. Forcing
+ * every build offline-hostile to hedge against a hazard that isn't even
+ * reproducible today (see #2593's original PR) is a net regression, so
+ * `resolveLocalTsc` below checks for the exact pinned local binary FIRST and
+ * only falls back to the isolated npm-exec path — the actual vulnerable
+ * case — when it's absent: a from-source `--omit=dev` install (a `git:`
+ * install's `prepare` step, before dev tooling exists) or a version
+ * mismatch.
  *
- * WHY THE `--prefix` ISOLATION (#2593, refs #2590)
+ * WHY THE FALLBACK STILL NEEDS `--prefix` ISOLATION (#2593, refs #2590)
  * `npm exec --package` resolves against the WHOLE project dependency tree
  * (every nested `node_modules`), not just the npx cache — see
  * scripts/lib/exec-isolation.mjs. No dependency nests a matching
  * `typescript@7.0.2` anywhere in this repo's tree today (confirmed via
- * package-lock.json), so this is a latent-class hardening rather than a
- * currently-reproducible failure, applied defense-in-depth for the same
- * reason #2590 fixed the esbuild spawn: a future dependency bump could nest
- * one, exactly like `@earendil-works/pi-coding-agent` did for esbuild.
+ * package-lock.json), so hitting the fallback path at all is rare (only the
+ * `--omit=dev` install shape), and the isolation itself is still a latent-
+ * class hardening rather than a currently-reproducible failure — applied
+ * defense-in-depth for the same reason #2590 fixed the esbuild spawn: a
+ * future dependency bump could nest a matching copy, exactly like
+ * `@earendil-works/pi-coding-agent` did for esbuild.
  *
- * `cwd: root` (unchanged from before this fix, and unlike esbuild's
- * banner-comment hazard) has no emitted-path hazard for tsc here:
- * `tsconfig.dist.json`'s `rootDir`/`outDir` are resolved relative to the
- * TSCONFIG FILE's own directory (project root), not the invocation `cwd`,
- * and with `sourceMap`/`declaration`/`declarationMap` all off (see
- * tsconfig.dist.json), `--noCheck` emit writes no cwd-relative path into
- * any output file.
+ * `cwd: root` is REQUIRED, not merely hazard-free, in BOTH branches (#2593
+ * review round 2, F2): `build:dist` passes `tsconfigProject` as a path
+ * RELATIVE to the project root (`tsconfig.dist.json`), and tsc resolves a
+ * `--project` argument relative to the SPAWN's own cwd, not the tsconfig
+ * file's location — pointing `cwd` anywhere else (e.g. the isolated
+ * `execPrefix` temp dir) fails with `TS5058: The specified path does not
+ * exist`, confirmed by mutation. This is unrelated to (and stricter than)
+ * the fact that `tsconfig.dist.json`'s OWN `rootDir`/`outDir` resolve
+ * relative to the tsconfig file's directory once tsc finds it — resolving
+ * `--project` itself happens first, against `cwd`. Only the isolated
+ * fallback's npm-exec `--prefix` (the resolution lookup directory) ever
+ * moves; the tsc invocation's own `cwd` never does, in either branch — the
+ * same lesson #2594's F1 finding established for the esbuild spawn.
  *
  * USAGE
  *   node scripts/build-dist-tsc.mjs <tsconfig-path>
  *   # invoked by `npm run build:dist`, before `npm run bundle:dist`
  */
 import { execFileSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -50,30 +72,82 @@ const TSC_VERSION = "7.0.2";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // npm's own CLI, set by npm when it runs this via `npm run build:dist` — see
-// scripts/bundle-dist.mjs's identical check for the full rationale.
+// scripts/bundle-dist.mjs's identical check for the full rationale. Only
+// needed on the fallback (no-local-binary) path.
 const npmCli = process.env.npm_execpath;
 const isNpmCli = npmCli
 	? /npm-cli\.js$|(^|[\\/])npm(\.js)?$/.test(npmCli)
 	: false;
 
 /**
- * Build the argv + spawn options for the tsc `npm exec` invocation. Pure and
- * side-effect-free, mirroring buildEsbuildExecInvocation in
- * scripts/bundle-dist.mjs — see tests/scripts/build-dist-tsc.test.ts.
+ * Resolve the local pinned `typescript` devDependency's `tsc` binary, when
+ * present with a version EXACTLY matching `version`. A read-only filesystem
+ * probe only — no execution, no network. Returns `null` when `typescript`
+ * is absent (a from-source `--omit=dev` install, before dev tooling exists)
+ * or present at a different version; either case must fall back to the
+ * isolated npm-exec path rather than silently running a mismatched `tsc`.
  *
- * @param {{ npmCli: string, execPrefix: string, tsconfigProject: string }} args
+ * @param {{ root: string, version: string }} args
+ * @returns {string | null}
+ */
+export function resolveLocalTsc({ root: rootDir, version }) {
+	const pkgPath = path.join(
+		rootDir,
+		"node_modules",
+		"typescript",
+		"package.json",
+	);
+	let pkg;
+	try {
+		pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+	} catch {
+		return null;
+	}
+	if (pkg?.version !== version) {
+		return null;
+	}
+	const binPath = path.join(
+		rootDir,
+		"node_modules",
+		"typescript",
+		"bin",
+		"tsc",
+	);
+	return existsSync(binPath) ? binPath : null;
+}
+
+/**
+ * Decide and build the tsc invocation. Pure and side-effect-free:
+ * `localTscBin` is the ALREADY-RESOLVED result of `resolveLocalTsc` (or
+ * `null`), not recomputed here, so a test can pin either branch without
+ * touching the filesystem — mirroring how buildEsbuildExecInvocation in
+ * scripts/bundle-dist.mjs stays pure by taking its prefix as an input. When
+ * `localTscBin` is set, this builds NO npm-exec argv at all (no `exec`, no
+ * `--package`, no `--prefix`) — just a direct spawn of the local binary.
+ *
+ * @param {{ localTscBin: string | null, root: string, version: string, npmCli: string, execPrefix?: string, tsconfigProject: string }} args
  * @returns {{ command: string, argv: string[], options: { cwd: string, stdio: "inherit" } }}
  */
-export function buildTscExecInvocation({
+export function planTscInvocation({
+	localTscBin,
+	root: rootDir,
+	version,
 	npmCli: npmCliPath,
 	execPrefix,
 	tsconfigProject,
 }) {
+	if (localTscBin) {
+		return {
+			command: localTscBin,
+			argv: ["--project", tsconfigProject, "--noCheck"],
+			options: { cwd: rootDir, stdio: "inherit" },
+		};
+	}
 	return buildIsolatedExecInvocation({
 		npmCli: npmCliPath,
 		execPrefix,
-		cwd: root,
-		packageSpec: `typescript@${TSC_VERSION}`,
+		cwd: rootDir,
+		packageSpec: `typescript@${version}`,
 		execArgv: ["tsc", "--project", tsconfigProject, "--noCheck"],
 	});
 }
@@ -86,30 +160,42 @@ export function main() {
 		);
 		process.exit(1);
 	}
-	if (!npmCli) {
-		console.error(
-			"[build-dist-tsc] npm_execpath unset — run via `npm run build:dist`.",
-		);
-		process.exit(1);
-	}
-	if (!isNpmCli) {
-		console.error(
-			`[build-dist-tsc] npm_execpath is not npm (${npmCli}) — this step uses ` +
-				"npm's `exec --package` syntax. Run `npm run build:dist` with npm.",
-		);
-		process.exit(1);
+
+	const localTscBin = resolveLocalTsc({ root, version: TSC_VERSION });
+
+	// npm is only needed on the fallback (no matching local binary) path.
+	if (!localTscBin) {
+		if (!npmCli) {
+			console.error(
+				"[build-dist-tsc] npm_execpath unset — run via `npm run build:dist`.",
+			);
+			process.exit(1);
+		}
+		if (!isNpmCli) {
+			console.error(
+				`[build-dist-tsc] npm_execpath is not npm (${npmCli}) — this step ` +
+					"uses npm's `exec --package` syntax. Run `npm run build:dist` with npm.",
+			);
+			process.exit(1);
+		}
 	}
 
 	// mkdtempSync runs inside the try so a TMPDIR failure surfaces through the
 	// existing "[build-dist-tsc] tsc failed: …" message rather than an
 	// uncaught stack trace, mirroring scripts/bundle-dist.mjs (#2594 review
 	// F3). No retry/fallback: there is no recorded recurrence of mkdtemp
-	// failing here, so none is built for it.
+	// failing here, so none is built for it. Only created when actually
+	// needed — the local-binary path never touches npm at all.
 	let execPrefix;
 	let tscFailed = false;
 	try {
-		execPrefix = createIsolatedExecPrefix();
-		const { command, argv, options } = buildTscExecInvocation({
+		if (!localTscBin) {
+			execPrefix = createIsolatedExecPrefix();
+		}
+		const { command, argv, options } = planTscInvocation({
+			localTscBin,
+			root,
+			version: TSC_VERSION,
 			npmCli,
 			execPrefix,
 			tsconfigProject,
