@@ -510,7 +510,7 @@ describe("Dispatch Flow", () => {
 			expect(result.diagnostics[0].filePath).toContain("src/main.ts");
 		});
 
-		it("fallback mode should continue after failed runner and use next success", async () => {
+		it("fallback mode continues after a failed runner and uses the next success", async () => {
 			const calls: string[] = [];
 			registerRunner({
 				id: "first-fail",
@@ -808,33 +808,6 @@ describe("Dispatch Flow", () => {
 	});
 
 	describe("Conditional Runners (when)", () => {
-		it("skips the conditional runner because autofix is always disabled", async () => {
-			registerRunner(
-				createConditionalRunner("conditional", (ctx) => ctx.autofix),
-			);
-
-			// autofix is now always false (per-tool autofix flags removed)
-			const mockPi = {
-				getFlag: () => false,
-			};
-			const ctx = createDispatchContext(
-				"test.ts",
-				"/project",
-				mockPi,
-				new FactStore(),
-			);
-			const groups: RunnerGroup[] = [
-				{ mode: "all", runnerIds: ["conditional"] },
-			];
-
-			const result = await dispatchForFile(ctx, groups);
-
-			// autofix is always false now (feature removed)
-			expect(ctx.autofix).toBe(false);
-			// Conditional runner skips when autofix is false
-			expect(result.diagnostics).toHaveLength(0);
-		});
-
 		it("skips the conditional runner when its condition evaluates to false", async () => {
 			registerRunner(
 				createConditionalRunner("conditional", (ctx) => ctx.autofix),
