@@ -15,10 +15,29 @@
  * credentials, so this is the layer that runs even when Layer B
  * (compat-smoke-behavioral.mjs) can't.
  *
- * Exit code: non-zero iff any contract check FAILs OR the installs
- * themselves fail (network/registry issues) — the workflow step wraps this
- * in `continue-on-error: true` so a failure ALERTS rather than reds the
- * nightly; see docs/subagent-compat.md.
+ * Each contract is resolved and checked INDEPENDENTLY (#2581): every pinned
+ * contract's source file(s) are located via an ordered candidate-path list
+ * (scripts/lib/compat-contract-locator.mjs), tried oldest-to-newest observed
+ * layout. A contract whose file can't be found at ANY known candidate gets
+ * its own "infra" outcome (we haven't actually re-checked its content) —
+ * this no longer blinds verification of every OTHER contract the way a
+ * single top-level ENOENT used to (pi-subagents@0.65.0 relocated
+ * `pi-args.ts`; the previous version of this script threw on that one
+ * `readSource()` call and exited 2 without ever reading the other four
+ * files, all of which were fine).
+ *
+ * Overall exit code / GITHUB_OUTPUT `outcome`:
+ *   0 / "verified" — every contract located AND its content matched.
+ *   1 / "drift"    — every contract was located, but at least one's content
+ *                    did not match (real upstream behavioral drift).
+ *   2 / "infra"    — our own package install failed, OR at least one
+ *                    contract's source file could not be located at any
+ *                    known candidate path (nothing to conclude about drift
+ *                    for that contract — distinct from a located file with
+ *                    unexpected content, see docs/subagent-compat.md).
+ * "drift" takes priority over "infra" in the summary/exit code when both are
+ * present in the same run — an actionable regression should never be masked
+ * by an unrelated relocation elsewhere.
  *
  * Usage: node scripts/compat-contracts.mjs [--keep] [--dir <path>]
  *   --keep       don't delete the scratch install directory on exit
@@ -31,13 +50,111 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { runAllContractChecks } from "./lib/compat-contracts.mjs";
+import { CONTRACTS } from "./lib/compat-contracts.mjs";
+import { locateContractSources } from "./lib/compat-contract-locator.mjs";
 
 const PACKAGES = {
 	sdk: "@earendil-works/pi-coding-agent",
 	nicobailon: "pi-subagents",
 	avtc: "avtc-pi-subagent",
 	tintinweb: "@tintinweb/pi-subagents",
+};
+
+// Per-contract file location(s), oldest-observed-layout first. A contract
+// needing more than one file (nicobailon.child-env: the const definition and
+// the assignment site split apart in pi-subagents@0.65.0's native-session
+// rewrite, #2581) lists each as its own "part" — locateContractSources
+// requires ALL parts to resolve before concatenating them for the check.
+const CONTRACT_SOURCE_LOCATIONS = {
+	"nicobailon.child-env": {
+		packageKey: "nicobailon",
+		parts: [
+			{
+				name: "constants",
+				candidates: [
+					{ path: "src/runs/shared/pi-args.ts", observedAt: "0.34.0" },
+					{
+						path: "src/runs/shared/child-runtime-config.ts",
+						observedAt: "0.65.0",
+					},
+				],
+			},
+			{
+				name: "assignment",
+				candidates: [
+					{ path: "src/runs/shared/pi-args.ts", observedAt: "0.34.0" },
+					{
+						path: "src/runs/background/subagent-runner.ts",
+						observedAt: "0.65.0",
+					},
+				],
+			},
+		],
+	},
+	"avtc.child-env": {
+		packageKey: "avtc",
+		parts: [
+			{
+				name: "source",
+				candidates: [
+					{ path: "src/process-runner.ts", observedAt: "1.0.3" },
+				],
+			},
+		],
+	},
+	"sdk.extension-cache": {
+		packageKey: "sdk",
+		parts: [
+			{
+				name: "source",
+				candidates: [
+					{ path: "dist/core/extensions/loader.js", observedAt: "0.80.6" },
+				],
+			},
+		],
+	},
+	"sdk.bind-extensions-session-start": {
+		packageKey: "sdk",
+		parts: [
+			{
+				name: "source",
+				candidates: [
+					{ path: "dist/core/agent-session.js", observedAt: "0.80.6" },
+				],
+			},
+		],
+	},
+	"sdk.invalidate-called": {
+		packageKey: "sdk",
+		parts: [
+			{
+				name: "source",
+				candidates: [
+					{ path: "dist/core/agent-session.js", observedAt: "0.80.6" },
+				],
+			},
+		],
+	},
+	"sdk.stale-ctx-message": {
+		packageKey: "sdk",
+		parts: [
+			{
+				name: "source",
+				candidates: [
+					{ path: "dist/core/agent-session.js", observedAt: "0.80.6" },
+				],
+			},
+		],
+	},
+	"tintinweb.in-process-bind": {
+		packageKey: "tintinweb",
+		parts: [
+			{
+				name: "source",
+				candidates: [{ path: "src/agent-runner.ts", observedAt: "0.13.0" }],
+			},
+		],
+	},
 };
 
 function parseArgs(argv) {
@@ -87,8 +204,40 @@ function installedVersion(dir, pkgName) {
 	}
 }
 
-function readSource(dir, ...segments) {
-	return fs.readFileSync(path.join(dir, "node_modules", ...segments), "utf8");
+/**
+ * Resolve and run every contract in CONTRACTS independently, returning one
+ * result per contract with an `outcome` of "verified" | "drift" | "infra".
+ * A contract's source not being locatable never stops the others from being
+ * checked (#2581) — each iteration is its own try, not a shared one.
+ */
+function resolveAndCheckContracts(installDir) {
+	return CONTRACTS.map((contract) => {
+		const location = CONTRACT_SOURCE_LOCATIONS[contract.id];
+		const packageName = PACKAGES[location.packageKey];
+		const packageDir = path.join(installDir, "node_modules", packageName);
+		const resolved = locateContractSources(packageDir, location.parts);
+		if (!resolved.found) {
+			const triedList = resolved.tried
+				.map((c) => `${c.path} (observed at ${c.observedAt})`)
+				.join(", ");
+			return {
+				id: contract.id,
+				package: contract.package,
+				description: contract.description,
+				outcome: "infra",
+				pass: false,
+				detail: `INFRA — expected source not found for "${resolved.part}" (package layout changed?): tried ${triedList}`,
+			};
+		}
+		const checkResult = contract.check(resolved.source);
+		return {
+			id: contract.id,
+			package: contract.package,
+			description: contract.description,
+			outcome: checkResult.pass ? "verified" : "drift",
+			...checkResult,
+		};
+	});
 }
 
 async function main() {
@@ -133,69 +282,49 @@ async function main() {
 		}
 	}
 
+	function writeOutcomeOutput(outcome) {
+		if (!process.env.GITHUB_OUTPUT) return;
+		try {
+			fs.appendFileSync(process.env.GITHUB_OUTPUT, `outcome=${outcome}\n`);
+		} catch {
+			// best-effort; stdout still has the outcome
+		}
+	}
+
 	if (infraFailure) {
 		console.error(
 			`\nINFRA FAILURE — could not install packages: ${infraFailure}`,
 		);
+		writeOutcomeOutput("infra");
 		if (!opts.keep) fs.rmSync(dir, { recursive: true, force: true });
 		process.exit(2);
 	}
 
-	let inputs;
-	try {
-		inputs = {
-			nicobailonPiArgsSource: readSource(
-				dir,
-				"pi-subagents",
-				"src/runs/shared/pi-args.ts",
-			),
-			avtcProcessRunnerSource: readSource(
-				dir,
-				"avtc-pi-subagent",
-				"src/process-runner.ts",
-			),
-			sdkLoaderSource: readSource(
-				dir,
-				"@earendil-works/pi-coding-agent",
-				"dist/core/extensions/loader.js",
-			),
-			sdkAgentSessionSource: readSource(
-				dir,
-				"@earendil-works/pi-coding-agent",
-				"dist/core/agent-session.js",
-			),
-			tintinwebAgentRunnerSource: readSource(
-				dir,
-				"@tintinweb/pi-subagents",
-				"src/agent-runner.ts",
-			),
-		};
-	} catch (err) {
-		// A source file moved/renamed entirely — itself a drift signal worth
-		// surfacing distinctly from an individual contract regex not matching.
-		console.error(
-			`\nINFRA FAILURE — expected source file not found (package layout changed?): ${err instanceof Error ? err.message : err}`,
-		);
-		if (!opts.keep) fs.rmSync(dir, { recursive: true, force: true });
-		process.exit(2);
-	}
-
-	const { results, allPass } = runAllContractChecks(inputs);
+	const results = resolveAndCheckContracts(dir);
 
 	console.log("\ncontract checks:");
 	for (const r of results) {
-		console.log(
-			`  [${r.pass ? "PASS" : "FAIL"}] ${r.id} (${r.package}) — ${r.description}`,
-		);
+		const label =
+			r.outcome === "infra" ? "INFRA" : r.pass ? "PASS" : "FAIL";
+		console.log(`  [${label}] ${r.id} (${r.package}) — ${r.description}`);
 		console.log(`         ${r.detail}`);
 	}
 
 	if (!opts.keep) fs.rmSync(dir, { recursive: true, force: true });
 
-	console.log(
-		`\n${allPass ? "ALL CONTRACT CHECKS PASSED" : "ONE OR MORE CONTRACT CHECKS FAILED"}`,
-	);
-	process.exit(allPass ? 0 : 1);
+	const anyDrift = results.some((r) => r.outcome === "drift");
+	const anyInfra = results.some((r) => r.outcome === "infra");
+	const allVerified = results.every((r) => r.outcome === "verified");
+	const outcome = allVerified ? "verified" : anyDrift ? "drift" : "infra";
+	writeOutcomeOutput(outcome);
+
+	const summary = allVerified
+		? "ALL CONTRACT CHECKS VERIFIED"
+		: anyDrift
+			? "ONE OR MORE CONTRACT CHECKS FAILED (drift)"
+			: "ONE OR MORE CONTRACTS COULD NOT BE LOCATED (infra)";
+	console.log(`\n${summary}`);
+	process.exit(allVerified ? 0 : anyDrift ? 1 : 2);
 }
 
 main().catch((err) => {
