@@ -69,22 +69,13 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 		});
 
 		touchFile = vi.fn().mockResolvedValue({ diags: [] });
-		mocked.service = makeLspServiceDouble(
-			{
-				touchFile,
-				getDiagnostics: vi.fn().mockResolvedValue([]),
-				getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
-				getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-				ensureWarmForSweep: vi
-					.fn()
-					.mockResolvedValue({ performedWarmup: false }),
-			},
-			// `getAdvertisedCommands` is observed by ABSENCE at
-			// clients/lsp/tsserver-sync.ts:424 (`typeof … !== "function"` → the
-			// "older service shape" bail-out). A factory default would switch the
-			// tsserver-sync branch on under this suite's cache assertions. #2592.
-			{ omit: ["getAdvertisedCommands"] },
-		);
+		mocked.service = makeLspServiceDouble({
+			touchFile,
+			getDiagnostics: vi.fn().mockResolvedValue([]),
+			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
+			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+			ensureWarmForSweep: vi.fn().mockResolvedValue({ performedWarmup: false }),
+		});
 	});
 
 	afterEach(() => {

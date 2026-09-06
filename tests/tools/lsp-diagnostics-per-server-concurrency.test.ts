@@ -96,17 +96,12 @@ describe("lsp_diagnostics batch — per-server serialization (#631)", () => {
 			return [];
 		});
 
-		mocked.service = makeLspServiceDouble(
-			{
-				touchFile,
-				getDiagnostics: vi.fn().mockResolvedValue([]),
-				getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
-				getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-			},
-			// See lsp-diagnostics-cache.test.ts: absence of `getAdvertisedCommands`
-			// is what keeps clients/lsp/tsserver-sync.ts off this path (#2592).
-			{ omit: ["getAdvertisedCommands"] },
-		);
+		mocked.service = makeLspServiceDouble({
+			touchFile,
+			getDiagnostics: vi.fn().mockResolvedValue([]),
+			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
+			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+		});
 	});
 
 	function writeFiles(names: string[]): string[] {

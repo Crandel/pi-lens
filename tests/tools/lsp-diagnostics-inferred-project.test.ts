@@ -65,11 +65,12 @@ function makeService() {
 				result: { success: true, body: INFERRED_BODY },
 			})),
 		},
-		// Both absences are observed by production, not incidental: `touchFile`
-		// at tools/lsp-diagnostics.ts:789 (this suite asserts the openFile
-		// branch) and `getAdvertisedCommands` at clients/lsp/tsserver-sync.ts:424.
-		// #2592.
-		{ omit: ["touchFile", "getAdvertisedCommands"] },
+		// `touchFile` absence is observed by production at
+		// tools/lsp-diagnostics.ts:789 — this suite asserts the `openFile` arm,
+		// and un-omitting it reds the demotion case. `getAdvertisedCommands` is
+		// left seeded: clients/lsp/tsserver-sync.ts bails the same way on absent
+		// and on "advertises nothing", so omitting it proves nothing (#2592).
+		{ omit: ["touchFile"] },
 	);
 }
 

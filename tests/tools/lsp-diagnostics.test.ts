@@ -83,14 +83,17 @@ describe("lsp_diagnostics tool", () => {
 				getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
 				runWorkspaceDiagnostics: vi.fn(),
 			},
-			// `omit` is NOT decoration: production observes the ABSENCE of both of
-			// these with a `typeof … === "function"` guard, so a factory default
-			// would silently switch this suite onto the other branch —
-			// `touchFile` at tools/lsp-diagnostics.ts (the openFile fallback the
-			// cases below assert on) and `getAdvertisedCommands` at
-			// clients/lsp/tsserver-sync.ts (the "older service shape" fallback
-			// the #611 case names in its title). #2592.
-			{ omit: ["touchFile", "getAdvertisedCommands"] },
+			// `omit` is NOT decoration here: `openFileBestEffort` /
+			// `collectSingleFileDiagnostics` branch on
+			// `typeof …touchFile === "function"`, so a factory default silently
+			// moves this suite onto the touch arm. Proven: un-omitting `touchFile`
+			// reds 13 cases in this file (#2592).
+			//
+			// `getAdvertisedCommands` is deliberately NOT omitted even though the
+			// pre-#2592 double lacked it: clients/lsp/tsserver-sync.ts bails
+			// identically on "absent" and on "advertises nothing", so an omit
+			// there is unfalsifiable — un-omitting it leaves this file green.
+			{ omit: ["touchFile"] },
 		);
 	});
 
@@ -931,9 +934,19 @@ describe("lsp_diagnostics tool", () => {
 			}
 		});
 
-		it("falls back to unconfirmed when the service exposes no executeCommand/getAdvertisedCommands at all (older mock/service shape)", async () => {
+		it("falls back to unconfirmed when the sync command IS advertised but the service exposes no executeCommand (older mock/service shape)", async () => {
 			mocked.cascadeTier = "tier3-silent";
-			// beforeEach's mocked.service has neither method — the default shape.
+			// #2592: this case used to lean on `getAdvertisedCommands` ALSO being
+			// missing, which made it bail at clients/lsp/tsserver-sync.ts:424 —
+			// the same observable as the "isn't advertised" sibling above, so
+			// nothing here could tell the two apart. `executeCommand` is outside
+			// `makeLspServiceDouble`'s surface and therefore still genuinely
+			// absent, so advertise the command and let the bail happen at
+			// tsserver-sync.ts:380 instead: a branch no other case in this file
+			// reaches, and one that reds the moment `executeCommand` is stubbed.
+			(mocked.service as any).getAdvertisedCommands = vi
+				.fn()
+				.mockResolvedValue(["typescript.tsserverRequest"]);
 			const tool = createLspDiagnosticsTool();
 			const tmpDir = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-lsp-diag-611-nomethod-"),
