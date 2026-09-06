@@ -220,13 +220,14 @@ describe("resyncLspFile — bounded pre-dispatch LSP sync", () => {
 		const dbgCalls: string[] = [];
 		const dbgSpy = (msg: string) => dbgCalls.push(msg);
 		const hangingTouch = vi.fn(() => new Promise(() => {}));
-		const service = makeLspServiceDouble({
-			supportsLSP: () => true,
-			touchFile: hangingTouch,
-		});
-		// Deliberately remove the method to exercise the production fallback for
-		// an older host service shape. The normal fixture always supplies it.
-		delete (service as Record<string, unknown>).isSpawnInFlight;
+		// Deliberately ABSENT, not stubbed: this exercises the production
+		// fallback for an older host service shape. `omit` is the factory's
+		// first-class way to say that (#2582 F6) — a post-hoc `delete` on the
+		// returned object was untyped and invisible to the sweep.
+		const service = makeLspServiceDouble(
+			{ supportsLSP: () => true, touchFile: hangingTouch },
+			{ omit: ["isSpawnInFlight"] },
+		);
 		vi.mocked(getLSPService).mockReturnValue(service as any);
 
 		await resyncLspFile("/proj/a.ts", "content", true, false, getFlag, dbgSpy);

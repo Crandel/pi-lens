@@ -1149,9 +1149,14 @@ export async function resyncLspFile(
 				// old wording blamed as "slow/wedged" did not exist yet. Distinguish
 				// the two via a fresh, synchronous inFlight lookup so the record keeps
 				// the discriminating identity (which server, which lifecycle state).
-				// Guarded: a test double or future service shape lacking the method
-				// must degrade to the old "timeout"/slow-wedged wording, not throw
-				// into the catch below and suppress this record entirely (#1766 F3).
+				// Guarded: a service shape lacking the method must degrade to the
+				// old "timeout"/slow-wedged wording, not throw into the catch below
+				// and suppress this record entirely (#1766 F3). The recurrence is
+				// live, not historical: 39 test files still stub `getLSPService`
+				// with a hand-rolled object that has no `isSpawnInFlight`, and the
+				// #2582 sweep's ratchet baseline names every one of them. Removing
+				// this typeof turns the "lacks isSpawnInFlight" case in
+				// tests/clients/pipeline-lsp-sync.test.ts red.
 				const spawnInFlight =
 					!abort?.aborted &&
 					typeof lspService.isSpawnInFlight === "function" &&

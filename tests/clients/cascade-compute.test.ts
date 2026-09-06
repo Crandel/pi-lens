@@ -64,9 +64,6 @@ const lspError = (message = "cascade error") => ({
 	source: "test-lsp",
 });
 
-// Keep inline behavior overrides on the shared service factory while making
-// the recurrence sweep sensitive to direct `vi.fn` service literals.
-const makeTouchFileMock = vi.fn;
 
 // #1095: attach a content `binding` the way the REAL producers do — a
 // NON-enumerable property (getAllDiagnostics uses a lazy getter, touchFile a
@@ -214,7 +211,7 @@ describe("computeCascadeForFile", () => {
 						],
 					]),
 				),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -251,7 +248,7 @@ describe("computeCascadeForFile", () => {
 			mocks.getLSPService.mockReturnValue({
 				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: makeTouchFileMock().mockResolvedValue({
+				touchFile: vi.fn().mockResolvedValue({
 					diags: [lspError("capped")],
 				}),
 				getDiagnostics: vi.fn(),
@@ -330,7 +327,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 				references,
 			});
@@ -422,7 +419,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 				references,
 			});
@@ -1247,7 +1244,7 @@ describe("computeCascadeForFile", () => {
 			mocks.getLSPService.mockReturnValue({
 				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: makeTouchFileMock().mockResolvedValue({ diags: [] }),
+				touchFile: vi.fn().mockResolvedValue({ diags: [] }),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -1576,7 +1573,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -1691,7 +1688,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -1742,7 +1739,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -1967,7 +1964,7 @@ describe("computeCascadeForFile", () => {
 						],
 					]),
 				),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -2011,7 +2008,7 @@ describe("computeCascadeForFile", () => {
 			mocks.getLSPService.mockReturnValue({
 				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -2044,7 +2041,7 @@ describe("computeCascadeForFile", () => {
 			mocks.getLSPService.mockReturnValue({
 				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -2085,7 +2082,7 @@ describe("computeCascadeForFile", () => {
 			mocks.getLSPService.mockReturnValue({
 				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -2119,7 +2116,7 @@ describe("computeCascadeForFile", () => {
 			mocks.getLSPService.mockReturnValue({
 				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: makeTouchFileMock(),
+				touchFile: vi.fn(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -2179,7 +2176,7 @@ describe("computeCascadeForFile", () => {
 								],
 							]),
 						),
-					touchFile: makeTouchFileMock(),
+					touchFile: vi.fn(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -2266,7 +2263,7 @@ describe("computeCascadeForFile", () => {
 				mocks.getLSPService.mockReturnValue({
 					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: makeTouchFileMock().mockRejectedValue(
+					touchFile: vi.fn().mockRejectedValue(
 						new Error("touch timed out"),
 					),
 					getDiagnostics: vi.fn(),
@@ -2503,7 +2500,7 @@ describe("computeCascadeForFile", () => {
 				mocks.getLSPService.mockReturnValue({
 					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: makeTouchFileMock().mockResolvedValue({
+					touchFile: vi.fn().mockResolvedValue({
 						diags: [],
 						confirmation: "partial",
 						unconfirmedServerIds: ["opengrep"],
@@ -2571,7 +2568,7 @@ describe("computeCascadeForFile", () => {
 				mocks.getLSPService.mockReturnValue({
 					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: makeTouchFileMock().mockResolvedValue({
+					touchFile: vi.fn().mockResolvedValue({
 						diags: [],
 						inconclusive: true,
 						inconclusiveServerIds: ["pyright"],
@@ -2614,7 +2611,7 @@ describe("computeCascadeForFile", () => {
 				mocks.getLSPService.mockReturnValue({
 					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: makeTouchFileMock().mockResolvedValue({
+					touchFile: vi.fn().mockResolvedValue({
 						diags: [],
 						confirmation: "partial",
 						unconfirmedServerIds: ["opengrep"],
@@ -2662,7 +2659,7 @@ describe("computeCascadeForFile", () => {
 				mocks.getLSPService.mockReturnValue({
 					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: makeTouchFileMock().mockResolvedValue({
+					touchFile: vi.fn().mockResolvedValue({
 						diags: [
 							{
 								severity: 1,
@@ -2719,7 +2716,7 @@ describe("computeCascadeForFile", () => {
 								],
 							]),
 						),
-					touchFile: makeTouchFileMock(),
+					touchFile: vi.fn(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -2784,7 +2781,7 @@ describe("computeCascadeForFile", () => {
 								],
 							]),
 						),
-					touchFile: makeTouchFileMock(),
+					touchFile: vi.fn(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -2838,7 +2835,7 @@ describe("computeCascadeForFile", () => {
 				mocks.getLSPService.mockReturnValue({
 					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: makeTouchFileMock().mockResolvedValue({
+					touchFile: vi.fn().mockResolvedValue({
 						diags: [semgrep],
 					}),
 					getDiagnostics: vi.fn(),
@@ -2919,7 +2916,7 @@ describe("computeCascadeForFile", () => {
 							]),
 						),
 					// The neighbor is actually clean now — a confirmed active re-check.
-					touchFile: makeTouchFileMock().mockResolvedValue({ diags: [] }),
+					touchFile: vi.fn().mockResolvedValue({ diags: [] }),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -3170,7 +3167,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: makeTouchFileMock().mockImplementation(
+					touchFile: vi.fn().mockImplementation(
 						async (filePath: string) => {
 							if (filePath === rejectedNeighbor) {
 								throw new Error("touch failed");
@@ -3231,7 +3228,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: makeTouchFileMock().mockRejectedValue(
+					touchFile: vi.fn().mockRejectedValue(
 						new Error("touch failed"),
 					),
 					getDiagnostics: vi.fn(),
@@ -3289,7 +3286,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: makeTouchFileMock(),
+					touchFile: vi.fn(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -3340,7 +3337,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: makeTouchFileMock(),
+					touchFile: vi.fn(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -3387,7 +3384,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: makeTouchFileMock(),
+					touchFile: vi.fn(),
 					getDiagnostics: vi.fn(),
 				});
 
