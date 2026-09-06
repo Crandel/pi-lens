@@ -964,6 +964,14 @@ describe("post-update verification (review F2)", () => {
 			binaryName: "vscode-json-language-server",
 		});
 		stubSpawn("ok", { "vscode-langservers-extracted": "5.0.0" });
+		// vscode-css-languageserver (#2638) shares this same npm package, so the
+		// single node_modules install above makes BOTH tool ids "present" and
+		// due — mark css already-checked so this run's one-slot-per-session
+		// budget (maxPerSession=1) lands on the json id this test actually
+		// verifies, not on whichever id sorts first alphabetically.
+		writeState({
+			"vscode-css-languageserver": { checkedAt: NOW, version: "4.0.0" },
+		});
 
 		const outcome = await runManagedToolRefresh(NOW);
 
