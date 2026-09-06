@@ -2667,6 +2667,39 @@ describe("merge-lane gate (#2185)", () => {
 		expect(failureFirst.reason).toBe(MERGE_GATE_REASON.FAILING_CHECK);
 	});
 
+	// Verify round 2, V1: `!isAdvisoryCheck(c.name) &&` in the `superseded`
+	// hold filter was vacuous -- deleting it left the suite green, because no
+	// prior fixture ever put an ADVISORY-named check into a lone cancelled
+	// state. Under `cancel-in-progress`, an advisory job (`oxfmt format check
+	// (advisory)`, SonarCloud, CodeQL, `greeting`, ...) is cancelled and
+	// re-triggered exactly like any other job -- without this clause, the hold
+	// would park the train PERMANENTLY on an advisory check's transient
+	// cancellation, which is worse than #2632's original bug (that one at
+	// least self-corrected once the replacement posted; a permanently-failing
+	// advisory job would never post one). Mirrors the existing "blocks on a
+	// failing non-advisory check and allows a failing advisory one" and "reads
+	// the (advisory) name suffix" cases below, for the CANCELLED conclusion
+	// specifically.
+	it("V1: a lone cancelled ADVISORY check does not hold the merge", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					...greenChecks(),
+					{
+						name: "oxfmt format check (advisory)",
+						status: "COMPLETED",
+						conclusion: "CANCELLED",
+						startedAt: "2026-09-06T17:21:06Z",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: true,
+			reason: MERGE_GATE_REASON.GREEN,
+		});
+	});
+
 	// Review round 1, F3: this repository marks a check advisory by NAME
 	// SUFFIX, not by a vendor allowlist. These four names are live job names,
 	// and the oxfmt one was genuinely FAILURE on this PR's own head, so the

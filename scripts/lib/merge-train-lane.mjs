@@ -309,6 +309,27 @@ export function evaluateMergeGate(pr, health, { approvedBy } = {}) {
 	// the moment it saw anything but a literal SUCCESS -- so a required
 	// check's cancellation still hard-fails, matching #2618's "a REQUIRED row
 	// gets NO conclusion exemption" and this issue's own explicit carve-out.
+	//
+	// `!isAdvisoryCheck(c.name)` (verify round 2, V1): an ADVISORY check
+	// (`(advisory)`-suffixed, SonarCloud, CodeQL, `greeting`) is cancelled and
+	// re-triggered by `cancel-in-progress` exactly like any other job -- an
+	// advisory check was NEVER meant to gate anything (that is the whole
+	// point of the advisory allowlist, `failing` below already excludes it
+	// the same way), so holding the merge on an advisory check's transient
+	// cancellation would be WORSE than #2632's original bug: that bug
+	// self-corrected once the replacement posted, but an advisory job that
+	// never posts a replacement (or keeps flapping) would park the train
+	// permanently on a check nothing else in this gate treats as gating.
+	//
+	// Known residual (verify round 2, V2, not fixed in this round -- tracked
+	// as #2679): this hold runs BEFORE `failing`, so a head that is BOTH
+	// genuinely red on one non-required check AND carries an unrelated
+	// superseded-cancelled row on a DIFFERENT name reports `check-superseded`
+	// instead of `failing-check` -- correct verdict (deny), imprecise reason.
+	// #2679 restructures both checks into one hold rung that reports the
+	// right reason regardless of ordering; deliberately out of scope here per
+	// the verify brief, since it is a higher-blast-radius restructuring of
+	// already-shipped #2185 machinery that deserves its own round.
 	const superseded = [...byName.values()].filter(
 		(c) => !isAdvisoryCheck(c.name) && isUncertainConclusion(c.conclusion),
 	);
