@@ -2546,7 +2546,10 @@ describe("merge-lane gate (#2185)", () => {
 				],
 			}),
 		);
-		expect(gate).toMatchObject({ merge: true, reason: MERGE_GATE_REASON.GREEN });
+		expect(gate).toMatchObject({
+			merge: true,
+			reason: MERGE_GATE_REASON.GREEN,
+		});
 	});
 
 	// Mutation contrast (both directions of the #2632 hold): a discovered

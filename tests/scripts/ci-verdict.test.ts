@@ -141,7 +141,7 @@ describe("computeVerdict — absent-check verdict is mergeable-aware (#2539 roun
 		expect(verdict.rows.every((row) => !row.present)).toBe(true);
 		expect(verdict.reason).toContain("mergeable=MERGEABLE");
 		expect(verdict.reason).toContain(
-			"base retargeted? push a commit or close/reopen to re-arm ci.yml",
+			"if the base was retargeted after this PR opened, push a commit or close/reopen to re-arm ci.yml",
 		);
 	});
 

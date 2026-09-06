@@ -122,9 +122,18 @@
  * does not reproduce on any commit in this file's history, including the
  * original #2609 introduction of the discovered-rows table. The one real gap
  * was the optional hint the issue asked for: the reason text below now ends
- * with "base retargeted? push a commit or close/reopen to re-arm ci.yml" for
- * the mergeable-known absent case, since a base retarget after a PR opens
- * (ci.yml has no `edited` trigger) is the concrete scenario #2664 named.
+ * with a CONDITIONAL "if the base was retargeted..." clause for the
+ * mergeable-known absent case, since a base retarget after a PR opens
+ * (ci.yml has no `edited` trigger) is the concrete scenario #2664 named. Not
+ * phrased as a bare imperative (verify round 1, F5): an absent-check verdict
+ * is also the ROUTINE outcome of a fresh push, where CI simply has not
+ * registered yet (this function's own #2539 round 2 doc comment above) --
+ * that is the FAR more common case, so an unconditional "push a commit"
+ * directive would tell the common case's reader to push ANOTHER commit and
+ * restart all of CI for no reason. There is no cheap way for a one-shot `gh`
+ * read to know whether the base actually changed since the PR opened (this
+ * script keeps no state between runs, by design), so the hint stays
+ * conditional prose rather than a fact this read can confirm.
  *
  * `--wait <seconds>` polls at a fixed, non-configurable >=30s interval, for
  * the orchestrator only -- never in a tight loop. The requested budget is
@@ -381,7 +390,7 @@ export function computeVerdict(
 			reason =
 				mergeable == null
 					? "one or more required checks are absent and there is no PR context (bare-SHA target) to confirm they are not merge-conflicted; treating as pending, not DIRTY -- pass a PR number, or wait for CI to register"
-					: `one or more required checks are absent but the PR is not merge-conflicted (mergeable=${mergeable}); CI likely hasn't registered yet -- treating as pending, not DIRTY -- base retargeted? push a commit or close/reopen to re-arm ci.yml`;
+					: `one or more required checks are absent but the PR is not merge-conflicted (mergeable=${mergeable}); CI likely hasn't registered yet -- treating as pending, not DIRTY -- if the base was retargeted after this PR opened, push a commit or close/reopen to re-arm ci.yml`;
 		} else {
 			// Split by STATUS, not just "pending": an uncertain (cancelled,
 			// discovered) row is already COMPLETED -- reporting it as "still
