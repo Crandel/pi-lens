@@ -30,15 +30,19 @@
  *  - a COUNTER of tokens, not a boolean, so overlapping tool calls each
  *    release independently and a throwing/aborted caller still releases
  *    (callers release from `finally`);
- *  - a bounded lifetime, because a leaked hold is the INVERSE defect (a
- *    process that can never exit). The armed timer is not infinite: it is a
- *    single `setTimeout` of {@link getEventLoopHoldMaxMs}, derived from the
- *    longest legitimate operation's OWN ceiling
- *    (`getWorkspaceSweepMaxHoldAgeMs`, i.e. the full-scan wall clock plus its
- *    safety margin) rather than a second, independently-drifting literal.
- *    When it fires with holds still outstanding, every hold is force-released
- *    with its own log record and the loop is free again — the pre-#2507
- *    behaviour, but recorded instead of silent.
+ *  - a bounded lifetime PER HOLD, because a leaked hold is the INVERSE defect
+ *    (a process that can never exit). Each token gets {@link
+ *    getEventLoopHoldMaxMs} measured from its OWN acquire — derived from the
+ *    longest legitimate operation's ceiling (`getWorkspaceSweepMaxHoldAgeMs`,
+ *    the full-scan wall clock plus its safety margin) rather than a second,
+ *    independently-drifting literal. The keep-alive is armed for the SOONEST
+ *    outstanding deadline; when it fires, only tokens that are actually stale
+ *    are released (with a log record naming them), and it re-arms for
+ *    whatever remains. An epoch-anchored version of this — one timer from the
+ *    first hold, clearing every token when it fired — was #2649 review F1: a
+ *    call issued late in a legitimate 300s `lens_diagnostics mode=full` was
+ *    force-released seconds after starting, i.e. #2507's drain reproduced BY
+ *    the fix.
  *
  * There is deliberately NO session-boundary clear here, unlike
  * `clients/lsp/workspace-sweep-hold.ts`. A `session_start` can land mid-turn
@@ -47,7 +51,11 @@
  * for it. The hold is scoped to one call's try/finally, not to a session.
  */
 
-import { logLatency } from "./latency-logger.js";
+import {
+	claimPhaseOncePerSession,
+	logLatency,
+	releaseOncePerSessionPhase,
+} from "./latency-logger.js";
 import { getWorkspaceSweepMaxHoldAgeMs } from "./lsp/workspace-sweep-hold.js";
 import { getProcessSingleton } from "./process-singletons.js";
 
@@ -62,6 +70,9 @@ interface EventLoopHoldState {
 	/** The ONE referenced handle. `undefined` whenever nothing is held. */
 	timer: ReturnType<typeof setTimeout> | undefined;
 }
+
+/** The one row per session proving the keep-alive was taken (#2649 F2). */
+const EVENT_LOOP_HOLD_ARMED_PHASE = "event_loop_hold_armed";
 
 const EVENT_LOOP_HOLD_FAMILY = "event-loop-hold";
 const EVENT_LOOP_HOLD_VERSION = 1;
@@ -81,8 +92,9 @@ function state(): EventLoopHoldState {
 }
 
 /**
- * Upper bound on how long ONE hold may keep this process alive. Derived from
- * `lens_diagnostics mode=full`'s own wall-clock ceiling plus the shared
+ * Upper bound on how long ONE hold — each hold, measured from its OWN
+ * acquire — may keep this process alive. Derived from `lens_diagnostics
+ * mode=full`'s own wall-clock ceiling plus the shared
  * `SWEEP_IDLE_SAFETY_MARGIN_MS` — the same derivation the workspace-sweep
  * hold's max-hold-age failsafe uses, so the two cannot drift apart into a
  * relationship where the longest legitimate tool call outlives the bound that
@@ -92,13 +104,37 @@ export function getEventLoopHoldMaxMs(): number {
 	return getWorkspaceSweepMaxHoldAgeMs();
 }
 
-function armIfHeld(current: EventLoopHoldState): void {
+/**
+ * Arm the keep-alive for the SOONEST deadline any outstanding hold has — the
+ * earliest moment a token can become stale — never for a fixed epoch from the
+ * first hold (#2649 review F1).
+ *
+ * Round 1 armed once on 0→1 and cleared every token when it fired, so a call
+ * that started while an older one was still running inherited whatever was
+ * left of the FIRST call's bound: a `lens_diagnostics mode=full` legitimately
+ * running to its 300s ceiling force-released a healthy `lsp_diagnostics`
+ * issued at t=305s, which is #2507's own drain produced by the fix. The
+ * reviewer reproduced it in a real child with the bound shortened: both calls
+ * unsettled, `active=[]`, `EXIT code=0`.
+ *
+ * Soonest-deadline, not the youngest survivor's: the youngest would let an
+ * older survivor overstay its own max age by the whole age gap. Each token is
+ * released when IT is stale and never before.
+ */
+function armForNextDeadline(current: EventLoopHoldState): void {
 	if (current.timer !== undefined) return;
 	if (current.holds.size === 0) return;
 	const maxMs = getEventLoopHoldMaxMs();
+	let soonest = Number.POSITIVE_INFINITY;
+	for (const entry of current.holds.values()) {
+		soonest = Math.min(soonest, entry.acquiredAt + maxMs);
+	}
+	// At least 1ms: a deadline already in the past must fire on a later turn of
+	// the loop, never re-arm at 0 in a tight loop.
+	const delayMs = Math.max(1, soonest - Date.now());
 	// NOT `unref()`'d — referencing the loop is this timer's entire job. It is
-	// also the failsafe: when it fires, the hold is over either way.
-	current.timer = setTimeout(() => forceReleaseAll(maxMs), maxMs);
+	// also the failsafe: when it fires, whatever is stale is over either way.
+	current.timer = setTimeout(() => reapStaleHolds(), delayMs);
 }
 
 function disarmIfIdle(current: EventLoopHoldState): void {
@@ -108,23 +144,63 @@ function disarmIfIdle(current: EventLoopHoldState): void {
 	current.timer = undefined;
 }
 
-function forceReleaseAll(maxMs: number): void {
+/**
+ * Release every hold that has outlived {@link getEventLoopHoldMaxMs} ON ITS
+ * OWN CLOCK, log what was released, and re-arm for whatever is still
+ * outstanding. Same shape as `clients/lsp/workspace-sweep-hold.ts`'s
+ * `reapStaleHolds` — deliberately a second, independent implementation rather
+ * than a shared ledger (that consolidation is tracked separately).
+ */
+function reapStaleHolds(): void {
 	const current = state();
 	current.timer = undefined;
-	if (current.holds.size === 0) return;
-	const held = [...current.holds.values()];
-	const oldestAcquiredAt = Math.min(...held.map((entry) => entry.acquiredAt));
-	current.holds.clear();
+	const maxMs = getEventLoopHoldMaxMs();
+	const now = Date.now();
+	const released: EventLoopHoldEntry[] = [];
+	for (const [holdId, entry] of current.holds) {
+		if (now - entry.acquiredAt <= maxMs) continue;
+		current.holds.delete(holdId);
+		released.push(entry);
+	}
+	if (released.length > 0) {
+		const oldestAcquiredAt = Math.min(
+			...released.map((entry) => entry.acquiredAt),
+		);
+		logLatency({
+			type: "phase",
+			phase: "event_loop_hold_force_released",
+			filePath: "",
+			durationMs: now - oldestAcquiredAt,
+			metadata: {
+				maxHoldMs: maxMs,
+				releasedHolds: released.length,
+				stillHeld: current.holds.size,
+				labels: [...new Set(released.map((entry) => entry.label))].slice(0, 8),
+			},
+		});
+	}
+	// A survivor is held by nothing until this re-arms — the drain — and
+	// forever if it never does — the leak.
+	armForNextDeadline(current);
+}
+
+/**
+ * ONE row per session saying the keep-alive was actually taken (#2649 review
+ * F2). Without it the only record this module ever writes is the failsafe, so
+ * a silent log cannot distinguish "working as designed" from "never wired at
+ * all" — the #2526 gap shape. Claimed through the logger's own
+ * once-per-session mechanism rather than a private latch, so the "one row per
+ * session" a reader counts against is the same property `config_resolved`
+ * has.
+ */
+function recordFirstArm(entry: EventLoopHoldEntry, maxMs: number): void {
+	if (!claimPhaseOncePerSession(EVENT_LOOP_HOLD_ARMED_PHASE, "process")) return;
 	logLatency({
 		type: "phase",
-		phase: "event_loop_hold_force_released",
+		phase: EVENT_LOOP_HOLD_ARMED_PHASE,
 		filePath: "",
-		durationMs: Date.now() - oldestAcquiredAt,
-		metadata: {
-			maxHoldMs: maxMs,
-			releasedHolds: held.length,
-			labels: [...new Set(held.map((entry) => entry.label))].slice(0, 8),
-		},
+		durationMs: 0,
+		metadata: { label: entry.label, maxHoldMs: maxMs },
 	});
 }
 
@@ -141,8 +217,11 @@ function forceReleaseAll(maxMs: number): void {
 export function acquireEventLoopHold(label: string): () => void {
 	const current = state();
 	const holdId = current.nextHoldId++;
-	current.holds.set(holdId, { acquiredAt: Date.now(), label });
-	armIfHeld(current);
+	const entry: EventLoopHoldEntry = { acquiredAt: Date.now(), label };
+	current.holds.set(holdId, entry);
+	const wasArmed = current.timer !== undefined;
+	armForNextDeadline(current);
+	if (!wasArmed) recordFirstArm(entry, getEventLoopHoldMaxMs());
 	return () => {
 		const now = state();
 		if (!now.holds.delete(holdId)) return;
@@ -176,6 +255,9 @@ export function _eventLoopKeepAliveForTests(): {
 
 /** Test-only: drop every hold and disarm, between tests. */
 export function _resetEventLoopHoldForTests(): void {
+	// This module's own phase only — never a blanket clear of a structure other
+	// producers claim in (`releaseOncePerSessionPhase`'s doc comment).
+	releaseOncePerSessionPhase(EVENT_LOOP_HOLD_ARMED_PHASE);
 	const current = state();
 	current.holds.clear();
 	if (current.timer !== undefined) clearTimeout(current.timer);

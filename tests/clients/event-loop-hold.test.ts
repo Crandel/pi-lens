@@ -111,6 +111,85 @@ describe("event-loop hold (#2507)", () => {
 		});
 	});
 
+	it("reaps only the hold that is actually stale and keeps holding for the younger one", () => {
+		// #2649 review F1. The bound is per HOLD, not per epoch: a call that
+		// starts while an older one is still running must get its OWN max age,
+		// not inherit the remaining sliver of the first one's. The round-1 code
+		// armed one timer on 0→1 and cleared EVERY token when it fired, so a
+		// tool call issued late in a legitimate `lens_diagnostics mode=full`
+		// was force-released seconds after starting — the #2507 drain,
+		// reproduced BY the fix. One hold could never show it; two of
+		// different ages is the case that can.
+		vi.useFakeTimers();
+		const maxMs = getEventLoopHoldMaxMs();
+		acquireEventLoopHold("lens_diagnostics");
+		vi.advanceTimersByTime(maxMs - 1_000);
+		acquireEventLoopHold("lsp_diagnostics");
+
+		// Past the OLD hold's deadline, nowhere near the young one's.
+		vi.advanceTimersByTime(2_000);
+
+		expect(_eventLoopHoldCountForTests()).toBe(1);
+		expect(_eventLoopKeepAliveForTests()).toEqual({
+			armed: true,
+			hasRef: true,
+		});
+		const record = logLatencyMock.mock.calls
+			.map((call) => call[0] as { phase?: string; metadata?: unknown })
+			.find((entry) => entry.phase === "event_loop_hold_force_released");
+		// The record names the wedged call only — a healthy bystander in
+		// `labels` would make the row unable to say what actually wedged.
+		expect(record?.metadata).toMatchObject({
+			releasedHolds: 1,
+			labels: ["lens_diagnostics"],
+		});
+	});
+
+	it("re-arms for the survivor's own deadline rather than disarming", () => {
+		// #2649 review F1, second half: after a reap the timer must be armed
+		// again for the SOONEST remaining deadline, or the survivor is held by
+		// nothing (drain) or forever (leak).
+		vi.useFakeTimers();
+		const maxMs = getEventLoopHoldMaxMs();
+		acquireEventLoopHold("lens_diagnostics");
+		vi.advanceTimersByTime(maxMs - 1_000);
+		acquireEventLoopHold("lsp_diagnostics");
+		vi.advanceTimersByTime(2_000);
+		expect(_eventLoopHoldCountForTests()).toBe(1);
+
+		// The survivor's own full max age, measured from ITS acquire.
+		vi.advanceTimersByTime(maxMs);
+
+		expect(_eventLoopHoldCountForTests()).toBe(0);
+		expect(_eventLoopKeepAliveForTests().armed).toBe(false);
+		const records = logLatencyMock.mock.calls
+			.map((call) => call[0] as { phase?: string; metadata?: unknown })
+			.filter((entry) => entry.phase === "event_loop_hold_force_released");
+		expect(records).toHaveLength(2);
+		expect(records[1]?.metadata).toMatchObject({
+			releasedHolds: 1,
+			labels: ["lsp_diagnostics"],
+		});
+	});
+
+	it("records the keep-alive being taken, once per session", () => {
+		// #2649 review F2: without this the ONLY record the hold ever writes is
+		// the failsafe, so a reader cannot tell "the keep-alive works" from
+		// "the keep-alive was never wired at all" (the #2526 gap shape).
+		const first = acquireEventLoopHold("lsp_diagnostics");
+		first();
+		const second = acquireEventLoopHold("symbol_search");
+		second();
+		const armed = logLatencyMock.mock.calls
+			.map((call) => call[0] as { phase?: string; metadata?: unknown })
+			.filter((entry) => entry.phase === "event_loop_hold_armed");
+		expect(armed).toHaveLength(1);
+		expect(armed[0]?.metadata).toMatchObject({
+			label: "lsp_diagnostics",
+			maxHoldMs: getEventLoopHoldMaxMs(),
+		});
+	});
+
 	it("derives its bound from the longest legitimate operation's own ceiling", () => {
 		// Not a second tunable literal: the full-scan wall clock plus the shared
 		// safety margin, the same derivation the workspace-sweep hold's max-age
