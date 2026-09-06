@@ -1236,14 +1236,15 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvMembers: true,
 		uvExclude: true,
 	},
-	// #2591 review round 2, F1: consecutive `**` components collapse to one
-	// (`rust-lang/glob@cfa2a58f2e44373573f657ec25b3621e44714dee`,
-	// `src/lib.rs:672-684`). Collapsing is semantics-preserving, so these three
-	// rows must read exactly like the single-`**` rows above — the equivalence
-	// half of the fix; its cost half is the budget in
-	// `workspace-glob-globstar-collapse-budget.test.ts`.
+	// Adjacent `**` components denote exactly what a single one does, so these
+	// three rows must read exactly like the single-`**` rows above. #2591 review
+	// round 2 leaned on that to COLLAPSE them before compiling, the way upstream
+	// does (`rust-lang/glob@cfa2a58f2e44373573f657ec25b3621e44714dee`,
+	// `src/lib.rs:672-684`); #2603 DELETED the collapse — it was a speed
+	// normalization, and the step table the matcher now fills is linear with or
+	// without it — so these rows are what keeps that deletion honest.
 	{
-		axis: "chained `**` collapse: interior, consuming zero components",
+		axis: "chained `**`: interior, consuming zero components",
 		pattern: "a/**/**/**/b",
 		relativePath: "a/b",
 		cargo: false,
@@ -1251,7 +1252,7 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvExclude: true,
 	},
 	{
-		axis: "chained `**` collapse: interior, consuming several components",
+		axis: "chained `**`: interior, consuming several components",
 		pattern: "a/**/**/**/b",
 		relativePath: "a/x/y/b",
 		cargo: false,
@@ -1259,12 +1260,48 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvExclude: true,
 	},
 	{
-		axis: "chained `**` collapse: a trailing chain still requires one component",
+		axis: "chained `**`: a trailing chain still requires one component",
 		pattern: "a/**/**/**",
 		relativePath: "a",
 		cargo: false,
 		uvMembers: false,
 		uvExclude: false,
+	},
+	// #2603: INTERLEAVED `**` chains — a `**` per link, separated by a `*`
+	// component, which is the shape no consecutive-`**` collapse can reach. The
+	// answers are the ordinary globstar answers; the cost half is the budget in
+	// `workspace-glob-nonbacktracking-budget.test.ts`.
+	{
+		axis: "interleaved `**/*` chain, every `**` consuming zero components",
+		pattern: "**/*/**/*/zzz",
+		relativePath: "a/b/zzz",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "interleaved `**/*` chain, the `**`s consuming components",
+		pattern: "**/*/**/*/zzz",
+		relativePath: "a/b/c/d/e/zzz",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "interleaved `**/*` chain against a path with no matching tail",
+		pattern: "**/*/**/*/zzz",
+		relativePath: "a/b/c/d/e",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "a `*` interleaved with `**` still crosses `/` only in uv exclude",
+		pattern: "**/a*c/zzz",
+		relativePath: "x/a/b/c/zzz",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: true,
 	},
 	// #2591 review round 2, F2: a glob character class is not a JS character
 	// class. `[z-a]` is a legal glob whose range is empty (it matches nothing)
@@ -1403,6 +1440,13 @@ const UV_DIFFERENTIAL_PATTERNS = [
 	"?",
 	"??",
 	"*-*",
+	// #2603: interleaved `**` chains — a `**` per link separated by a `*`
+	// component, the shape the consecutive-`**` collapse could never reach and
+	// the one the step table had to be built for.
+	"**/*/**/*/zzz",
+	"**/*/**",
+	"*/**/*/**",
+	"a/**/*/**/b",
 ] as const;
 
 const UV_DIFFERENTIAL_PATHS = [
@@ -1447,6 +1491,9 @@ const UV_DIFFERENTIAL_PATHS = [
 	"packages/x/y/z",
 	"a-c",
 	"a/x/c",
+	// #2603: tails the interleaved patterns above can and cannot reach.
+	"a/b/zzz",
+	"a/b/c/d/zzz",
 ] as const;
 
 /**
@@ -1466,6 +1513,7 @@ const UV_MINIMATCH_DIVERGENCES = new Map<string, string>([
 	["packages/[]ab] packages//a", "path-side //, unreachable via path.relative"],
 	["./packages/* packages//a", "path-side //, unreachable via path.relative"],
 	["packages/./a packages//a", "path-side //, unreachable via path.relative"],
+	["*/**/*/** packages//a", "path-side //, unreachable via path.relative"],
 	// Brace expansion is a minimatch extension the pre-fold uv path inherited by
 	// accident. uv compiles members with rust `glob::Pattern` at the pinned SHA,
 	// which has no brace syntax at all, so `a{b,c}` names a directory literally
