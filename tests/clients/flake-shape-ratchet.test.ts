@@ -126,6 +126,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// release-qa CLI run out of a throwaway dirty tree, because main()'s call to
 	// the dirty-checkout refusal — as opposed to the pure refusal itself — is
 	// only reachable through the process entry point.
+	// 2026-09-06 (#2507): the defect IS a child process's own exit decision —
+	// libuv finding no referenced handle mid `lsp_diagnostics` and Node exiting
+	// 0. A process cannot watch its own loop decide to drain, so the exit code
+	// and stdout of a real headless child are the only faithful observation.
+	"real-process-spawn:clients/lsp/headless-tool-call-keepalive.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a real child's exit code is the observation; no in-process double can watch an event loop decide to drain",
+	},
 	"real-process-spawn:scripts/release-qa.test.ts": {
 		detector: "real-process-spawn",
 		reason:

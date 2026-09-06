@@ -1494,7 +1494,10 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"(runtime-turn.ts:2882).",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#ensureLSPConfigInitialized:a10dd3b9~bb9d4558": {
+	// #2518 re-keyed this occurrence: the neighbourhood suffix hashes the
+	// lines around the await, and the memo check above it became a
+	// `shouldInitializeSessionRoot` call. Same await, same reason, new key.
+	"index.ts#ensureLSPConfigInitialized:a10dd3b9~ad96a95f": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
@@ -2222,6 +2225,13 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/source-filter.ts": 2,
 	"clients/startup-scan.ts": 3,
 	"clients/test-runner-client.ts": 4,
+	// #2507. Unlike every other entry here, this one is unbounded ON PURPOSE
+	// and must stay that way: it is `await inner.apply(...)` around a TOOL
+	// call, taken so the call holds the event loop for its own lifetime.
+	// Bounding it would abandon the tool's result mid-flight — the opposite of
+	// what the await exists for. The count may only ever fall to 0 (the wrapper
+	// removed), never rise.
+	"clients/tool-definition.ts": 1,
 	"clients/tree-sitter-shared.ts": 1,
 	"clients/trivy-client.ts": 2,
 	"clients/warm-attach.ts": 9,

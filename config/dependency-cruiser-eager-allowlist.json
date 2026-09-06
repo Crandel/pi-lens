@@ -42,6 +42,7 @@
   "./clients/lsp/cascade-tier.js",
   "./clients/lsp/config.js",
   "./clients/lsp/index.js",
+  "./clients/lsp/session-roots.js",
   "./clients/memory-sampler.js",
   "./clients/message-end-attribution.js",
   "./clients/mutating-tool.js",

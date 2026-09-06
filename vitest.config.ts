@@ -337,6 +337,12 @@ const wallClockBudgetInclude = [
 	// #2586 review F1: proves the ACTUAL stdout bytes supply-host-provided-deps.mjs
 	// prints (real child process, flake-shape admission).
 	"tests/scripts/supply-host-provided-deps.test.ts",
+	// #2507: a real headless child whose own exit decision is the subject — it
+	// must not drain mid `lsp_diagnostics`, and must still exit by itself
+	// afterwards. Real child spawn (flake-shape admission), and it also spawns a
+	// real LSP child inside itself, so it wants the same quiet, serialized phase
+	// its lsp-spawn-heavy siblings get.
+	"tests/clients/lsp/headless-tool-call-keepalive.test.ts",
 	// #2369: the fixture-ordering defect lives in the CLI's own module-load
 	// order; only a real child process is the script under test.
 	"tests/scripts/smoke-tools-lsp-fixture-registration.test.ts",

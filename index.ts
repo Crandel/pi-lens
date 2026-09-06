@@ -126,6 +126,7 @@ import { registerCascadeTierReconcileTask } from "./clients/lsp/cascade-tier.js"
 import { buildResolvedFoundCascadeRun } from "./clients/cascade-format.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
+import { shouldInitializeSessionRoot } from "./clients/lsp/session-roots.js";
 import { warmLspService } from "./clients/lsp-lazy.js";
 import {
 	sweepOrphans,
@@ -569,12 +570,25 @@ let _turnSummaryEmitCtx:
 	| undefined;
 let _testRunnerDeliveryRegistered = false;
 let _nextTestRunnerDeliveryOwnerId = 0;
+/**
+ * A memo cap, not a mirror of the session-root registry's own bound (#2518).
+ * It used to be described as matching that registry so an uninitializable root
+ * could not stay served; the check below asks the registry directly instead, so
+ * the two numbers no longer have to agree for the answer to be right.
+ */
 const LSP_CONFIG_CWD_CAP = 128;
 const _lspConfigInitializedCwds = new BoundedSet<string>(LSP_CONFIG_CWD_CAP);
 
 async function ensureLSPConfigInitialized(cwd: string): Promise<void> {
 	const normalizedCwd = path.resolve(cwd);
-	if (_lspConfigInitializedCwds.has(normalizedCwd)) return;
+	// #2518: the memo alone is not enough, exactly as in `mcp/server.ts`'s
+	// `ensureReady`. `initLSPConfig` also runs from `clients/runtime-session.ts`
+	// and `clients/lens-engine.ts`, which this memo never sees, so the registry
+	// can evict this cwd while the memo still calls it initialized — and the
+	// evicted entry carries the operator's `disabledServers` denial with it.
+	if (!shouldInitializeSessionRoot(normalizedCwd, _lspConfigInitializedCwds)) {
+		return;
+	}
 	await initLSPConfig(normalizedCwd);
 	_lspConfigInitializedCwds.add(normalizedCwd);
 }
