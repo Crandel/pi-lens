@@ -1,6 +1,7 @@
-export declare function buildEsbuildExecInvocation(args: {
+export declare function buildTscExecInvocation(args: {
 	npmCli: string;
 	execPrefix: string;
+	tsconfigProject: string;
 }): {
 	command: string;
 	argv: string[];
