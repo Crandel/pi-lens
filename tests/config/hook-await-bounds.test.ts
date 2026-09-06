@@ -2179,7 +2179,14 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/dispatch/pending-runner-findings.ts": 2,
 	"clients/dispatch/runners/psscriptanalyzer.ts": 7,
 	"clients/dispatch/runners/utils/lazy-installer.ts": 2,
-	"clients/dispatch/runners/utils/runner-helpers.ts": 32,
+	// 32 → 37 (#2140): the probe resolver now asks the installer for a
+	// release-managed binary (`~/.pi-lens/bin`) before falling back to PATH, so
+	// probe and spawn resolve through one definition. The five added awaits are
+	// `fs.access` stats and the managed-shim verification that already carries
+	// its own 5s spawn budget (MANAGED_VERIFY_TIMEOUT_MS) — the same shape as
+	// the npm-shim rung beside them, and none can take a hook's signal until
+	// #2523 AC4 threads it through the deps types.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 37,
 	"clients/file-time.ts": 1,
 	"clients/file-utils.ts": 1,
 	"clients/format-service.ts": 5,
