@@ -10,7 +10,9 @@ export interface InstallSmokeDriftReport {
 	steps: { name: string; outcome: StepOutcome }[];
 }
 
-export function firstFailingStep(report: InstallSmokeDriftReport): string | null;
+export function firstFailingStep(
+	report: InstallSmokeDriftReport,
+): string | null;
 
 export function hasDrift(report: InstallSmokeDriftReport): boolean;
 
