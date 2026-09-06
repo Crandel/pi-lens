@@ -59,7 +59,6 @@
 import { resetIgnoredConfigWarnCache } from "../config-warn.js";
 import * as os from "node:os";
 import path from "node:path";
-import { BoundedLruCache } from "../bounded-cache.js";
 import {
 	lspSectionOf,
 	type PiLensConfigResolution,
@@ -82,6 +81,8 @@ import { launchLSP } from "./launch.js";
 import {
 	registerSessionRoot,
 	resetSessionRootsForTests,
+	sessionRootConfigEntries,
+	setSessionRootConfig,
 } from "./session-roots.js";
 import {
 	createRootDetector,
@@ -474,7 +475,6 @@ const EMPTY_CONFIG: RegisteredLSPConfig = {
 	serverOverrides: new Map(),
 };
 
-const workspaceConfigs = new BoundedLruCache<string, RegisteredLSPConfig>(32);
 /** In-flight config initialization promises to prevent duplicate concurrent loads */
 const configInFlight = new Map<string, Promise<void>>();
 
@@ -491,7 +491,12 @@ function getConfigForFile(filePath: string): RegisteredLSPConfig {
 	const resolvedFilePath = path.resolve(filePath);
 	let bestMatch: { root: string; config: RegisteredLSPConfig } | undefined;
 
-	for (const [root, config] of workspaceConfigs) {
+	// #2518: the per-root configs ARE the session-root registry's values, so
+	// this walk sees a config for exactly the roots that registry still serves.
+	// `undefined` is a root whose first load is still in flight — the same
+	// "no entry yet" state this walk skipped before the two stores merged.
+	for (const [root, config] of sessionRootConfigEntries()) {
+		if (config === undefined) continue;
 		if (!isSameOrChildPath(resolvedFilePath, root)) continue;
 		if (!bestMatch || root.length > bestMatch.root.length) {
 			bestMatch = { root, config };
@@ -511,11 +516,14 @@ function getConfigForFile(filePath: string): RegisteredLSPConfig {
  * `initLSPConfig`. That call was the finding: a read-only query ran a full
  * session initialization, which (a) registered the caller's cwd as a served
  * session root, widening the #2052 access gate for a tree the session never
- * opened, and (b) wrote the 32-entry `workspaceConfigs` LRU, so ~40 queries
- * against other directories evicted a live root's config and silently lifted
- * the operator's `disabledServers` denial — the exact inversion the surface
- * promises cannot happen. With the conversion spelled here, both writes stop
- * being something the query has to opt out of: it never reaches them.
+ * opened, and (b) wrote the per-root config store, which was then a separate
+ * 32-entry LRU, so ~40 queries against other directories evicted a live root's
+ * config and silently lifted the operator's `disabledServers` denial — the
+ * exact inversion the surface promises cannot happen. With the conversion
+ * spelled here, both writes stop being something the query has to opt out of:
+ * it never reaches them. (#2518 later removed the second cap by making the
+ * config the registry's own value; a query that skips the registry still skips
+ * both.)
  *
  * Still ONE definition, so the derived config and the session-registered one
  * cannot disagree about what a document means.
@@ -580,7 +588,7 @@ export async function initLSPConfig(cwd: string): Promise<void> {
 	if (existing) return existing;
 
 	const promise = (async () => {
-		workspaceConfigs.set(
+		setSessionRootConfig(
 			normalizedCwd,
 			registerLSPConfig(await loadLSPConfig(cwd, os.homedir())),
 		);
@@ -768,10 +776,10 @@ export function getServerInitOverride(
 }
 
 export function resetLSPConfigStateForTests(): void {
-	workspaceConfigs.clear();
 	resetLSPCaseSensitivityState();
-	// Reset both together: a cleared config store beside a live session-root
-	// registry would decline files for roots nothing can serve any more.
+	// One call clears both the served roots and their configs: since #2518 they
+	// are one store, so a reset cannot leave a cleared config store beside a
+	// live session-root registry declining files for roots nothing can serve.
 	resetSessionRootsForTests();
 	// The warn latch is loader state too: a test that re-reads the same broken
 	// path after this reset must see the warning again, not a latched silence.

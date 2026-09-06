@@ -297,13 +297,16 @@ function decidedByOrNothing(entry: ProvenanceViewEntry | undefined): {
  * tree nothing initialized, which would report every server as selected — and
  * round 2 got it by calling `initLSPConfig(cwd, { report: false })`. That
  * inverted this surface's own guarantee: `initLSPConfig` is the session-root
- * registry's single writer and the `workspaceConfigs` LRU's only producer, so
+ * registry's single writer and the per-root config store's only producer, so
  * a question about a foreign directory enrolled it as a served LSP root
  * (widening the #2052 access gate) and, after ~40 such questions, evicted a
- * live root's config from the 32-entry LRU — silently lifting the operator's
- * `disabledServers` denial, which is precisely what this surface promises
- * cannot happen. `sessionRoots` is capped at 128, so `shouldInitializeSessionRoot`
- * never repaired it either.
+ * live root's config from what was then a separate 32-entry LRU — silently
+ * lifting the operator's `disabledServers` denial, which is precisely what
+ * this surface promises cannot happen, and `shouldInitializeSessionRoot` never
+ * repaired it because the 128-entry registry still reported the root served.
+ * #2518 collapsed those two containers into one entry per root, so the second
+ * half of that failure is gone; the first half — a read-only query enrolling a
+ * foreign root at all — is still this surface's own to avoid
  *
  * So the query DERIVES the config instead: `lspConfigOf` (the projection
  * `loadLSPConfig` returns, minus the notices — rule 2) through the same
@@ -457,7 +460,7 @@ export async function effectiveConfig(
 							homeDir,
 							// The gates read the LSP slice of that SAME resolution, through
 							// the same `registerLSPConfig` conversion `initLSPConfig` uses —
-							// no session-root registration, no `workspaceConfigs` LRU write
+							// no session-root registration, no per-root config-store write
 							// (P11/P12). Computed here rather than hoisted into a
 							// `{ absolute, lspConfig }` struct (#2520): `absolute` is already
 							// this branch's narrowed local, so the struct's own field was
