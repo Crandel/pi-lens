@@ -125,6 +125,39 @@ describe("#2518 a live session root's denial survives foreign cwd traffic", () =
 		expect(decoupled).toEqual([]);
 	}, 120_000);
 
+	it("keeps a served root's denial applied while it re-initializes", async () => {
+		const root = denyingRoot();
+		const file = path.join(root, "notes.md");
+		await initLSPConfig(root);
+
+		// A second session declaring the same root. `initLSPConfig` re-registers
+		// it synchronously, before its loader await — so a registration that
+		// overwrote the stored config with the "not loaded yet" placeholder would
+		// blank this live root's denial for the length of the load.
+		const reinit = initLSPConfig(root);
+		expect(isServerDisabled(DENIED_SERVER, file)).toBe(true);
+		await reinit;
+		expect(isServerDisabled(DENIED_SERVER, file)).toBe(true);
+	}, 60_000);
+
+	it("applies an ancestor root's denial while a nested root is still loading", async () => {
+		const parent = denyingRoot();
+		const child = path.join(parent, "sub");
+		fs.mkdirSync(child);
+		fs.writeFileSync(path.join(child, "notes.md"), "# nested\n");
+		await initLSPConfig(parent);
+
+		// The nested root is registered but has no config until its load
+		// settles. That in-flight entry must not shadow the ancestor whose
+		// config IS loaded: pre-#2518 the store simply had no entry for it, and
+		// the longest-prefix walk fell through to the parent. It still must.
+		const loading = initLSPConfig(child);
+		expect(isServerDisabled(DENIED_SERVER, path.join(child, "notes.md"))).toBe(
+			true,
+		);
+		await loading;
+	}, 60_000);
+
 	it("records one bounded degradation when the cap drops a served root", async () => {
 		for (let index = 0; index < 130; index++) {
 			await initLSPConfig(foreignRoot(index));
