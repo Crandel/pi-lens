@@ -2945,7 +2945,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 									},
 									{
 										ledgerKind: "test-runner-delivery",
-										reason: "runner-error-only batch kept off the --lens-guard blocker",
+										reason:
+											"runner-error-only batch kept off the --lens-guard blocker",
 										capPerTurn: { limit: 8, turnIndex: firedAtTurn },
 									},
 								);

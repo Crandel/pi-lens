@@ -161,7 +161,10 @@ describe("test finding provenance adapter (#1413)", () => {
 			{ content: "fail", results: [interruptedWithFailure], provenance },
 			cwd,
 		)[0];
-		expect(diagnostic).toMatchObject({ severity: "error", semantic: "blocking" });
+		expect(diagnostic).toMatchObject({
+			severity: "error",
+			semantic: "blocking",
+		});
 		expect(diagnostic.message).toContain("2 test(s) failed");
 		expect(diagnostic.message).toContain("Pytest interrupted");
 	});
