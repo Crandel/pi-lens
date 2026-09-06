@@ -1236,6 +1236,75 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvMembers: true,
 		uvExclude: true,
 	},
+	// #2591 review round 2, F1: consecutive `**` components collapse to one
+	// (`rust-lang/glob@cfa2a58f2e44373573f657ec25b3621e44714dee`,
+	// `src/lib.rs:672-684`). Collapsing is semantics-preserving, so these three
+	// rows must read exactly like the single-`**` rows above — the equivalence
+	// half of the fix; its cost half is the budget in
+	// `workspace-glob-globstar-collapse-budget.test.ts`.
+	{
+		axis: "chained `**` collapse: interior, consuming zero components",
+		pattern: "a/**/**/**/b",
+		relativePath: "a/b",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "chained `**` collapse: interior, consuming several components",
+		pattern: "a/**/**/**/b",
+		relativePath: "a/x/y/b",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "chained `**` collapse: a trailing chain still requires one component",
+		pattern: "a/**/**/**",
+		relativePath: "a",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	// #2591 review round 2, F2: a glob character class is not a JS character
+	// class. `[z-a]` is a legal glob whose range is empty (it matches nothing)
+	// and an illegal RegExp ("Range out of order"). Pre-fix these THREW a
+	// SyntaxError out of the matcher; the deleted minimatch call answered
+	// `false`, and so does the fold now — fail closed, declaring no member and
+	// excluding nothing. `toBe(false)` is the assertion precisely because a
+	// throw fails it too.
+	{
+		axis: "uncompilable class range fails closed, never throws",
+		pattern: "crates/[z-a]",
+		relativePath: "crates/a",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "uncompilable NEGATED class range fails closed, never throws",
+		pattern: "crates/[!z-a]",
+		relativePath: "crates/a",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "uncompilable class with a literal tail fails closed, never throws",
+		pattern: "crates/[b-a]x",
+		relativePath: "crates/ax",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "a WELL-FORMED class range still matches — fail-closed is not fail-always",
+		pattern: "crates/[a-z]",
+		relativePath: "crates/m",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
 ];
 
 describe("matchesWorkspaceMemberPattern dialect table (#2591)", () => {
@@ -1328,6 +1397,9 @@ const UV_DIFFERENTIAL_PATTERNS = [
 	"**/**",
 	"packages/*/*/*",
 	"a/**/**/b",
+	"a/**/**/**/b",
+	"a/**/**/**",
+	"**/**/**",
 	"?",
 	"??",
 	"*-*",

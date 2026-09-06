@@ -68,6 +68,7 @@
 		"clients/runtime-session-retro-hydrate-warmup-race.test.ts": 1,
 		"clients/runtime-session-sequence-read-budget.test.ts": 1,
 		"clients/word-index-async-build.test.ts": 1,
+		"clients/workspace-glob-globstar-collapse-budget.test.ts": 1,
 		"scripts/playground-verify-rule-bounded-wait.test.ts": 2,
 		"scripts/prune-agent-worktrees.test.ts": 1,
 		"scripts/suite-lock.test.ts": 1,

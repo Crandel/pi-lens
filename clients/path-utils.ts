@@ -822,19 +822,41 @@ function globRunToRegExpSource(
 
 /**
  * Compile a normalized workspace-member pattern into an anchored whole-path
- * regex. A `**` component consumes zero or more path components — except as
- * the LAST component, where it requires at least one (`a/**` matches `a/b`, not
- * `a`), reproducing both minimatch's and rust `glob`'s answer.
+ * regex, or `undefined` when the pattern cannot compile.
+ *
+ * A `**` component consumes zero or more path components — except as the LAST
+ * component, where it requires at least one (`a/**` matches `a/b`, not `a`),
+ * reproducing both minimatch's and rust `glob`'s answer.
+ *
+ * CONSECUTIVE `**` COMPONENTS COLLAPSE TO ONE (#2591 review round 2, F1),
+ * which is exactly what upstream does: `rust-lang/glob@cfa2a58f2e44373573f657ec25b3621e44714dee`,
+ * `src/lib.rs:672-684`, "collapse consecutive AnyRecursiveSequence to a single
+ * one". It is also the difference between linear and exponential matching here:
+ * each `**` emits its own `(?:.+/)?`, and N adjacent nullable `.+` groups
+ * backtrack 2^N ways against a long non-matching path. Measured through
+ * `detectPythonEnvironment` before the collapse, 21-component path: 8 chained
+ * `**` = 69ms, 10 = 701ms, 12 = 5739ms (minimatch, which collapses: ~0.2ms
+ * flat). That call is awaited with no timeout by `test-runner-client.ts`,
+ * `dispatch/runners/pyright.ts` and `lsp/server.ts`, so the blowup is a hang,
+ * not a slow answer. Collapsing is semantics-preserving — `a/**\/**\/b` and
+ * `a/**\/b` accept the same set — so this is purely the upstream-faithful
+ * normalization, not a behavior change.
  */
 function compileWorkspaceMemberPattern(
 	pattern: string,
 	dialect: WorkspaceMemberGlobDialect,
-): RegExp {
-	const components = pattern.split("/");
+): RegExp | undefined {
+	const isGlobstar = (component: string): boolean =>
+		component === "**" && dialect.globstar === "crosses-components";
+	const components = pattern
+		.split("/")
+		.filter(
+			(component, i, all) => !(isGlobstar(component) && isGlobstar(all[i - 1])),
+		);
 	let source = "";
 	let needSeparator = false;
 	for (let i = 0; i < components.length; i += 1) {
-		if (components[i] !== "**" || dialect.globstar !== "crosses-components") {
+		if (!isGlobstar(components[i])) {
 			if (needSeparator) source += "/";
 			source += globRunToRegExpSource(components[i], dialect);
 			needSeparator = true;
@@ -847,7 +869,16 @@ function compileWorkspaceMemberPattern(
 		}
 		needSeparator = false;
 	}
-	return new RegExp(`^${source}$`);
+	try {
+		return new RegExp(`^${source}$`);
+	} catch {
+		// A glob character class is not a JS character class: `[z-a]` is a legal
+		// glob (matching nothing, since the range is empty) and an illegal RegExp
+		// ("Range out of order"). Fail CLOSED — an uncompilable pattern declares
+		// no member and excludes nothing — which is also the answer the deleted
+		// minimatch call gave (#2591 review round 2, F2).
+		return undefined;
+	}
 }
 
 /**
@@ -874,6 +905,18 @@ function compileWorkspaceMemberPattern(
  * extglobs, leading-`!` negation, leading-`#` comments — are NOT honored, and
  * uv's own `glob` crate does not honor them either (same pinned SHA), so
  * dropping them moves uv toward upstream rather than away from it.
+ *
+ * A pattern that cannot be compiled at all answers `false` for every path —
+ * it declares no member and excludes nothing (#2591 review round 2, F2). The
+ * only such patterns today carry an empty character-class range (`[z-a]`:
+ * legal glob, illegal JS RegExp). Reachability note, recorded rather than
+ * assumed away: no such pattern can reach here through a manifest right now,
+ * because `parseTomlStringArray` (`clients/cargo-manifest.ts`) captures an
+ * array body non-greedily up to the FIRST `]`, so any entry containing a `]`
+ * loses its closing quote and is dropped before it becomes a pattern. That is
+ * a property of the TOML reader, not of this matcher, and it is not this
+ * function's to rely on — the character-class axis stays because upstream
+ * cargo and uv both support classes, and the reader's gap may be closed later.
  */
 export function matchesWorkspaceMemberPattern(
 	pattern: string,
@@ -887,7 +930,10 @@ export function matchesWorkspaceMemberPattern(
 	) {
 		return false;
 	}
-	return compileWorkspaceMemberPattern(normalized, dialect).test(relativePath);
+	return (
+		compileWorkspaceMemberPattern(normalized, dialect)?.test(relativePath) ??
+		false
+	);
 }
 
 /**
