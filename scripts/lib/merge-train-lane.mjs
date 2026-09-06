@@ -194,6 +194,7 @@ export const MERGE_GATE_REASON = {
 	REQUIRED_CHECK_NOT_SUCCESS: "required-check-not-success",
 	RUN_HEALTH: "run-health",
 	FAILING_CHECK: "failing-check",
+	CHECK_SUPERSEDED: "check-superseded",
 	MERGE_STATE: "merge-state",
 	BEHIND_BASE: "behind-base",
 	NOT_APPROVED_BY_OWNER: "not-approved-by-owner",
@@ -281,6 +282,42 @@ export function evaluateMergeGate(pr, health, { approvedBy } = {}) {
 			`workflow run health is \`${health.classification}\` on \`${pr.headSha}\``,
 		);
 
+	// #2632 (verify round 1, F1): a discovered check's bare CANCELLED
+	// conclusion is UNCERTAIN evidence, not settled evidence of any kind --
+	// `ci-checks.mjs`'s own doc comment on `isUncertainConclusion` says a
+	// caller gates it "to PEND rather than fail". `cancel-in-progress: true`
+	// (ci.yml:15-16) leaves a stale CANCELLED row as the ONLY entry `byName`
+	// has for a name for several minutes before its replacement posts
+	// (live-probed on PR #2607's "Record post-merge validation": three
+	// check-suites on one commit, the oldest cancelled). Round 1 of this fix
+	// dropped such a row from the `failing` filter below and let it fall
+	// through to a green merge -- wrong, because `MERGEABLE_STATES` admits
+	// UNSTABLE, so THIS filter is the lane's only gate on a non-required
+	// check, and a superseded row whose replacement later posts FAILURE would
+	// already have merged by the time that replacement arrives. This HOLD
+	// (not an exemption folded into `failing`) is the pending-not-green half
+	// of the same contract `ci-verdict.mjs` already applies (`EXIT_PENDING`
+	// via its `pendingGatingRows`) -- `deny()` in this lane IS hold-and-retry:
+	// the label stays on and `runMergeLane` re-evaluates every 10 minutes and
+	// on every `check_suite: completed` webhook (merge-train-lane.yml), so a
+	// superseded check gets re-judged the moment its replacement posts,
+	// exactly like every other not-yet-green reason below.
+	//
+	// This reaches only NAMES NOT IN `REQUIRED_CHECKS`: a required check's
+	// CANCELLED conclusion never even reaches this point, because the
+	// required-check loop above already denied (REQUIRED_CHECK_NOT_SUCCESS)
+	// the moment it saw anything but a literal SUCCESS -- so a required
+	// check's cancellation still hard-fails, matching #2618's "a REQUIRED row
+	// gets NO conclusion exemption" and this issue's own explicit carve-out.
+	const superseded = [...byName.values()].filter(
+		(c) => !isAdvisoryCheck(c.name) && isUncertainConclusion(c.conclusion),
+	);
+	if (superseded.length > 0)
+		return deny(
+			MERGE_GATE_REASON.CHECK_SUPERSEDED,
+			`non-advisory check(s) show a concurrency-superseded \`cancelled\` conclusion with no replacement posted yet, so this is not settled evidence either way: ${superseded.map((c) => `\`${c.name}\``).join(", ")}`,
+		);
+
 	// Judge the RESOLVED run per name, so a superseded duplicate cannot block
 	// a head whose current run passed, and a newer failing duplicate cannot be
 	// hidden by an older passing one. `isBlockingConclusion` (#2618
@@ -288,30 +325,12 @@ export function evaluateMergeGate(pr, health, { approvedBy } = {}) {
 	// -- this repo's GraphQL rollup already reports UPPERCASE conclusions so
 	// the two were behaviorally identical here, but a second hand-rolled
 	// case-sensitive comparison of the SAME set is exactly the duplication
-	// `isBlockingConclusion` exists to remove (ci-checks.mjs).
-	//
-	// #2632: `isUncertainConclusion` (a bare CANCELLED, ci-checks.mjs) is
-	// excluded here too, porting ci-verdict.mjs's #2618 fix-round-2 F2 grace to
-	// this, the REAL shipped merge gate. `cancel-in-progress: true`
-	// (ci.yml:15-16) leaves a stale CANCELLED row as the ONLY entry `byName`
-	// has for a name for several minutes before its replacement posts
-	// (live-probed on PR #2607's "Record post-merge validation": three
-	// check-suites on one commit, the oldest cancelled) -- reading that window
-	// as FAILING_CHECK denies a legitimate merge on a check that is not done
-	// reporting, not one that failed. This exemption reaches only NAMES NOT IN
-	// `REQUIRED_CHECKS`: a required check's CANCELLED conclusion never even
-	// reaches this filter, because the required-check loop above already
-	// denied (REQUIRED_CHECK_NOT_SUCCESS) the moment it saw anything but a
-	// literal SUCCESS -- so a required check's cancellation still hard-fails,
-	// matching #2618's "a REQUIRED row gets NO conclusion exemption" and this
-	// issue's own explicit carve-out. Every OTHER blocking conclusion
-	// (FAILURE, TIMED_OUT, ACTION_REQUIRED, STARTUP_FAILURE, STALE) still
-	// denies unconditionally -- only CANCELLED gets the uncertainty grace.
+	// `isBlockingConclusion` exists to remove (ci-checks.mjs). CANCELLED is
+	// already resolved above (as a hold, not a pass-through), so this filter
+	// never sees one -- every OTHER blocking conclusion (FAILURE, TIMED_OUT,
+	// ACTION_REQUIRED, STARTUP_FAILURE, STALE) still denies unconditionally.
 	const failing = [...byName.values()].filter(
-		(c) =>
-			!isAdvisoryCheck(c.name) &&
-			!isUncertainConclusion(c.conclusion) &&
-			isBlockingConclusion(c.conclusion),
+		(c) => !isAdvisoryCheck(c.name) && isBlockingConclusion(c.conclusion),
 	);
 	if (failing.length > 0)
 		return deny(
