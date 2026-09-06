@@ -8,6 +8,10 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+	classifyBundledResourceDir,
+	reportBundledResourceDirHealth,
+} from "../bundled-resource-health.js";
 import { getProjectDataDir } from "../file-utils.js";
 import { readJsonCache } from "../json-cache-read.js";
 import { resolvePackagePath } from "../package-root.js";
@@ -52,7 +56,7 @@ export const CACHE_VERSION = "v7";
  * already use for the ast-grep side of the same class (#1105): project-origin
  * trees get a content-hash CONFIRM, bundled trees stay mtime-cheap.
  */
-const BUNDLED_RULES_ROOT = resolvePackagePath(
+export const BUNDLED_RULES_ROOT = resolvePackagePath(
 	import.meta.url,
 	"rules",
 	"tree-sitter-queries",
@@ -62,6 +66,27 @@ function isBundledRuleFile(resolvedFile: string): boolean {
 	return (
 		resolvedFile === BUNDLED_RULES_ROOT ||
 		resolvedFile.startsWith(BUNDLED_RULES_ROOT + path.sep)
+	);
+}
+
+/**
+ * #2636 (the #2626 class sweep's tree-sitter leg): `BUNDLED_RULES_ROOT` above
+ * was used unconditionally with no existence check — same
+ * managed-cache-relocation gap #2626 fixed for `skills/`. Purely
+ * observational (never gates `isBundledRuleFile`'s classification): records
+ * a bounded `tree-sitter-queries-dir-missing` degradation only when the
+ * bundled root is absent, unreadable, or (uncommonly) present but empty.
+ * Shares the exact kind + subject `clients/tree-sitter-query-loader.ts`'s
+ * `ruleFilesForLanguage` reports under — both read the SAME physical
+ * directory, so the ledger's own (kind, subject) dedup collapses whichever
+ * call site observes it first into ONE row rather than two duplicates.
+ */
+function reportBundledRulesRootHealth(): void {
+	reportBundledResourceDirHealth(
+		"tree-sitter-queries-dir-missing",
+		BUNDLED_RULES_ROOT,
+		classifyBundledResourceDir(BUNDLED_RULES_ROOT),
+		"bundled tree-sitter query rules",
 	);
 }
 
@@ -95,6 +120,7 @@ export class RuleCache {
 
 	constructor(language: string, rootDir = process.cwd()) {
 		this.language = language;
+		reportBundledRulesRootHealth();
 		this.cacheDir = path.join(getProjectDataDir(rootDir), "cache");
 		this.cacheFile = path.join(
 			this.cacheDir,

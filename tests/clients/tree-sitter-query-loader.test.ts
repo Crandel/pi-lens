@@ -1,8 +1,22 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
 import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+import * as bundledResourceHealth from "../../clients/bundled-resource-health.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+import {
+	BUNDLED_QUERIES_ROOT,
 	getQueryLanguageKey,
 	isDisabledQueryFilePath,
 	queriesForLanguage,
@@ -11,6 +25,10 @@ import {
 	type TreeSitterQuery,
 	TreeSitterQueryLoader,
 } from "../../clients/tree-sitter-query-loader.js";
+import {
+	resetUserNotifier,
+	wireUserNotifier,
+} from "../../clients/user-notify.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 const tmpDirs: string[] = [];
@@ -306,5 +324,94 @@ describe("ruleSourceLanguages / ruleFilesForLanguage (#878)", () => {
 		expect(pyFiles.some((f) => f.endsWith("typescript/inherited.yml"))).toBe(
 			false,
 		);
+	});
+});
+
+/**
+ * #2636 (the #2626 class sweep's tree-sitter leg): `ruleFilesForLanguage`
+ * resolving zero files is NORMAL for a language nobody has authored bundled
+ * queries for (cobol, plsql — disabled by design, see
+ * `tree-sitter-shared.ts`'s `TYPESCRIPT_RULE_HEIRS` neighbourhood) and a BUG
+ * when the bundled `rules/tree-sitter-queries` root itself was relocated out
+ * from under the package. The two must never be confused: a record fires
+ * only when the shared ROOT is unhealthy, never merely because ONE
+ * language's own subdirectory is empty.
+ */
+describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
+	const notified: Array<{ message: string; level: string | undefined }> = [];
+
+	beforeEach(() => {
+		notified.length = 0;
+		resetDegradationLedger();
+		wireUserNotifier(() => (message, level) => {
+			notified.push({ message, level });
+		});
+	});
+
+	afterEach(() => {
+		resetUserNotifier();
+		resetDegradationLedger();
+		vi.restoreAllMocks();
+	});
+
+	function degradationGroup() {
+		return getDegradationSummary().find(
+			(g) => g.kind === "tree-sitter-queries-dir-missing",
+		);
+	}
+
+	it("records nothing for cobol: zero files, but the REAL bundled root is healthy (no queries authored by design)", () => {
+		const root = makeTempRulesRoot();
+		expect(ruleFilesForLanguage("cobol", root)).toEqual([]);
+		expect(degradationGroup()).toBeUndefined();
+		expect(notified).toHaveLength(0);
+	});
+
+	it("never classifies the bundled root on the common, non-empty path (typescript)", () => {
+		const classifySpy = vi.spyOn(
+			bundledResourceHealth,
+			"classifyBundledResourceDir",
+		);
+		const root = makeTempRulesRoot();
+		expect(ruleFilesForLanguage("typescript", root).length).toBeGreaterThan(0);
+		expect(classifySpy).not.toHaveBeenCalled();
+	});
+
+	it("records a bounded degradation + notify when the bundled root is actually gone", () => {
+		const classifySpy = vi
+			.spyOn(bundledResourceHealth, "classifyBundledResourceDir")
+			.mockReturnValue({ status: "absent" });
+		const root = makeTempRulesRoot();
+
+		expect(ruleFilesForLanguage("cobol", root)).toEqual([]);
+
+		expect(classifySpy).toHaveBeenCalledWith(BUNDLED_QUERIES_ROOT);
+		const group = degradationGroup();
+		expect(group).toBeDefined();
+		expect(group?.latestReasons.at(-1)?.subject).toBe(BUNDLED_QUERIES_ROOT);
+		expect(notified).toHaveLength(1);
+		expect(notified[0].message).toContain(
+			"bundled tree-sitter query rules unavailable",
+		);
+	});
+
+	it("collapses every zero-file language into ONE ledger row, not one per language", () => {
+		vi.spyOn(
+			bundledResourceHealth,
+			"classifyBundledResourceDir",
+		).mockReturnValue({ status: "absent" });
+		const root = makeTempRulesRoot();
+
+		ruleFilesForLanguage("cobol", root);
+		ruleFilesForLanguage("plsql", root);
+		ruleFilesForLanguage("cobol", root);
+
+		expect(notified).toHaveLength(1);
+		expect(degradationGroup()?.count).toBe(3);
+		expect(
+			getDegradationSummary().filter(
+				(g) => g.kind === "tree-sitter-queries-dir-missing",
+			),
+		).toHaveLength(1);
 	});
 });

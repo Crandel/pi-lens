@@ -828,7 +828,32 @@ export type DegradationKind =
 	 * nearest `package.json` is the cache's own). Subject is the resolved
 	 * `skills/` path; see `clients/skills-resolver.ts`.
 	 */
-	| "skills-dir-missing";
+	| "skills-dir-missing"
+	/**
+	 * #2636 (the #2626 class sweep's ast-grep leg): `AstGrepClient`'s
+	 * `ruleDir` fell back to `resolvePackagePath(import.meta.url, "rules")`
+	 * with no existence check when the project has no `rules/` of its own —
+	 * same managed-cache-relocation gap as `skills-dir-missing`. Fires only
+	 * when NEITHER the project `rules/` nor the resolved bundled `rules/`
+	 * yields a loadable `.yml` rule description. Subject is the resolved
+	 * bundled `rules/` path; see `clients/bundled-resource-health.ts` and
+	 * `clients/ast-grep-rule-manager.ts`'s `checkAstGrepRulesHealth`.
+	 */
+	| "ast-grep-rules-dir-missing"
+	/**
+	 * #2636: the bundled `rules/tree-sitter-queries` root — read identically
+	 * by `clients/cache/rule-cache.ts` (`BUNDLED_RULES_ROOT`, to classify a
+	 * rule file as bundled-vs-project for cache fingerprinting) and
+	 * `clients/tree-sitter-query-loader.ts` (`ruleFilesForLanguage`, to
+	 * enumerate the effective rule set) — is absent, unreadable, or
+	 * (uncommonly) present but empty. Fires ONCE regardless of how many
+	 * languages/call sites hit it, because the subject is the shared ROOT
+	 * path, not a per-language one: a language with no bundled queries
+	 * AUTHORED for it (cobol, plsql — disabled by design, see
+	 * `tree-sitter-shared.ts`) resolves zero files from a HEALTHY root and
+	 * must never be confused with the root itself being gone.
+	 */
+	| "tree-sitter-queries-dir-missing";
 
 export interface DegradationRecord {
 	kind: unknown;

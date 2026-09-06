@@ -2,9 +2,22 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { CACHE_VERSION, RuleCache } from "../../../clients/cache/rule-cache.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as bundledResourceHealth from "../../../clients/bundled-resource-health.js";
+import {
+	BUNDLED_RULES_ROOT,
+	CACHE_VERSION,
+	RuleCache,
+} from "../../../clients/cache/rule-cache.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
 import { ruleFilesForLanguage } from "../../../clients/tree-sitter-query-loader.js";
+import {
+	resetUserNotifier,
+	wireUserNotifier,
+} from "../../../clients/user-notify.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 const cleanup: string[] = [];
@@ -432,5 +445,82 @@ describe("RuleCache", () => {
 
 		const cache = new RuleCache("typescript", cwd);
 		expect(cache.get([ruleFile])).toBeNull();
+	});
+});
+
+/**
+ * #2636 (the #2626 class sweep's tree-sitter leg): `BUNDLED_RULES_ROOT` was
+ * used unconditionally with no existence check — same
+ * managed-cache-relocation gap #2626 fixed for `skills/`.
+ * `classifyBundledResourceDir` is independently pinned in
+ * `bundled-resource-health.test.ts`; these tests pin the CONSTRUCTOR's
+ * WIRING to it. `BUNDLED_RULES_ROOT` is a module-load-time constant fixed to
+ * THIS repo's real, healthy install layout, so the unhealthy branch is
+ * exercised by spying on `classifyBundledResourceDir`'s return value rather
+ * than faking `import.meta.url`.
+ */
+describe("RuleCache — bundled tree-sitter-queries root health (#2636)", () => {
+	const notified: Array<{ message: string; level: string | undefined }> = [];
+
+	beforeEach(() => {
+		notified.length = 0;
+		resetDegradationLedger();
+		wireUserNotifier(() => (message, level) => {
+			notified.push({ message, level });
+		});
+	});
+
+	afterEach(() => {
+		resetUserNotifier();
+		resetDegradationLedger();
+		vi.restoreAllMocks();
+	});
+
+	function degradationGroup() {
+		return getDegradationSummary().find(
+			(g) => g.kind === "tree-sitter-queries-dir-missing",
+		);
+	}
+
+	it("records nothing when the bundled root is healthy (this repo's own real layout)", () => {
+		const { cwd } = setupProject();
+		void new RuleCache("typescript", cwd);
+		expect(degradationGroup()).toBeUndefined();
+		expect(notified).toHaveLength(0);
+	});
+
+	it("records a bounded degradation + notify when the bundled root is absent", () => {
+		const classifySpy = vi
+			.spyOn(bundledResourceHealth, "classifyBundledResourceDir")
+			.mockReturnValue({ status: "absent" });
+		const { cwd } = setupProject();
+
+		void new RuleCache("typescript", cwd);
+
+		expect(classifySpy).toHaveBeenCalledWith(BUNDLED_RULES_ROOT);
+		const group = degradationGroup();
+		expect(group).toBeDefined();
+		expect(group?.latestReasons.at(-1)?.subject).toBe(BUNDLED_RULES_ROOT);
+		expect(notified).toHaveLength(1);
+		expect(notified[0].message).toContain(
+			"bundled tree-sitter query rules unavailable",
+		);
+	});
+
+	it("does not re-notify across repeated constructions in the same session", () => {
+		vi.spyOn(
+			bundledResourceHealth,
+			"classifyBundledResourceDir",
+		).mockReturnValue({
+			status: "absent",
+		});
+		const { cwd } = setupProject();
+
+		void new RuleCache("typescript", cwd);
+		void new RuleCache("python", cwd);
+		void new RuleCache("go", cwd);
+
+		expect(notified).toHaveLength(1);
+		expect(degradationGroup()?.count).toBe(3);
 	});
 });

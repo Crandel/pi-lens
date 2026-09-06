@@ -8,7 +8,26 @@
 import { logTreeSitterDiagnostic } from "./tree-sitter-logger.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+	classifyBundledResourceDir,
+	reportBundledResourceDirHealth,
+} from "./bundled-resource-health.js";
+import { logLatency } from "./latency-logger.js";
 import { resolvePackagePath } from "./package-root.js";
+
+/**
+ * The bundled `rules/tree-sitter-queries` root — read identically by
+ * `ruleFilesForLanguage` below and `clients/cache/rule-cache.ts`'s
+ * `BUNDLED_RULES_ROOT` (#2636). Computed once at module load: it names an
+ * INSTALL-time fact (the package layout), never a session-scoped one, so
+ * unlike a "have I recorded this yet" latch it needs no session-boundary
+ * reset — same class as `package-root.ts`'s own `getPackageRoot` memo.
+ */
+export const BUNDLED_QUERIES_ROOT = resolvePackagePath(
+	import.meta.url,
+	"rules",
+	"tree-sitter-queries",
+);
 
 export function isDisabledQueryDirectoryName(name: string): boolean {
 	return name.endsWith("-disabled");
@@ -76,6 +95,36 @@ export function ruleFilesForLanguage(
 				if (f.endsWith(".yml")) files.add(path.join(dir, f));
 			}
 		}
+	}
+	// #2636: a language resolving zero files here is NORMAL when nobody has
+	// authored bundled/project queries for it (cobol, plsql — disabled by
+	// design, see tree-sitter-shared.ts) and a BUG when the bundled root
+	// itself was relocated out from under the package (same
+	// managed-cache-relocation shape #2626 fixed for skills/). The two are
+	// indistinguishable from an empty `files` set alone, so only pay for the
+	// extra classification in this COLD branch (never on the common,
+	// non-empty path) and key it on the shared ROOT, not this call's
+	// `languageId` — every language hitting an actually-missing root
+	// collapses into the SAME ledger row instead of one per language.
+	if (files.size === 0) {
+		const health = classifyBundledResourceDir(BUNDLED_QUERIES_ROOT);
+		logLatency({
+			type: "phase",
+			phase: "tree_sitter_queries_resolved",
+			filePath: BUNDLED_QUERIES_ROOT,
+			durationMs: 0,
+			metadata: {
+				languageId,
+				status: health.status,
+				entryCount: health.status === "healthy" ? health.entryCount : 0,
+			},
+		});
+		reportBundledResourceDirHealth(
+			"tree-sitter-queries-dir-missing",
+			BUNDLED_QUERIES_ROOT,
+			health,
+			"bundled tree-sitter query rules",
+		);
 	}
 	return [...files];
 }

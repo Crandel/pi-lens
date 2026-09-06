@@ -12,13 +12,18 @@ import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AstGrepRuleManager } from "./ast-grep-rule-manager.js";
+import {
+	AstGrepRuleManager,
+	checkAstGrepRulesHealth,
+} from "./ast-grep-rule-manager.js";
 import type {
 	AstGrepDiagnostic,
 	AstGrepMatch,
 	RuleDescription,
 	SgMatch,
 } from "./ast-grep-types.js";
+import { reportBundledResourceDirHealth } from "./bundled-resource-health.js";
+import { logLatency } from "./latency-logger.js";
 import { getMutationBridge } from "./mutation-bridge.js";
 import { resolvePackagePath } from "./package-root.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
@@ -27,6 +32,40 @@ import {
 	type SgExecutionOptions,
 	type SgScanResult,
 } from "./sg-runner.js";
+
+/**
+ * #2636: `AstGrepClient`'s constructor falls back to the bundled `rules/`
+ * (`resolvePackagePath(import.meta.url, "rules")`) with no existence check
+ * when the project has none of its own — same managed-cache-relocation gap
+ * #2626 fixed for `skills/`. Purely observational: logs a `phase` record
+ * naming the resolved path + rule-description count on EVERY construction
+ * that uses the bundled fallback (healthy or not, so an empty ledger is
+ * distinguishable from this constructor never having run at all — #2626
+ * review F5), and records a bounded `ast-grep-rules-dir-missing` degradation
+ * only when the bundled dir itself turns out absent, unreadable, or holds no
+ * `.yml` rule description. Never called when the project provides its own
+ * `rules/` (that directory already passed `fs.existsSync` above, and a
+ * broken PROJECT override is a user config concern, not this bug's shape).
+ */
+function reportAstGrepRulesHealth(bundledRuleDir: string): void {
+	const health = checkAstGrepRulesHealth(bundledRuleDir);
+	logLatency({
+		type: "phase",
+		phase: "ast_grep_rules_resolved",
+		filePath: bundledRuleDir,
+		durationMs: 0,
+		metadata: {
+			status: health.status,
+			entryCount: health.status === "healthy" ? health.entryCount : 0,
+		},
+	});
+	reportBundledResourceDirHealth(
+		"ast-grep-rules-dir-missing",
+		bundledRuleDir,
+		health,
+		"ast-grep rule descriptions",
+	);
+}
 
 /**
  * Record an applied `ast_grep_replace` rewrite through the mutation bridge
@@ -204,12 +243,16 @@ export class AstGrepClient {
 
 	constructor(ruleDir?: string, verbose = false) {
 		const projectRuleDir = path.join(process.cwd(), "rules");
+		const usingBundledFallback = !ruleDir && !fs.existsSync(projectRuleDir);
 		this.ruleDir =
 			ruleDir ||
 			(fs.existsSync(projectRuleDir)
 				? projectRuleDir
 				: resolvePackagePath(import.meta.url, "rules"));
 		this.log = verbose ? createSubsystemLogger("ast-grep") : () => {};
+		if (usingBundledFallback) {
+			reportAstGrepRulesHealth(this.ruleDir);
+		}
 		this.ruleManager = new AstGrepRuleManager(this.ruleDir, this.log);
 		this.runner = new SgRunner(verbose);
 	}
