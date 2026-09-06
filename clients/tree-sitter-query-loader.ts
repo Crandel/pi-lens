@@ -9,6 +9,7 @@ import { logTreeSitterDiagnostic } from "./tree-sitter-logger.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+	type BundledResourceHealth,
 	classifyBundledResourceDir,
 	reportBundledResourceDirHealth,
 } from "./bundled-resource-health.js";
@@ -16,9 +17,12 @@ import { logLatency } from "./latency-logger.js";
 import { resolvePackagePath } from "./package-root.js";
 
 /**
- * The bundled `rules/tree-sitter-queries` root — read identically by
- * `ruleFilesForLanguage` below and `clients/cache/rule-cache.ts`'s
- * `BUNDLED_RULES_ROOT` (#2636). Computed once at module load: it names an
+ * The bundled `rules/tree-sitter-queries` root — the ONE spelling of this
+ * path, imported by `clients/cache/rule-cache.ts` (re-exported there as
+ * `BUNDLED_RULES_ROOT`, #2636 review F4) rather than computed a second time,
+ * so the "one ledger row, not two" claim for `tree-sitter-queries-dir-missing`
+ * rests on reference equality, not merely two independently-resolved strings
+ * that happen to match. Computed once at module load: it names an
  * INSTALL-time fact (the package layout), never a session-scoped one, so
  * unlike a "have I recorded this yet" latch it needs no session-boundary
  * reset — same class as `package-root.ts`'s own `getPackageRoot` memo.
@@ -28,6 +32,33 @@ export const BUNDLED_QUERIES_ROOT = resolvePackagePath(
 	"rules",
 	"tree-sitter-queries",
 );
+
+let cachedBundledQueriesRootHealth: BundledResourceHealth | undefined;
+
+/**
+ * #2636 review F6: `BUNDLED_QUERIES_ROOT`'s health is an INSTALL-time fact
+ * (the package layout), immutable for the life of the process — re-probing
+ * it with `readdirSync` on every call would be real, MEASURED per-call cost
+ * (4.2 µs) paid on a path both `RuleCache`'s constructor and this module's
+ * own `ruleFilesForLanguage` reach on EVERY dispatched file
+ * (`dispatch/runners/tree-sitter.ts`). Memoized once, same class as
+ * `package-root.ts`'s own `getPackageRoot` memo — there is no
+ * `resetDegradationLedger`-style session boundary this needs to clear on,
+ * because the underlying fact (does the directory exist) cannot change
+ * mid-process any more than the package's own install location can.
+ */
+export function getBundledQueriesRootHealth(): BundledResourceHealth {
+	if (!cachedBundledQueriesRootHealth) {
+		cachedBundledQueriesRootHealth =
+			classifyBundledResourceDir(BUNDLED_QUERIES_ROOT);
+	}
+	return cachedBundledQueriesRootHealth;
+}
+
+/** Test-only: clear the memo so a scenario can simulate a different install layout. */
+export function _resetBundledQueriesRootHealthForTests(): void {
+	cachedBundledQueriesRootHealth = undefined;
+}
 
 export function isDisabledQueryDirectoryName(name: string): boolean {
 	return name.endsWith("-disabled");
@@ -88,7 +119,7 @@ export function ruleFilesForLanguage(
 	for (const lang of ruleSourceLanguages(languageId)) {
 		for (const dir of [
 			path.join(resolvedRoot, "rules", "tree-sitter-queries", lang),
-			resolvePackagePath(import.meta.url, "rules", "tree-sitter-queries", lang),
+			path.join(BUNDLED_QUERIES_ROOT, lang),
 		]) {
 			if (!fs.existsSync(dir)) continue;
 			for (const f of fs.readdirSync(dir)) {
@@ -96,35 +127,46 @@ export function ruleFilesForLanguage(
 			}
 		}
 	}
-	// #2636: a language resolving zero files here is NORMAL when nobody has
-	// authored bundled/project queries for it (cobol, plsql — disabled by
-	// design, see tree-sitter-shared.ts) and a BUG when the bundled root
-	// itself was relocated out from under the package (same
-	// managed-cache-relocation shape #2626 fixed for skills/). The two are
-	// indistinguishable from an empty `files` set alone, so only pay for the
-	// extra classification in this COLD branch (never on the common,
-	// non-empty path) and key it on the shared ROOT, not this call's
-	// `languageId` — every language hitting an actually-missing root
-	// collapses into the SAME ledger row instead of one per language.
+	// #2636 (review F2): a language resolving zero files here is NORMAL when
+	// nobody has authored bundled/project queries for it — seven REACHABLE
+	// grammars have none by design: bash, dart, elixir, lua, ocaml, swift, zig
+	// (`.sh`/`.bash`, `.dart`, `.ex`/`.exs`, `.lua`, `.ml`/`.mli`, `.swift`,
+	// `.zig` — see `language-registry.ts`'s `EXTENSION_TO_GRAMMAR`). cobol and
+	// plsql are NOT in that registry at all — only their `-disabled` query
+	// directories exist — so `ruleFilesForLanguage` never actually resolves
+	// those two languageIds in production; they are not examples of this
+	// case. A BUG looks identical from an empty `files` set alone: the
+	// bundled root itself relocated out from under the package (same
+	// managed-cache-relocation shape #2626 fixed for skills/). Only pay for
+	// the extra classification in this COLD branch (never on the common,
+	// non-empty path), key it on the shared ROOT rather than this call's
+	// `languageId` (every language hitting an actually-missing root collapses
+	// into the SAME ledger row instead of one per language), and only WRITE a
+	// record/phase line when the root is actually unhealthy — one of the
+	// seven by-design-empty languages is touched routinely (any `.sh`/`.lua`
+	// edit), and a healthy-root row on every such touch would be per-dispatch
+	// log spam for a fact that never changes (review F2).
 	if (files.size === 0) {
-		const health = classifyBundledResourceDir(BUNDLED_QUERIES_ROOT);
-		logLatency({
-			type: "phase",
-			phase: "tree_sitter_queries_resolved",
-			filePath: BUNDLED_QUERIES_ROOT,
-			durationMs: 0,
-			metadata: {
-				languageId,
-				status: health.status,
-				entryCount: health.status === "healthy" ? health.entryCount : 0,
-			},
-		});
-		reportBundledResourceDirHealth(
-			"tree-sitter-queries-dir-missing",
-			BUNDLED_QUERIES_ROOT,
-			health,
-			"bundled tree-sitter query rules",
-		);
+		const health = getBundledQueriesRootHealth();
+		if (health.status !== "healthy") {
+			logLatency({
+				type: "phase",
+				phase: "tree_sitter_queries_resolved",
+				filePath: BUNDLED_QUERIES_ROOT,
+				durationMs: 0,
+				metadata: {
+					languageId,
+					status: health.status,
+					entryCount: 0,
+				},
+			});
+			reportBundledResourceDirHealth(
+				"tree-sitter-queries-dir-missing",
+				BUNDLED_QUERIES_ROOT,
+				health,
+				"bundled tree-sitter query rules",
+			);
+		}
 	}
 	return [...files];
 }

@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -10,12 +9,61 @@ import {
 	it,
 	vi,
 } from "vitest";
-import * as bundledResourceHealth from "../../clients/bundled-resource-health.js";
+
+// #2626 review round 2, F4 pattern, extended: `getBundledQueriesRootHealth`
+// (#2636 review F6's memo) is called by `ruleFilesForLanguage` as a SAME-FILE
+// internal reference, not a namespace-import call — empirically confirmed
+// `vi.spyOn(moduleNamespace, "getBundledQueriesRootHealth")` does NOT
+// intercept that internal call (unlike `clients/cache/rule-cache.ts`'s
+// CROSS-module import of the same function, spied successfully in
+// `rule-cache.test.ts`). Exercising the real "bundled root gone" path here
+// therefore mocks `node:fs`'s `readdirSync` for the ONE real, known
+// `BUNDLED_QUERIES_ROOT` path, delegating every other call (this file's own
+// temp rule dirs) to the real implementation.
+const actualFsRef = vi.hoisted(() => {
+	return {
+		readdirSync: undefined as unknown as typeof import("node:fs").readdirSync,
+	};
+});
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	actualFsRef.readdirSync = actual.readdirSync;
+	return { ...actual, readdirSync: vi.fn(actual.readdirSync) };
+});
+
+// #2626 review round 2, F5 pattern: capture logLatency calls to prove the
+// #2636 review F2 gate (the phase record fires ONLY when the bundled root is
+// unhealthy, never on the routine "this language has no bundled queries"
+// path) actually holds.
+const latencyEntries = vi.hoisted(() => {
+	return {
+		entries: [] as Array<{
+			phase?: string;
+			filePath?: string;
+			metadata?: Record<string, unknown>;
+		}>,
+	};
+});
+vi.mock("../../clients/latency-logger.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/latency-logger.js")>();
+	return {
+		...actual,
+		logLatency: (entry: {
+			phase?: string;
+			filePath?: string;
+			metadata?: Record<string, unknown>;
+		}) => latencyEntries.entries.push(entry),
+	};
+});
+
+import * as fs from "node:fs";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import {
+	_resetBundledQueriesRootHealthForTests,
 	BUNDLED_QUERIES_ROOT,
 	getQueryLanguageKey,
 	isDisabledQueryFilePath,
@@ -330,19 +378,27 @@ describe("ruleSourceLanguages / ruleFilesForLanguage (#878)", () => {
 /**
  * #2636 (the #2626 class sweep's tree-sitter leg): `ruleFilesForLanguage`
  * resolving zero files is NORMAL for a language nobody has authored bundled
- * queries for (cobol, plsql — disabled by design, see
- * `tree-sitter-shared.ts`'s `TYPESCRIPT_RULE_HEIRS` neighbourhood) and a BUG
- * when the bundled `rules/tree-sitter-queries` root itself was relocated out
- * from under the package. The two must never be confused: a record fires
- * only when the shared ROOT is unhealthy, never merely because ONE
- * language's own subdirectory is empty.
+ * queries for by design — seven REACHABLE grammars have none:
+ * bash, dart, elixir, lua, ocaml, swift, zig (`.sh`/`.bash`, `.dart`,
+ * `.ex`/`.exs`, `.lua`, `.ml`/`.mli`, `.swift`, `.zig` — see
+ * `language-registry.ts`'s `EXTENSION_TO_GRAMMAR`). cobol/plsql are NOT in
+ * that registry at all (only their `-disabled` query directories exist), so
+ * `ruleFilesForLanguage` never actually resolves those two languageIds in
+ * production — `bash`/`lua` below are the REAL examples (#2636 review F2).
+ * The two must never be confused: a record fires only when the shared ROOT
+ * is unhealthy, never merely because ONE language's own subdirectory is
+ * empty.
  */
 describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 	const notified: Array<{ message: string; level: string | undefined }> = [];
 
 	beforeEach(() => {
 		notified.length = 0;
+		latencyEntries.entries.length = 0;
 		resetDegradationLedger();
+		_resetBundledQueriesRootHealthForTests();
+		vi.mocked(fs.readdirSync).mockClear();
+		vi.mocked(fs.readdirSync).mockImplementation(actualFsRef.readdirSync);
 		wireUserNotifier(() => (message, level) => {
 			notified.push({ message, level });
 		});
@@ -351,6 +407,8 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 	afterEach(() => {
 		resetUserNotifier();
 		resetDegradationLedger();
+		_resetBundledQueriesRootHealthForTests();
+		vi.mocked(fs.readdirSync).mockImplementation(actualFsRef.readdirSync);
 		vi.restoreAllMocks();
 	});
 
@@ -360,32 +418,74 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 		);
 	}
 
-	it("records nothing for cobol: zero files, but the REAL bundled root is healthy (no queries authored by design)", () => {
+	function resolvedPhaseEntries() {
+		return latencyEntries.entries.filter(
+			(entry) => entry.phase === "tree_sitter_queries_resolved",
+		);
+	}
+
+	/**
+	 * Makes the ONE real `BUNDLED_QUERIES_ROOT` directory read as absent
+	 * (ENOENT), while every OTHER `readdirSync` call (this file's own temp
+	 * rule dirs) still hits the real filesystem — same-file internal calls
+	 * to `getBundledQueriesRootHealth` cannot be `vi.spyOn`-intercepted (see
+	 * the file-header comment), so the memoized fact underneath it is forced
+	 * unhealthy at the real fs layer instead.
+	 */
+	function mockBundledQueriesRootAbsent(): void {
+		vi.mocked(fs.readdirSync).mockImplementation(((
+			dir: Parameters<typeof actualFsRef.readdirSync>[0],
+			...rest: unknown[]
+		) => {
+			if (dir === BUNDLED_QUERIES_ROOT) {
+				throw Object.assign(new Error("no such directory"), {
+					code: "ENOENT",
+				});
+			}
+			// biome-ignore lint/suspicious/noExplicitAny: passthrough to the real overload set
+			return (actualFsRef.readdirSync as any)(dir, ...rest);
+		}) as typeof fs.readdirSync);
+	}
+
+	it("records nothing for bash: zero files, but the REAL bundled root is healthy (no queries authored by design)", () => {
 		const root = makeTempRulesRoot();
-		expect(ruleFilesForLanguage("cobol", root)).toEqual([]);
+		expect(ruleFilesForLanguage("bash", root)).toEqual([]);
 		expect(degradationGroup()).toBeUndefined();
 		expect(notified).toHaveLength(0);
+		expect(resolvedPhaseEntries()).toEqual([]);
 	});
 
-	it("never classifies the bundled root on the common, non-empty path (typescript)", () => {
-		const classifySpy = vi.spyOn(
-			bundledResourceHealth,
-			"classifyBundledResourceDir",
-		);
+	// #2636 review F6: getBundledQueriesRootHealth's memo — a real,
+	// measured per-call `readdirSync` cost paid on every dispatched file by
+	// BOTH this cold branch and RuleCache's constructor — must survive
+	// repeated calls across DIFFERENT by-design-empty languages, not just
+	// repeated calls for the SAME one.
+	it("memoizes the bundled root's health across calls, even for different languages", () => {
+		const root = makeTempRulesRoot();
+		ruleFilesForLanguage("bash", root);
+		ruleFilesForLanguage("lua", root);
+		ruleFilesForLanguage("bash", root);
+		const bundledRootCalls = vi
+			.mocked(fs.readdirSync)
+			.mock.calls.filter(([dir]) => dir === BUNDLED_QUERIES_ROOT);
+		expect(bundledRootCalls).toHaveLength(1);
+	});
+
+	it("never touches the bundled root's own readdirSync on the common, non-empty path (typescript)", () => {
 		const root = makeTempRulesRoot();
 		expect(ruleFilesForLanguage("typescript", root).length).toBeGreaterThan(0);
-		expect(classifySpy).not.toHaveBeenCalled();
+		const bundledRootCalls = vi
+			.mocked(fs.readdirSync)
+			.mock.calls.filter(([dir]) => dir === BUNDLED_QUERIES_ROOT);
+		expect(bundledRootCalls).toHaveLength(0);
 	});
 
-	it("records a bounded degradation + notify when the bundled root is actually gone", () => {
-		const classifySpy = vi
-			.spyOn(bundledResourceHealth, "classifyBundledResourceDir")
-			.mockReturnValue({ status: "absent" });
+	it("records a bounded degradation + notify + phase record when the bundled root is actually gone", () => {
+		mockBundledQueriesRootAbsent();
 		const root = makeTempRulesRoot();
 
-		expect(ruleFilesForLanguage("cobol", root)).toEqual([]);
+		expect(ruleFilesForLanguage("bash", root)).toEqual([]);
 
-		expect(classifySpy).toHaveBeenCalledWith(BUNDLED_QUERIES_ROOT);
 		const group = degradationGroup();
 		expect(group).toBeDefined();
 		expect(group?.latestReasons.at(-1)?.subject).toBe(BUNDLED_QUERIES_ROOT);
@@ -393,18 +493,25 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 		expect(notified[0].message).toContain(
 			"bundled tree-sitter query rules unavailable",
 		);
+		expect(resolvedPhaseEntries()).toEqual([
+			expect.objectContaining({
+				filePath: BUNDLED_QUERIES_ROOT,
+				metadata: expect.objectContaining({
+					languageId: "bash",
+					status: "absent",
+					entryCount: 0,
+				}),
+			}),
+		]);
 	});
 
 	it("collapses every zero-file language into ONE ledger row, not one per language", () => {
-		vi.spyOn(
-			bundledResourceHealth,
-			"classifyBundledResourceDir",
-		).mockReturnValue({ status: "absent" });
+		mockBundledQueriesRootAbsent();
 		const root = makeTempRulesRoot();
 
-		ruleFilesForLanguage("cobol", root);
-		ruleFilesForLanguage("plsql", root);
-		ruleFilesForLanguage("cobol", root);
+		ruleFilesForLanguage("bash", root);
+		ruleFilesForLanguage("lua", root);
+		ruleFilesForLanguage("bash", root);
 
 		expect(notified).toHaveLength(1);
 		expect(degradationGroup()?.count).toBe(3);
@@ -413,5 +520,19 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 				(g) => g.kind === "tree-sitter-queries-dir-missing",
 			),
 		).toHaveLength(1);
+	});
+
+	// #2636 review F2: the phase record was mutation-vacuous — deleting the
+	// whole logLatency block left the degradation-ledger assertions above
+	// green, because they never inspect latency.log at all.
+	it("does not write a phase record on the healthy, common path (mutation target for F2's gate)", () => {
+		const root = makeTempRulesRoot();
+		writeRule(
+			root,
+			"rules/tree-sitter-queries/go/present.yml",
+			"id: present\nquery: (identifier) @X\n",
+		);
+		expect(ruleFilesForLanguage("go", root).length).toBeGreaterThan(0);
+		expect(resolvedPhaseEntries()).toEqual([]);
 	});
 });

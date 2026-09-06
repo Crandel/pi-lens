@@ -26,61 +26,41 @@
  * path as zero skills from that entry, gracefully, so handing it a path
  * that turns out to be empty is exactly as safe as `master`'s behavior
  * always was. The health check below is PURELY observational.
+ *
+ * #2636 review F4: the ENOENT/EACCES classification shell below used to be
+ * hand-rolled here, character-identical to the ast-grep/tree-sitter sites
+ * #2636 fixed for the same silent-zero shape — now shared via
+ * `bundled-resource-health.ts`, with `scanEntriesForSkills` supplied as this
+ * module's own "what counts as found" predicate.
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as fs from "node:fs";
 import { scanEntriesForSkills } from "../scripts/lib/skills-predicate.mjs";
-import { incrementDegradationCount } from "./degradation-ledger.js";
+import {
+	classifyBundledResourceDir,
+	describeBundledResourceHealth,
+	reportBundledResourceDirHealth,
+	type BundledResourceHealth,
+} from "./bundled-resource-health.js";
 import { logLatency } from "./latency-logger.js";
 import { getPackageRoot } from "./package-root.js";
-import { notifyUserDegradation } from "./user-notify.js";
 
 /** The ledger kind this module records under (`clients/degradation-ledger.ts`). */
 const SKILLS_DIR_MISSING_KIND = "skills-dir-missing";
 
-type SkillsHealth =
-	| { status: "healthy"; entryCount: number }
-	| { status: "absent" }
-	| { status: "unreadable"; fsErrorCode: string }
-	| { status: "empty" };
-
 /**
- * Read `skillsDir` and classify it. Fail-closed: distinguishes `ENOENT`
- * (absent — the common managed-cache-relocation case) from any OTHER
- * `readdirSync` error (`EACCES` and friends — #2626 review F4: these must
- * NOT collapse into the same "no SKILL.md" prose, because an unreadable
- * directory might genuinely hold a real skill pi's loader also cannot read
- * — the honest report is "cannot read it", never "nothing is there").
- * Never throws out of the handler.
+ * Read `skillsDir` and classify it, sharing `classifyBundledResourceDir`'s
+ * ENOENT/EACCES/empty shell but counting pi-LOADABLE skill entry points
+ * (`scanEntriesForSkills`), not a bare directory listing — a `skills/`
+ * holding only a stray `.gitkeep` must read "empty", not "healthy".
  */
-function checkSkillsHealth(skillsDir: string): SkillsHealth {
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(skillsDir, { withFileTypes: true });
-	} catch (error) {
-		const fsErrorCode = (error as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
-		if (fsErrorCode === "ENOENT") return { status: "absent" };
-		return { status: "unreadable", fsErrorCode };
-	}
-	const found = scanEntriesForSkills(skillsDir, entries, true);
-	return found.length > 0
-		? { status: "healthy", entryCount: found.length }
-		: { status: "empty" };
-}
-
-function describeHealth(health: SkillsHealth, skillsDir: string): string {
-	switch (health.status) {
-		case "absent":
-			return `no such directory: ${skillsDir}`;
-		case "unreadable":
-			return `cannot read ${skillsDir} (${health.fsErrorCode})`;
-		case "empty":
-			return `no SKILL.md (or loadable .md) found under ${skillsDir}`;
-	}
-	// unreachable for the "healthy" case — callers only describe unhealthy ones.
-	return `${skillsDir}: unexpected health status`;
+function checkSkillsHealth(skillsDir: string): BundledResourceHealth {
+	return classifyBundledResourceDir(skillsDir, (dir) => {
+		const entries = fs.readdirSync(dir, { withFileTypes: true });
+		return scanEntriesForSkills(dir, entries, true).length;
+	});
 }
 
 /**
@@ -113,30 +93,27 @@ export function resolveSkillPaths(importMetaUrl: string): string[] {
 
 	if (health.status !== "healthy") {
 		const entryDir = path.dirname(fileURLToPath(importMetaUrl));
-		const reason = `${describeHealth(health, skillsDir)} (entry loaded from ${entryDir})`;
+		const reason = `${describeBundledResourceHealth(
+			health,
+			skillsDir,
+			`no SKILL.md (or loadable .md) found under ${skillsDir}`,
+		)} (entry loaded from ${entryDir})`;
 		// #2626 review F3: the notify-once gate previously re-derived "have we
 		// already recorded this" by scanning `getDegradationSummary()` and
 		// comparing the RAW `skillsDir` against subjects the ledger stores
 		// `truncateForLedger`-ed — a mismatch on any subject over
 		// `LEDGER_FIELD_MAX` (200 chars, an ordinary length for a managed-cache
-		// path) renotified on every call. `incrementDegradationCount`'s own
-		// return value IS the rising edge, computed after the SAME truncation
-		// the ledger stores by, so there is no separate key to keep in sync.
-		const isFirstOccurrence = incrementDegradationCount({
-			kind: SKILLS_DIR_MISSING_KIND,
-			subject: skillsDir,
+		// path) renotified on every call. `reportBundledResourceDirHealth`
+		// reads `incrementDegradationCount`'s own return value for the rising
+		// edge, computed after the SAME truncation the ledger stores by, so
+		// there is no separate key to keep in sync.
+		reportBundledResourceDirHealth(
+			SKILLS_DIR_MISSING_KIND,
+			skillsDir,
+			health,
+			"skills",
 			reason,
-			metadata:
-				health.status === "unreadable"
-					? { fsErrorCode: health.fsErrorCode }
-					: undefined,
-		});
-		if (isFirstOccurrence) {
-			notifyUserDegradation(
-				`pi-lens: registers zero skills — ${reason}.`,
-				"warning",
-			);
-		}
+		);
 	}
 
 	return [skillsDir];

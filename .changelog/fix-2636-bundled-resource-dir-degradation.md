@@ -10,8 +10,11 @@ section: Fixed
   bundled directory is absent, unreadable, or holds nothing — an installed
   copy missing the resource, or the entry file copied out of the package
   tree by a managed extension cache. A language with no bundled queries
-  authored for it by design (cobol, plsql) still reports nothing, since the
-  degradation checks the shared bundled ROOT's health, not any one
-  language's subdirectory. Previously these three sites silently resolved
-  to zero rules/queries with no signal, the same shape #2626 fixed for
-  `resources_discover`'s `skills/` directory.
+  authored for it by design (bash, dart, elixir, lua, ocaml, swift, zig)
+  still reports nothing, since the degradation checks the shared bundled
+  ROOT's health, not any one language's subdirectory. The ast-grep report
+  now also re-fires on the next scan after a session boundary, since
+  `AstGrepClient` is a per-process singleton the ledger reset would
+  otherwise make it permanently invisible after. Previously these three
+  sites silently resolved to zero rules/queries with no signal, the same
+  shape #2626 fixed for `resources_discover`'s `skills/` directory.

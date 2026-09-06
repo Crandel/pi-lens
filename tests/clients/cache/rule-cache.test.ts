@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as bundledResourceHealth from "../../../clients/bundled-resource-health.js";
 import {
 	BUNDLED_RULES_ROOT,
 	CACHE_VERSION,
@@ -13,6 +12,7 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../../clients/degradation-ledger.js";
+import * as treeSitterQueryLoader from "../../../clients/tree-sitter-query-loader.js";
 import { ruleFilesForLanguage } from "../../../clients/tree-sitter-query-loader.js";
 import {
 	resetUserNotifier,
@@ -456,8 +456,14 @@ describe("RuleCache", () => {
  * `bundled-resource-health.test.ts`; these tests pin the CONSTRUCTOR's
  * WIRING to it. `BUNDLED_RULES_ROOT` is a module-load-time constant fixed to
  * THIS repo's real, healthy install layout, so the unhealthy branch is
- * exercised by spying on `classifyBundledResourceDir`'s return value rather
- * than faking `import.meta.url`.
+ * exercised by spying on `getBundledQueriesRootHealth`'s return value (the
+ * memoized wrapper `rule-cache.ts` actually calls, #2636 review F6) rather
+ * than faking `import.meta.url`. Spied via the `tree-sitter-query-loader.js`
+ * namespace import — `rule-cache.ts` calls it as a CROSS-module import, so
+ * the live-binding spy reaches it (confirmed empirically: spying on the
+ * SAME function from within `tree-sitter-query-loader.test.ts` does NOT
+ * intercept that module's own internal same-file call — see that file's
+ * tests for the fs-mock technique used there instead).
  */
 describe("RuleCache — bundled tree-sitter-queries root health (#2636)", () => {
 	const notified: Array<{ message: string; level: string | undefined }> = [];
@@ -490,14 +496,14 @@ describe("RuleCache — bundled tree-sitter-queries root health (#2636)", () => 
 	});
 
 	it("records a bounded degradation + notify when the bundled root is absent", () => {
-		const classifySpy = vi
-			.spyOn(bundledResourceHealth, "classifyBundledResourceDir")
+		const healthSpy = vi
+			.spyOn(treeSitterQueryLoader, "getBundledQueriesRootHealth")
 			.mockReturnValue({ status: "absent" });
 		const { cwd } = setupProject();
 
 		void new RuleCache("typescript", cwd);
 
-		expect(classifySpy).toHaveBeenCalledWith(BUNDLED_RULES_ROOT);
+		expect(healthSpy).toHaveBeenCalledTimes(1);
 		const group = degradationGroup();
 		expect(group).toBeDefined();
 		expect(group?.latestReasons.at(-1)?.subject).toBe(BUNDLED_RULES_ROOT);
@@ -509,8 +515,8 @@ describe("RuleCache — bundled tree-sitter-queries root health (#2636)", () => 
 
 	it("does not re-notify across repeated constructions in the same session", () => {
 		vi.spyOn(
-			bundledResourceHealth,
-			"classifyBundledResourceDir",
+			treeSitterQueryLoader,
+			"getBundledQueriesRootHealth",
 		).mockReturnValue({
 			status: "absent",
 		});

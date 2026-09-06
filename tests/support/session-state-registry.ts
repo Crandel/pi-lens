@@ -1267,6 +1267,8 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 		"project-scale base measurement, recomputed on its own inputs",
 	"sgconfig.ts":
 		"bundled ast-grep rule snapshots and baselines, shipped with the extension",
+	"tree-sitter-query-loader.ts":
+		"#2636 review F6: getBundledQueriesRootHealth's memo of the bundled rules/tree-sitter-queries root's health. Same class as package-root.ts's own getPackageRoot memo (not flagged by this scan since it's a Map, not a bare `let`): the underlying fact — does the package's bundled resource directory exist — is an INSTALL-time/host-derived one, fixed for the life of the process, not a session verdict. A session boundary cannot make the package's own on-disk layout change, so resetting this at session_start would only re-pay the readdirSync the #2636 review F6 memo exists to avoid on a per-dispatched-file hot path.",
 	"dispatch/runners/spotbugs.ts": "SpotBugs installation lookup, host-derived",
 	"generated-artifacts.ts":
 		"generated-file classification derived from path patterns",
@@ -1621,6 +1623,11 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"tree-sitter-shared.ts": 0,
 	// #2366: one bounded pending-delivery map, cleared at primary session_start.
 	"test-runner-delivery.ts": 1,
+	// #2636 review F6: getBundledQueriesRootHealth's memo (a bare module-scope
+	// `let`) plus its `_resetBundledQueriesRootHealthForTests` export (the
+	// scan's reset-signal detector) — see this file's EXEMPT_SESSION_STATE_FILES
+	// entry above for why it is exempt rather than registered.
+	"tree-sitter-query-loader.ts": 2,
 	"tui-fit.ts": 0,
 	"warm-attach.ts": 0,
 	// #2275 added `renderedDependencyDriftFiles` (the drained per-turn footer

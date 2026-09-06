@@ -41,24 +41,44 @@ export type BundledResourceHealth =
  * (`EACCES` and friends) — an unreadable directory might genuinely hold a
  * real resource pi-lens simply cannot read, so the honest report is "cannot
  * read it", never "nothing is there" (#2626 review F4).
+ *
+ * `countEntries` lets a caller supply its OWN notion of "found" — e.g.
+ * `skills-resolver.ts` counts pi-loadable skill entry points via
+ * `scanEntriesForSkills`, not a bare directory listing — while still sharing
+ * this function's ENOENT/EACCES/empty classification shell (#2636 review F4:
+ * that shell was duplicated character-for-character between the two modules
+ * before this parameter existed). The default counts plain directory
+ * entries, which is what every OTHER caller (ast-grep's rules dir, the
+ * bundled tree-sitter-queries root) actually wants.
  */
-export function classifyBundledResourceDir(dir: string): BundledResourceHealth {
-	let entries: string[];
+export function classifyBundledResourceDir(
+	dir: string,
+	countEntries: (dir: string) => number = (d) => fs.readdirSync(d).length,
+): BundledResourceHealth {
+	let entryCount: number;
 	try {
-		entries = fs.readdirSync(dir);
+		entryCount = countEntries(dir);
 	} catch (error) {
 		const fsErrorCode = (error as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
 		if (fsErrorCode === "ENOENT") return { status: "absent" };
 		return { status: "unreadable", fsErrorCode };
 	}
-	return entries.length > 0
-		? { status: "healthy", entryCount: entries.length }
+	return entryCount > 0
+		? { status: "healthy", entryCount }
 		: { status: "empty" };
 }
 
-function describeBundledResourceHealth(
+/**
+ * Render `health` as a reason string. `emptyDescription` lets a caller name
+ * what "nothing found" actually means for its own resource (skills' loader
+ * cares about `SKILL.md`, not bare directory entries); every other status's
+ * prose is shared verbatim, since ENOENT/EACCES mean the exact same thing
+ * regardless of which resource directory hit them.
+ */
+export function describeBundledResourceHealth(
 	health: BundledResourceHealth,
 	dir: string,
+	emptyDescription = `${dir} exists but holds nothing`,
 ): string {
 	switch (health.status) {
 		case "absent":
@@ -66,7 +86,7 @@ function describeBundledResourceHealth(
 		case "unreadable":
 			return `cannot read ${dir} (${health.fsErrorCode})`;
 		case "empty":
-			return `${dir} exists but holds nothing`;
+			return emptyDescription;
 		default:
 			// unreachable for the "healthy" case — callers only report unhealthy ones.
 			return `${dir}: unexpected health status`;
@@ -80,15 +100,21 @@ function describeBundledResourceHealth(
  * (not a hand-rolled Set) gates the notify to the rising edge, so a caller
  * invoked on every dispatch (e.g. `RuleCache`'s constructor) can call this
  * unconditionally without spamming the notify surface.
+ *
+ * `reasonOverride` lets a caller build a richer reason (skills-resolver.ts
+ * appends the entry file's directory) while still sharing the
+ * increment/notify mechanics below; the default is this module's own
+ * `describeBundledResourceHealth`.
  */
 export function reportBundledResourceDirHealth(
 	kind: DegradationKind,
 	dir: string,
 	health: BundledResourceHealth,
 	label: string,
+	reasonOverride?: string,
 ): void {
 	if (health.status === "healthy") return;
-	const reason = describeBundledResourceHealth(health, dir);
+	const reason = reasonOverride ?? describeBundledResourceHealth(health, dir);
 	const isFirstOccurrence = incrementDegradationCount({
 		kind,
 		subject: dir,
