@@ -1,0 +1,5 @@
+---
+section: Fixed
+---
+
+- **Isolate `build:dist`'s tsc npx invocation the same way as #2590's esbuild fix (refs #2590)** — `build:dist`'s `npx --yes -p typescript@7.0.2 tsc ...` used the exact same `npm exec --package` resolution mechanism as #2590's fixed esbuild spawn: it can match a same-version `typescript` copy nested anywhere in the project's dependency tree and skip the real install, leaving the child with no `tsc` binary on PATH. No dependency nests a matching `typescript@7.0.2` copy today, so this was not an active failure — it is a latent-class hardening applied as defense-in-depth against a future dependency bump nesting one, the same way #2590 fixed the collision that actually happened for esbuild. The tsc invocation now runs through a new `scripts/build-dist-tsc.mjs`, sharing a generalized `buildIsolatedExecInvocation`/`createIsolatedExecPrefix` builder (`scripts/lib/exec-isolation.mjs`) with the esbuild spawn: `cwd` stays the project root while `--prefix <fresh empty temp dir>` pins npm's local-tree lookup away from the project tree.
