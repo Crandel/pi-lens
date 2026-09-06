@@ -23,10 +23,18 @@
  * `resolveUnavailabilityRow` is the single wrapper all three
  * `runLspHandshake` unavailability sites now call (F3 — collapses three
  * near-identical inline blocks into one, tested once here).
+ *
+ * Review round 2, R2-F1 asked for the bulk of this file's near-identical
+ * `it` bodies to become one `it.each` table — done below.
  */
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	classifyInstallOutcome,
+	ensureFixtureTools,
+	pipCandidateUsable,
 	resolveUnavailabilityRow,
 } from "../../scripts/smoke-tools.mjs";
 
@@ -56,134 +64,140 @@ function deps(
 	};
 }
 
-describe("classifyInstallOutcome (#2638/#2661 F1)", () => {
-	it("a genuine npm failure (outcome: failed) is a fail row with the real reason", () => {
-		const result = classifyInstallOutcome(
-			"vscode-css-languageserver",
-			deps(() => ({
-				outcome: "failed",
-				reason: "npm ERR! code ENOVERSIONS\nnpm ERR! No versions available",
-			})),
-		);
-		expect(result.row).toBe("fail");
-		expect(result.detail).toContain("vscode-css-languageserver");
-		expect(result.detail).toContain("ENOVERSIONS");
-	});
+// { name, toolId, attempt, toolchainPresence, expectRow, expectContains?,
+//   expectNotContains? } — one row per `InstallAttempt.outcome` × toolchain
+// state combination this function distinguishes (#2661 round 2 R2-F1).
+const CASES: Array<{
+	name: string;
+	toolId: string;
+	attempt: SmokeInstallAttempt | undefined;
+	toolchainPresence?: Record<string, boolean>;
+	expectRow: "fail" | "skip";
+	expectContains?: string;
+}> = [
+	{
+		name: "a genuine npm failure (outcome: failed) is a fail row with the real reason",
+		toolId: "vscode-css-languageserver",
+		attempt: {
+			outcome: "failed",
+			reason: "npm ERR! code ENOVERSIONS\nnpm ERR! No versions available",
+		},
+		expectRow: "fail",
+		expectContains: "ENOVERSIONS",
+	},
+	{
+		// The exact reviewer probe: PI_LENS_DISABLE_TOOL_INSTALL=1.
+		name: "PI_LENS_DISABLE_TOOL_INSTALL=1 (outcome: declined) is a skip, never a fail",
+		toolId: "vscode-css-languageserver",
+		attempt: {
+			outcome: "declined",
+			reason: "installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
+		},
+		expectRow: "skip",
+	},
+	{
+		name: "an install-lock timeout (outcome: skipped) is a skip, never a fail",
+		toolId: "vscode-css-languageserver",
+		attempt: { outcome: "skipped", reason: "install lock held" },
+		expectRow: "skip",
+	},
+	{
+		name: "a project-trust decline (outcome: declined) is a skip, never a fail",
+		toolId: "vscode-css-languageserver",
+		attempt: {
+			outcome: "declined",
+			reason: "project trust: untrusted project",
+		},
+		expectRow: "skip",
+	},
+	{
+		name: "no attempt record at all is a skip",
+		toolId: "vscode-css-languageserver",
+		attempt: undefined,
+		expectRow: "skip",
+		expectContains: "no install attempt",
+	},
+	{
+		name: "a transient network failure (ENOTFOUND) is a skip, not a fail",
+		toolId: "vscode-css-languageserver",
+		attempt: {
+			outcome: "failed",
+			reason: "npm error ENOTFOUND registry.npmjs.org",
+		},
+		expectRow: "skip",
+		expectContains: "transient",
+	},
+	{
+		name: "a registry 5xx is a skip, not a fail",
+		toolId: "vscode-css-languageserver",
+		attempt: {
+			outcome: "failed",
+			reason: "npm error E503 Service Unavailable",
+		},
+		expectRow: "skip",
+	},
+	{
+		name: "ETIMEDOUT is treated as transient",
+		toolId: "vscode-css-languageserver",
+		attempt: { outcome: "failed", reason: "npm error ETIMEDOUT" },
+		expectRow: "skip",
+	},
+	{
+		name: "ECONNRESET is treated as transient",
+		toolId: "vscode-css-languageserver",
+		attempt: { outcome: "failed", reason: "npm error ECONNRESET" },
+		expectRow: "skip",
+	},
+	{
+		name: "EAI_AGAIN is treated as transient",
+		toolId: "vscode-css-languageserver",
+		attempt: { outcome: "failed", reason: "npm error EAI_AGAIN" },
+		expectRow: "skip",
+	},
+	{
+		name: "a genuine github-strategy failure stays a skip (toolchain-asset gap, unchanged)",
+		toolId: "rust-analyzer",
+		attempt: { outcome: "failed", reason: "no asset for this platform" },
+		expectRow: "skip",
+	},
+	{
+		name: "a genuine pip failure with the toolchain present is a fail",
+		toolId: "jedi-language-server",
+		attempt: { outcome: "failed", reason: "pip install failed" },
+		toolchainPresence: { pip: true },
+		expectRow: "fail",
+	},
+	{
+		name: "a genuine pip failure with the toolchain absent is a skip",
+		toolId: "jedi-language-server",
+		attempt: { outcome: "failed", reason: "pip install failed" },
+		toolchainPresence: { pip: false },
+		expectRow: "skip",
+	},
+	{
+		name: "a genuine gem failure with the toolchain present is a fail",
+		toolId: "some-gem-tool",
+		attempt: { outcome: "failed", reason: "gem install failed" },
+		toolchainPresence: { gem: true },
+		expectRow: "fail",
+	},
+];
 
-	// The exact three reviewer probes, reproduced directly.
-	it("PI_LENS_DISABLE_TOOL_INSTALL=1 (outcome: declined) is a skip, never a fail", () => {
-		const result = classifyInstallOutcome(
-			"vscode-css-languageserver",
-			deps(() => ({
-				outcome: "declined",
-				reason: "installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
-			})),
-		);
-		expect(result.row).toBe("skip");
-	});
-
-	it("an install-lock timeout (outcome: skipped) is a skip, never a fail", () => {
-		const result = classifyInstallOutcome(
-			"vscode-css-languageserver",
-			deps(() => ({ outcome: "skipped", reason: "install lock held" })),
-		);
-		expect(result.row).toBe("skip");
-	});
-
-	it("a project-trust decline (outcome: declined) is a skip, never a fail", () => {
-		const result = classifyInstallOutcome(
-			"vscode-css-languageserver",
-			deps(() => ({
-				outcome: "declined",
-				reason: "project trust: untrusted project",
-			})),
-		);
-		expect(result.row).toBe("skip");
-	});
-
-	it("no attempt record at all is a skip", () => {
-		const result = classifyInstallOutcome(
-			"vscode-css-languageserver",
-			deps(() => undefined),
-		);
-		expect(result.row).toBe("skip");
-		expect(result.detail).toContain("no install attempt");
-	});
-
-	// F2: transient/offline registry conditions.
-	it("a transient network failure (ENOTFOUND) is a skip, not a fail", () => {
-		const result = classifyInstallOutcome(
-			"vscode-css-languageserver",
-			deps(() => ({
-				outcome: "failed",
-				reason: "npm error ENOTFOUND registry.npmjs.org",
-			})),
-		);
-		expect(result.row).toBe("skip");
-		expect(result.detail).toContain("transient");
-	});
-
-	it("a registry 5xx is a skip, not a fail", () => {
-		const result = classifyInstallOutcome(
-			"vscode-css-languageserver",
-			deps(() => ({
-				outcome: "failed",
-				reason: "npm error E503 Service Unavailable",
-			})),
-		);
-		expect(result.row).toBe("skip");
-	});
-
-	it("ETIMEDOUT/ECONNRESET/EAI_AGAIN are all treated as transient", () => {
-		for (const errno of ["ETIMEDOUT", "ECONNRESET", "EAI_AGAIN"]) {
+describe("classifyInstallOutcome (#2638/#2661) — outcome × toolchain table", () => {
+	it.each(CASES)(
+		"$name",
+		({ toolId, attempt, toolchainPresence, expectRow, expectContains }) => {
 			const result = classifyInstallOutcome(
-				"vscode-css-languageserver",
-				deps(() => ({ outcome: "failed", reason: `npm error ${errno}` })),
+				toolId,
+				deps(() => attempt, toolchainPresence ? { toolchainPresence } : {}),
 			);
-			expect(result.row, errno).toBe("skip");
-		}
-	});
+			expect(result.row).toBe(expectRow);
+			if (expectContains) expect(result.detail).toContain(expectContains);
+		},
+	);
 
-	// Strategy/toolchain gate, after the outcome gate.
-	it("a genuine github-strategy failure stays a skip (toolchain-asset gap, unchanged)", () => {
-		const result = classifyInstallOutcome(
-			"rust-analyzer",
-			deps(() => ({ outcome: "failed", reason: "no asset for this platform" })),
-		);
-		expect(result.row).toBe("skip");
-	});
-
-	it("a genuine pip failure with the toolchain present is a fail", () => {
-		const result = classifyInstallOutcome(
-			"jedi-language-server",
-			deps(() => ({ outcome: "failed", reason: "pip install failed" }), {
-				toolchainPresence: { pip: true },
-			}),
-		);
-		expect(result.row).toBe("fail");
-	});
-
-	it("a genuine pip failure with the toolchain absent is a skip", () => {
-		const result = classifyInstallOutcome(
-			"jedi-language-server",
-			deps(() => ({ outcome: "failed", reason: "pip install failed" }), {
-				toolchainPresence: { pip: false },
-			}),
-		);
-		expect(result.row).toBe("skip");
-	});
-
-	it("a genuine gem failure with the toolchain present is a fail", () => {
-		const result = classifyInstallOutcome(
-			"some-gem-tool",
-			deps(() => ({ outcome: "failed", reason: "gem install failed" }), {
-				toolchainPresence: { gem: true },
-			}),
-		);
-		expect(result.row).toBe("fail");
-	});
-
-	// F5: detail is one line, capped.
+	// F5: detail is one line, capped — not a table row (a distinct dimension:
+	// formatting, not outcome × toolchain).
 	it("caps a multi-line reason to its first non-empty line, at 200 chars", () => {
 		const longLine = "x".repeat(250);
 		const result = classifyInstallOutcome(
@@ -198,6 +212,78 @@ describe("classifyInstallOutcome (#2638/#2661 F1)", () => {
 		expect(result.detail.length).toBeLessThan(300);
 	});
 });
+
+/**
+ * R2-F2: a python-family command answering a bare `--version` is NOT proof
+ * of a usable pip toolchain — `python3` is commonly present without the
+ * `pip` module on slim/manylinux base images, and `installPipTool` itself
+ * runs `python3 -m pip …`, which fails there. Real shim scripts on a
+ * throwaway PATH (not a mocked `child_process`) so this proves the ACTUAL
+ * subprocess invocation `pipCandidateUsable` makes, the same hermetic-shim
+ * technique `managed-tool-refresh.test.ts` uses.
+ */
+// POSIX shell shims — the authoritative Unit tests lane is ubuntu (AGENTS.md
+// platform rule); skipped on a Windows dev box rather than doubling the shim
+// technique for a lane this project does not run tests on.
+describe.skipIf(process.platform === "win32")(
+	"pipCandidateUsable (#2661 round 2 R2-F2)",
+	() => {
+		let binDir: string;
+		let restorePath: string | undefined;
+
+		beforeEach(() => {
+			binDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-pip-shim-"));
+			restorePath = process.env.PATH;
+		});
+
+		afterEach(() => {
+			process.env.PATH = restorePath;
+			fs.rmSync(binDir, { recursive: true, force: true });
+		});
+
+		function writeShim(name: string, script: string): void {
+			const file = path.join(binDir, name);
+			fs.writeFileSync(file, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+		}
+
+		it("python3 with no pip module: --version succeeds, -m pip fails → NOT usable", () => {
+			// Simulates Debian slim / manylinux: python3 present, pip module absent.
+			writeShim(
+				"python3",
+				[
+					'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then',
+					'  echo "No module named pip" >&2',
+					"  exit 1",
+					"fi",
+					'echo "Python 3.11.0"',
+				].join("\n"),
+			);
+			process.env.PATH = `${binDir}:${restorePath}`;
+			expect(pipCandidateUsable("python3")).toBe(false);
+		});
+
+		it("python3 WITH a working pip module is usable", () => {
+			writeShim(
+				"python3",
+				[
+					'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then',
+					'  echo "pip 24.0"',
+					"  exit 0",
+					"fi",
+					'echo "Python 3.11.0"',
+				].join("\n"),
+			);
+			process.env.PATH = `${binDir}:${restorePath}`;
+			expect(pipCandidateUsable("python3")).toBe(true);
+		});
+
+		it("a bare pip/pip3 candidate is checked with --version directly (unchanged)", () => {
+			writeShim("pip3", 'echo "pip 24.0"');
+			process.env.PATH = `${binDir}:${restorePath}`;
+			expect(pipCandidateUsable("pip3")).toBe(true);
+		});
+	},
+);
 
 describe("resolveUnavailabilityRow (#2661 F3)", () => {
 	it("returns the first genuine failure among several tool ids", () => {
@@ -239,5 +325,78 @@ describe("resolveUnavailabilityRow (#2661 F3)", () => {
 			"fallback skip detail",
 		);
 		expect(result).toEqual({ row: "skip", detail: "fallback skip detail" });
+	});
+});
+
+/**
+ * R2-F3: `getInstallAttempt` reads a module-global the installer keeps
+ * mutating. Reproduces the race directly: a `getInstallAttempt` stub whose
+ * answer for the SAME tool id changes between the first call (during
+ * `ensureFixtureTools`) and a later call (simulating a subsequent fixture's
+ * overlapping re-ensure rewriting failed→declined before classification
+ * runs) — the snapshot must freeze the FIRST answer.
+ */
+describe("ensureFixtureTools (#2661 round 2 R2-F3)", () => {
+	it("snapshots the attempt record at ensure-time, immune to a later rewrite", async () => {
+		let callCount = 0;
+		const getInstallAttempt = (_toolId: string): SmokeInstallAttempt => {
+			callCount += 1;
+			// First read (inside ensureFixtureTools): a genuine E404. Every
+			// later read (a stale live re-read would hit this): rewritten by
+			// an unrelated later `{allowInstall:false}` re-ensure.
+			return callCount === 1
+				? { outcome: "failed", reason: "npm ERR! code ENOVERSIONS" }
+				: { outcome: "declined", reason: "installation disabled" };
+		};
+		const ensureTool = async () => undefined; // always unavailable
+
+		const { unavailableTools, attemptSnapshots } = await ensureFixtureTools(
+			["vscode-css-languageserver"],
+			ensureTool,
+			getInstallAttempt,
+		);
+
+		expect(unavailableTools.has("vscode-css-languageserver")).toBe(true);
+		// The snapshot froze the FIRST (genuine-failure) answer...
+		expect(attemptSnapshots.get("vscode-css-languageserver")).toMatchObject({
+			outcome: "failed",
+		});
+		// ...so classifying from the snapshot still reds, even though a LIVE
+		// re-read at this point would now return "declined" (mutation this
+		// test would not have caught without the snapshot).
+		const result = classifyInstallOutcome("vscode-css-languageserver", {
+			getInstallAttempt: (id: string) => attemptSnapshots.get(id),
+			toolsById,
+			toolchainPresence: {},
+			pipCandidates: [],
+		});
+		expect(result.row).toBe("fail");
+		expect(getInstallAttempt("vscode-css-languageserver").outcome).toBe(
+			"declined",
+		); // proves the live source really did move on
+	});
+
+	it("records no snapshot and no unavailability for a tool that resolves", async () => {
+		const { unavailableTools, attemptSnapshots } = await ensureFixtureTools(
+			["vscode-css-languageserver"],
+			async () => "/path/to/binary",
+			() => ({ outcome: "succeeded" }),
+		);
+		expect(unavailableTools.size).toBe(0);
+		expect(attemptSnapshots.size).toBe(0);
+	});
+
+	it("calls onEnsured with the tool id and resolved path/undefined", async () => {
+		const calls: Array<[string, string | undefined]> = [];
+		await ensureFixtureTools(
+			["a", "b"],
+			async (id: string) => (id === "a" ? "/bin/a" : undefined),
+			() => ({ outcome: "failed", reason: "x" }),
+			(id: string, resolved: string | undefined) => calls.push([id, resolved]),
+		);
+		expect(calls).toEqual([
+			["a", "/bin/a"],
+			["b", undefined],
+		]);
 	});
 });

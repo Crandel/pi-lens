@@ -128,6 +128,12 @@ export function classifyInstallOutcome(
 	deps: ClassifyInstallOutcomeDeps,
 ): InstallOutcomeRow;
 /**
+ * Is this pip candidate command actually usable — `pip`/`pip3` via `--version`,
+ * a python-family command via `-m pip --version` (#2661 round 2 R2-F2: a bare
+ * `python3 --version` succeeds even with no `pip` module installed).
+ */
+export function pipCandidateUsable(command: string): boolean;
+/**
  * The row a fixture's `ensureTool` step should report: the first GENUINE
  * install failure among `toolIds` (`classifyInstallOutcome`), or a "skip"
  * carrying `fallbackSkipDetail` when every unavailable tool in the list is
@@ -139,6 +145,23 @@ export function resolveUnavailabilityRow(
 	deps: ClassifyInstallOutcomeDeps,
 	fallbackSkipDetail: string,
 ): InstallOutcomeRow;
+/**
+ * Ensures every tool in `toolIds`, returning which never resolved and a
+ * SNAPSHOT of each one's `getInstallAttempt` record taken the instant it was
+ * found unavailable — never a live reference read later (#2661 round 2
+ * R2-F3). `onEnsured`, when given, fires after each `ensureTool` call.
+ */
+export function ensureFixtureTools(
+	toolIds: readonly string[],
+	ensureTool: ((toolId: string) => Promise<string | undefined>) | undefined,
+	getInstallAttempt:
+		| ((toolId: string) => SmokeInstallAttempt | undefined)
+		| undefined,
+	onEnsured?: (toolId: string, resolved: string | undefined) => void,
+): Promise<{
+	unavailableTools: Set<string>;
+	attemptSnapshots: Map<string, SmokeInstallAttempt | undefined>;
+}>;
 export const FIXTURES: SmokeFixture[];
 export const LSP_FIXTURES: LspFixture[];
 export const FORMAT_FIXTURES: FormatFixture[];

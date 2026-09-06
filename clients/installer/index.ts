@@ -612,17 +612,9 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-html-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		// #2638 review: `vscode-html-languageserver-bin` (the bare package this
-		// id used to name) is the SAME class of defect the CSS entry above had —
-		// still resolves on npm (unlike vscode-css-languageserver's E404), but
-		// its published `bin` is named `html-languageserver`, not
-		// `vscode-html-language-server` (verified: `npm view
-		// vscode-html-languageserver-bin@1.4.0 bin`), and it has not been
-		// republished since 2018. The HTML server ships today inside
-		// `vscode-langservers-extracted` — the SAME family the css/json entries
-		// above already use — under the exact bin name this entry's
-		// checkCommand/binaryName already expect. Unpinned, matching the
-		// sibling entries; no engines.node floor exists on this package either.
+		// #2638: the bare `vscode-html-languageserver-bin` package's own `bin`
+		// is named `html-languageserver`, not this. Ships from the same
+		// `vscode-langservers-extracted` family the json/css entries use.
 		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-html-language-server",
 	},
@@ -707,16 +699,9 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-css-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		// `vscode-css-languageserver` (the bare package this id used to name) was
-		// unpublished from npm on 2021-07-22 (E404) — `ensureTool` for this id
-		// could never succeed (#2638). The CSS server ships today inside
-		// `vscode-langservers-extracted`, the SAME package the
-		// `vscode-json-language-server` entry below already installs, exposing
-		// `vscode-css-language-server` as one of its five bins (json/css/html/
-		// eslint/markdown — see the `isLspTransportRequiredError` doc comment
-		// above). Left unpinned like that sibling entry: `npm view
-		// vscode-langservers-extracted engines` reports no floor, so there is no
-		// EBADENGINE reason to pin it (unlike typescript-language-server, #2633).
+		// #2638: bare `vscode-css-languageserver` was unpublished (E404, 2021).
+		// Ships from `vscode-langservers-extracted`, unpinned (no engines.node
+		// floor) like the json/html entries in this same family.
 		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-css-language-server",
 	},

@@ -1444,12 +1444,35 @@ function commandOnPath(command) {
 }
 
 /**
+ * Is THIS pip candidate actually usable — not just present? `pip`/`pip3`
+ * answering `--version` IS proof; `python`/`python3` answering `--version`
+ * is NOT (#2661 review round 2, R2-F2: a python3-without-pip runner —
+ * Debian slim, manylinux base images — has a working `python3` but no `pip`
+ * module, so `installPipTool`'s OWN `python3 -m pip …` candidate fails while
+ * a bare `python3 --version` probe would misreport the toolchain as
+ * present). Probe the exact invocation the installer would run.
+ */
+export function pipCandidateUsable(command) {
+	const args =
+		command === "pip" || command === "pip3"
+			? ["--version"]
+			: ["-m", "pip", "--version"];
+	try {
+		execFileSync(command, args, { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Is a pip or gem toolchain reachable on this runner? For pip, tries every
  * candidate the installer itself would try (`pipCommandCandidates()`, #2661
- * review S5 — probing bare `pip` alone missed a `pip3`-only or
- * python-module-only runner); for gem, the installer uses a single `gem`
- * command. Cached per run in `toolchainPresence` (keyed by strategy) since
- * this only needs to run once even if several pip/gem tools are unavailable.
+ * review S5 — probing bare `pip` alone missed a `pip3`-only runner),
+ * verifying the pip MODULE specifically for a python-family command (R2-F2);
+ * for gem, the installer uses a single `gem` command. Cached per run in
+ * `toolchainPresence` (keyed by strategy) since this only needs to run once
+ * even if several pip/gem tools are unavailable.
  */
 function toolchainPresent(strategy, toolchainPresence, pipCandidates) {
 	const cached = toolchainPresence[strategy];
@@ -1457,7 +1480,7 @@ function toolchainPresent(strategy, toolchainPresence, pipCandidates) {
 	const present =
 		strategy === "gem"
 			? commandOnPath("gem")
-			: pipCandidates.some((cmd) => commandOnPath(cmd));
+			: pipCandidates.some((cmd) => pipCandidateUsable(cmd));
 	toolchainPresence[strategy] = present;
 	return present;
 }
@@ -1485,6 +1508,18 @@ function toolchainPresent(strategy, toolchainPresence, pipCandidates) {
  *    release asset is a real "this runner cannot install this" case.
  *
  * Every other case is `{ row: "skip", detail }` — the historical behavior.
+ *
+ * `toolchainPresent`'s pip probe (#2661 review round 2, R2-F2) runs the exact
+ * invocation `installPipTool` would for each candidate — `-m pip --version`
+ * for a python-family command, not a bare `--version` — so a python3-
+ * without-pip runner (Debian slim, manylinux base images: `python3` present,
+ * `pip` module absent) is correctly graded toolchain-ABSENT. Deliberately
+ * NOT short-circuited on `installPipTool`'s thrown message text: that
+ * function wraps EVERY pip failure — a truly-absent toolchain AND a genuine
+ * "package not found" error on an otherwise-working pip alike — in the same
+ * "no usable pip command found" prefix, so pattern-matching on it would
+ * reclassify every genuine pip install defect as toolchain-absent, exactly
+ * backwards from what this function exists to fix.
  */
 export function classifyInstallOutcome(toolId, deps) {
 	const { getInstallAttempt, toolsById, toolchainPresence, pipCandidates } =
@@ -1542,6 +1577,46 @@ export function resolveUnavailabilityRow(
 		if (outcome.row === "fail") return outcome;
 	}
 	return { row: "skip", detail: fallbackSkipDetail };
+}
+
+/**
+ * Ensure every tool in `toolIds`, returning which never resolved AND a
+ * SNAPSHOT (not a live reference) of each one's `getInstallAttempt` record
+ * taken the instant it was found unavailable (#2661 round 2 R2-F3).
+ *
+ * `getInstallAttempt` reads a module-global the installer keeps mutating —
+ * a later `{allowInstall:false}` re-ensure (e.g. from a DIFFERENT fixture
+ * whose `tools` overlaps this one) can rewrite `failed` → `declined` in
+ * place. Reading it live at classification time, potentially hundreds of
+ * lines and several `await`s after this loop ran, is a last-writer-wins race
+ * that can turn a real E404 into a false ⚠ skip. Snapshotting here, at the
+ * one moment this function KNOWS the record is fresh, removes the class —
+ * not reachable in today's single-pass nightly config, but a real one after
+ * #2606 lets tool-smoke's install lane run overlapping fixtures concurrently.
+ *
+ * `onEnsured(toolId, resolvedPathOrUndefined)`, when given, fires after each
+ * `ensureTool` call — the caller's own verbose-logging hook, kept out of this
+ * function so it stays testable without capturing console output.
+ */
+export async function ensureFixtureTools(
+	toolIds,
+	ensureTool,
+	getInstallAttempt,
+	onEnsured,
+) {
+	const unavailableTools = new Set();
+	const attemptSnapshots = new Map();
+	if (ensureTool) {
+		for (const toolId of toolIds) {
+			const resolved = await ensureTool(toolId);
+			if (!resolved) {
+				unavailableTools.add(toolId);
+				attemptSnapshots.set(toolId, getInstallAttempt?.(toolId));
+			}
+			onEnsured?.(toolId, resolved);
+		}
+	}
+	return { unavailableTools, attemptSnapshots };
 }
 
 /** Classify one target runner's outcome against the Step-1 bar. */
@@ -1655,12 +1730,10 @@ async function runLspHandshake({ langs, install, verbose }) {
 	// Computed lazily, once per run, the first time a pip/gem tool actually
 	// fails — most runs never touch this.
 	const toolchainPresence = {};
-	const classifyDeps = {
-		getInstallAttempt: getInstallAttempt ?? (() => undefined),
-		toolsById,
-		toolchainPresence,
-		pipCandidates,
-	};
+	// `getInstallAttempt` is intentionally NOT included here — each fixture
+	// below overrides it with a per-fixture snapshot (R2-F3); this base object
+	// carries only the parts that are safe to share across the whole run.
+	const classifyDeps = { toolsById, toolchainPresence, pipCandidates };
 
 	const selected = langs.length
 		? LSP_FIXTURES.filter((f) => langs.includes(f.lang))
@@ -1673,18 +1746,22 @@ async function runLspHandshake({ langs, install, verbose }) {
 	const lsp = getLSPService();
 	const rows = [];
 	for (const fx of selected) {
-		const unavailableTools = new Set();
-		if (install && ensureTool) {
-			for (const toolId of fx.tools ?? []) {
-				const resolved = await ensureTool(toolId);
-				if (!resolved) unavailableTools.add(toolId);
+		const { unavailableTools, attemptSnapshots } = await ensureFixtureTools(
+			fx.tools ?? [],
+			ensureTool,
+			getInstallAttempt,
+			(toolId, resolved) => {
 				if (verbose) {
 					console.error(
 						`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,
 					);
 				}
-			}
-		}
+			},
+		);
+		const fixtureClassifyDeps = {
+			...classifyDeps,
+			getInstallAttempt: (toolId) => attemptSnapshots.get(toolId),
+		};
 		const workspace = copyDirToTemp(fx.dir);
 		// #2369: every fixture's temp workspace is a fresh, unregistered session
 		// root. Register it unconditionally (not only for `disableServers`
@@ -1854,7 +1931,7 @@ async function runLspHandshake({ langs, install, verbose }) {
 					const outcome = resolveUnavailabilityRow(
 						toolList,
 						unavailableTools,
-						classifyDeps,
+						fixtureClassifyDeps,
 						`auxiliary ${auxIds.join(",")} unavailable (tool not installed; pass --install)`,
 					);
 					push(outcome.row, outcome.detail);
@@ -1891,7 +1968,7 @@ async function runLspHandshake({ langs, install, verbose }) {
 					const outcome = resolveUnavailabilityRow(
 						fx.tools ?? [],
 						unavailableTools,
-						classifyDeps,
+						fixtureClassifyDeps,
 						`${fx.expectServerId} unavailable (no client ready; pass --install or install ${(fx.tools ?? []).join(",")})`,
 					);
 					push(outcome.row, outcome.detail);
@@ -2015,7 +2092,7 @@ async function runLspHandshake({ langs, install, verbose }) {
 				const outcome = resolveUnavailabilityRow(
 					fx.tools ?? [],
 					unavailableTools,
-					classifyDeps,
+					fixtureClassifyDeps,
 					`no client ready in ${LSP_CLIENT_WAIT_MS}ms (server missing/slow; try --install)`,
 				);
 				push(outcome.row, outcome.detail);

@@ -4,7 +4,6 @@ import {
 	TOOLS,
 	getRefreshableManagedTools,
 	getToolVerificationTimeout,
-	pipCommandCandidates,
 } from "../../../clients/installer/index.js";
 
 // Use the real installer module, not any mock another test file registered.
@@ -374,19 +373,12 @@ describe("TOOLS registry consistency", () => {
 		});
 	});
 
-	// #2661 review S5: the tool-smoke lane's pip-toolchain-presence probe must
-	// try the SAME candidates `installPipTool` does (a second, independently
-	// guessed ladder that tried bare `pip` only missed a `pip3`-only or
-	// python-module-only runner) — `pipCommandCandidates()` is the one list
-	// both read.
-	it("pipCommandCandidates covers pip3/pip/python3/python on POSIX, pip/py/python on Windows", () => {
-		const candidates = pipCommandCandidates();
-		expect(Array.isArray(candidates)).toBe(true);
-		expect(candidates.length).toBeGreaterThan(0);
-		if (process.platform === "win32") {
-			expect(candidates).toEqual(["pip", "py", "python"]);
-		} else {
-			expect(candidates).toEqual(["pip3", "pip", "python3", "python"]);
-		}
-	});
+	// #2661 review round 2 (R2-F4): a literal-equality assertion on
+	// `pipCommandCandidates()`'s return value is a source-text mirror — it
+	// reds only if someone edits the array, proving nothing about whether the
+	// ladder actually WORKS on a runner missing a candidate. Deleted in favor
+	// of the behavioral coverage in `tests/scripts/smoke-tools-genuine-
+	// install-failure.test.ts` (the R2-F2 python-without-pip case), which
+	// exercises what this list is FOR — telling a real absent-toolchain
+	// runner from a present one — rather than restating its contents.
 });
