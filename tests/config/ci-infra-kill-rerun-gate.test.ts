@@ -24,20 +24,48 @@ import yaml from "../../clients/deps/js-yaml.js";
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOW_PATH = ".github/workflows/ci-infra-kill-rerun.yml";
 
-type ClassifyJob = { if?: unknown };
+type WorkflowStep = { run?: unknown };
+type ClassifyJob = { if?: unknown; steps?: unknown };
 type Workflow = { jobs?: { classify?: ClassifyJob } };
 
-function readClassifyIf(): string {
-	const workflow = yaml.load(
+function loadWorkflow(): Workflow {
+	return yaml.load(
 		readFileSync(resolve(REPO_ROOT, WORKFLOW_PATH), "utf8"),
 	) as Workflow;
-	const ifExpr = workflow.jobs?.classify?.if;
+}
+
+function readClassifyIf(): string {
+	const ifExpr = loadWorkflow().jobs?.classify?.if;
 	if (typeof ifExpr !== "string") {
 		throw new Error(
 			`${WORKFLOW_PATH}: jobs.classify.if is not a string (got ${typeof ifExpr})`,
 		);
 	}
 	return ifExpr;
+}
+
+// Review round 2, MUT J: the eligible-event set is duplicated in TWO places
+// -- the job's `if:` (which arms this job at all) and this step's own
+// `elif` (which decides whether to pass --allow-missing-pr) -- and only the
+// `if:` was under test. Dropping the `repository_dispatch` arm from the
+// `elif` leaves every other test green while a real dispatch run passes
+// neither --pr nor --allow-missing-pr, so the classifier throws and the
+// rerun never fires: #2668 again, with only a red classify job as signal.
+function readClassifyStepRun(): string {
+	const steps = loadWorkflow().jobs?.classify?.steps;
+	const classifyStep = Array.isArray(steps)
+		? (steps as WorkflowStep[]).find(
+				(step) =>
+					typeof step.run === "string" &&
+					step.run.includes("classify-ci-failure.mjs"),
+			)
+		: undefined;
+	if (typeof classifyStep?.run !== "string") {
+		throw new Error(
+			`${WORKFLOW_PATH}: no step running classify-ci-failure.mjs found`,
+		);
+	}
+	return classifyStep.run;
 }
 
 interface WorkflowRunContext {
@@ -184,5 +212,16 @@ describe("ci-infra-kill-rerun.yml classify job gate (#2668 review F3)", () => {
 		);
 		expect(withoutForkGuard).not.toBe(ifExpr);
 		expect(evaluateIf(withoutForkGuard, forkRow)).toBe(true);
+	});
+
+	// Review round 2, MUT J: the `if:` truth table above cannot see this --
+	// it only pins whether the JOB runs, not what the STEP's own `elif` does
+	// once it has. Both `push` and `repository_dispatch` must appear in the
+	// --allow-missing-pr branch, or a dispatch run silently gets neither
+	// --pr nor --allow-missing-pr and the classifier throws (#2668 again).
+	it("the step's --allow-missing-pr branch names both push and repository_dispatch (review round 2, MUT J)", () => {
+		const stepRun = readClassifyStepRun();
+		expect(stepRun).toContain('"$RUN_EVENT" == "push"');
+		expect(stepRun).toContain('"$RUN_EVENT" == "repository_dispatch"');
 	});
 });
