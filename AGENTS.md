@@ -169,6 +169,8 @@ Message-end stale attribution anchors the session id when a live ctx is handled,
 
 **PR body structure is advisory-linted.** Keep `Summary`, `Tests`, `Blast radius`, `Class sweep`, and `Observability` populated — plus `Test assessment` whenever the PR touches `tests/` (see "Test assessment and removal" under Test requirements); `scripts/check-pr-body.mjs` checks structure only, so reviewers still judge the answers.
 
+**Draw the blast radius as a call-tree diff (optional, text only; 2026-09-06).** Prose blast radius keeps missing callers. When a change touches a shared seam, the `Blast radius` section may carry a call-tree diff: the changed symbol, its callers above, its callees below, with `+`/`-` on the lines that moved (`resyncLspFile` / `  touchFile` / `+ getAuxiliaryClientsForFile`). A fix round that changes ordering or control flow shows the before/after as a flow diff of the same shape. The reviewer verifies the tree against grep, which is what the reviewer playbook's neighbourhood rule asks for. Never HTML, Mermaid, or diagrams for their own sake — the smallest text view that makes the reviewer's check mechanical.
+
 ## Contributing
 
 For human contributors and issue/PR authors, see `CONTRIBUTING.md` at the repo root. It covers the development workflow, how to add runners, LSP servers, formatters, and rules, and the issue/PR templates. This `AGENTS.md` is the durable agent context; `CONTRIBUTING.md` is the public contributor guide.
