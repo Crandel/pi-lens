@@ -2228,8 +2228,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"tools/effective-config.ts": 1,
 	"tools/lens-diagnostic-mark.ts": 2,
 	"tools/lens-diagnostics.ts": 10,
-	"tools/lsp-diagnostics.ts": 30,
-	"tools/lsp-navigation.ts": 33,
+	// #2598 lowered both by one: `collectDiagnosticsForFile` and
+	// `openFileBestEffort` each dropped their `await lspService.openFile(…)`
+	// arm — the fallback for "a service shape without touchFile", which the
+	// real `LSPService` never was.
+	"tools/lsp-diagnostics.ts": 29,
+	"tools/lsp-navigation.ts": 32,
 	"tools/module-report.ts": 3,
 	"tools/project-report.ts": 1,
 	"tools/symbol-search.ts": 1,
