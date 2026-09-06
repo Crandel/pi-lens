@@ -1490,6 +1490,16 @@ async function runLspHandshake({ langs, install, verbose }) {
 		"config.js",
 	);
 	const { initLSPConfig } = await import(pathToFileURL(configEntry).href);
+	const sessionRootsEntry = path.join(
+		repoRoot,
+		"dist",
+		"clients",
+		"lsp",
+		"session-roots.js",
+	);
+	const { isSessionRootRegistered } = await import(
+		pathToFileURL(sessionRootsEntry).href
+	);
 
 	let ensureTool;
 	if (install) {
@@ -1527,6 +1537,17 @@ async function runLspHandshake({ langs, install, verbose }) {
 			}
 		}
 		const workspace = copyDirToTemp(fx.dir);
+		// #2369: every fixture's temp workspace is a fresh, unregistered session
+		// root. Register it unconditionally (not only for `disableServers`
+		// fixtures) so `isOutsideAllSessionRoots` never declines this workspace's
+		// files just because an EARLIER fixture in the array happened to register
+		// its own (foreign) workspace first and flipped the registry from empty
+		// (fail-open) to non-empty. `disableServers` fixtures still reload below,
+		// after writing `.pi-lens/lsp.json`, so the disabled-server list they set
+		// is the one that lands in the cached config — this early call exists
+		// only for session-root registration, which `initLSPConfig` performs
+		// before anything else regardless of what config is on disk yet.
+		await initLSPConfig(workspace);
 		const absFile = path.join(workspace, fx.file);
 		if (fx.setup) {
 			if (verbose) {
@@ -1592,6 +1613,18 @@ async function runLspHandshake({ langs, install, verbose }) {
 					`[${fx.lang}] disabled [${fx.disableServers.join(",")}] via .pi-lens/lsp.json → expecting ${fx.expectServerId}`,
 				);
 			}
+		}
+		// Harness guard (#2369): every fixture must register its OWN workspace as
+		// a session root before it is touched. Without this, the ordering of
+		// `LSP_FIXTURES` becomes load-bearing — an earlier fixture that registers
+		// a foreign workspace flips `isOutsideAllSessionRoots` from empty
+		// (fail-open) to non-empty, and every later fixture that skipped
+		// registration is silently declined instead of failing loudly. This must
+		// never again depend on which fixtures happen to run first.
+		if (!isSessionRootRegistered(workspace)) {
+			throw new Error(
+				`[${fx.lang}] fixture workspace ${workspace} was touched without being registered as a session root (#2369) — every fixture must call initLSPConfig(workspace) before use`,
+			);
 		}
 		try {
 			if (!lsp.supportsLSP(absFile)) {
