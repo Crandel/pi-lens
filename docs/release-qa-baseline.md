@@ -152,9 +152,14 @@ be called a failure of that row. The activation failure is the verdict's own
 cause. (An earlier revision copied it onto all eleven rows as FAILs and wrote an
 empty evidence dir — a verdict with no witness, against the first hard rule.)
 
-**A row is PASS only if a witness was captured.** A probe that reports success
-and produces no artifact is recorded UNTESTED, not PASS; the hard rule is
-enforced in code, not just documented here.
+**A row is PASS only if its witness has something in it.** A probe that reports
+success and produces no artifact — or an EMPTY one — is recorded UNTESTED, not
+PASS, and the report's excerpt column carries the downgrade reason rather than
+the pass line. The empty case is the reachable one: every probe attaches a
+witness object on its pass path, but `install-selftest` passes on "exit 0 with
+no `[FAIL]` line", which a packaged selftest that printed nothing satisfies
+vacuously, and its witness is that same empty stdout. The check is on CONTENT,
+not on the presence of a file.
 
 A usage or self-check error (bad option, unparseable matrix, arithmetic
 mismatch) exits **4**. **Exit 2 is the EXPECTED verdict for a working-tree run**:

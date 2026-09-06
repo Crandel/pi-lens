@@ -40,6 +40,7 @@ import * as os from "node:os";
 import {
 	BASELINE_COLUMNS,
 	classifyRowOutcome,
+	classifySelftestOutput,
 	classifyRunFailure,
 	classifySkillsRegistration,
 	coverageArithmetic,
@@ -53,6 +54,7 @@ import {
 	parseSupplyArgs,
 	PINNED_ENV_KEYS,
 	pollToTerminal,
+	rowReportShows,
 	rowProbeRequest,
 	scratchEnv,
 	renderCoverageLine,
@@ -563,6 +565,23 @@ describe("release-QA scratch hermeticity (#2619 review F1)", () => {
 				fs.existsSync(path.join(ambient, ".pi-lens")),
 				"nothing should reach a home outside the scratch root",
 			).toBe(false);
+
+			// The negative half, wired rather than decorative (#2619 review N6):
+			// pack the SAME fixture under an UNPINNED env — what a call site gets
+			// when it builds `{...process.env}` itself instead of using
+			// scratchEnv — and watch the marker follow HOME into the ambient dir.
+			// Without this the positive assertion above is compatible with a
+			// fixture that always writes to the scratch root regardless of env,
+			// which would make the whole canary vacuous.
+			npm(["pack", "--json", "--pack-destination", root], fixture, {
+				...process.env,
+				HOME: ambient,
+				USERPROFILE: ambient,
+			});
+			expect(
+				fs.existsSync(path.join(ambient, ".pi-lens", "canary.log")),
+				"the fixture must actually resolve os.homedir() — otherwise the assertion above proves nothing",
+			).toBe(true);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 });
 		}
@@ -740,15 +759,87 @@ describe("release-QA verdict state space (#2619 review round 3)", () => {
 		expect(downgraded.detail).toContain("no witness");
 	});
 
-	it("C7: a PASS with a witness is left alone, and non-PASS outcomes pass through", () => {
+	it("C7: a PASS with a witness that shows something is left alone", () => {
 		const kept = finalizeRowOutcome(
 			{ outcome: "PASS", detail: "4 skills" },
 			"release-qa-evidence/skills-registered.json",
+			'{"commands":[…]}',
 		);
 		expect(kept).toEqual({ outcome: "PASS", detail: "4 skills" });
+	});
+
+	it("C7: non-PASS outcomes pass through untouched, witness or not", () => {
 		expect(
-			finalizeRowOutcome({ outcome: "SKIPPED", detail: "no ref" }, ""),
+			finalizeRowOutcome({ outcome: "SKIPPED", detail: "no ref" }, "", ""),
 		).toEqual({ outcome: "SKIPPED", detail: "no ref" });
+		expect(
+			finalizeRowOutcome({ outcome: "FAIL", detail: "0 skills" }, "p", ""),
+		).toEqual({ outcome: "FAIL", detail: "0 skills" });
+	});
+
+	it("C7b: a PASS whose witness file is EMPTY is downgraded to UNTESTED", () => {
+		// The reachable half (#2619 review N6): every shipped probe attaches a
+		// witness OBJECT on its pass path, so the absence check alone never
+		// fires. A 0-byte or whitespace-only witness shows nothing, and a row
+		// that shows nothing is not a witnessed pass.
+		for (const content of ["", "   ", "\n\t\n"]) {
+			const downgraded = finalizeRowOutcome(
+				{ outcome: "PASS", detail: "exit 0; 0 [FAIL] line(s); " },
+				"release-qa-evidence/install-selftest.txt",
+				content,
+			);
+			expect(downgraded.outcome).toBe("UNTESTED");
+			expect(downgraded.detail).toContain("its witness is empty");
+			expect(downgraded.detail).toContain("install-selftest.txt");
+			expect(downgraded.downgraded).toBe(true);
+		}
+	});
+
+	it("C7b: a downgraded row reports the reason, never the pass excerpt", () => {
+		// `shows` is what the report's last column prints. Leaving the probe's
+		// pass line there would put the claim back in the report that the
+		// downgrade just removed.
+		const downgraded = finalizeRowOutcome(
+			{ outcome: "PASS", detail: "exit 0" },
+			"release-qa-evidence/install-selftest.txt",
+			"",
+		);
+		const shows = rowReportShows(downgraded, "exit 0; 0 [FAIL] line(s); ");
+		expect(shows).toContain("its witness is empty");
+		expect(shows).not.toContain("0 [FAIL] line(s)");
+		// …and an ordinary row still shows the probe's own excerpt.
+		expect(rowReportShows({ detail: "reason" }, "4 skill command(s)")).toBe(
+			"4 skill command(s)",
+		);
+	});
+
+	it("C7b: install-selftest exiting 0 in silence does not ship as a pass", () => {
+		// The concrete row the reachable form was found on: `exit 0` with no
+		// `[FAIL]` line is satisfied VACUOUSLY by a selftest that printed
+		// nothing, and its witness is that same empty stdout.
+		const verdict = classifySelftestOutput(0, "");
+		expect(verdict.status).toBe("pass"); // the process really did succeed
+		const finalized = finalizeRowOutcome(
+			classifyRowOutcome(verdict),
+			"release-qa-evidence/install-selftest.txt",
+			"",
+		);
+		expect(finalized.outcome).toBe("UNTESTED");
+	});
+
+	it("C7b: a real selftest report still passes, and a [FAIL] line still fails", () => {
+		const good =
+			"  [PASS] dist/index.js (entry)\nselftest: 13 passed, 0 failed, 1 warned\n";
+		const verdict = classifySelftestOutput(0, good);
+		expect(verdict.status).toBe("pass");
+		expect(verdict.shows).toContain("selftest: 13 passed");
+		expect(
+			finalizeRowOutcome(classifyRowOutcome(verdict), "p.txt", good).outcome,
+		).toBe("PASS");
+		expect(
+			classifySelftestOutput(0, '  [FAIL] pi.skills "../../skills"\n').status,
+		).toBe("fail");
+		expect(classifySelftestOutput(1, good).status).toBe("fail");
 	});
 });
 

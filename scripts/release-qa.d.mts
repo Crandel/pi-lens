@@ -120,11 +120,28 @@ export function classifySkillsRegistration(
 	installedPkgDir: string,
 ): { status: string; detail: string; shows: string };
 
-/** Hard Rule 1 as code: a PASS with no witness is downgraded to UNTESTED. */
+/**
+ * Hard Rule 1 as code: a PASS whose witness is absent OR empty is downgraded
+ * to UNTESTED. The empty case is the reachable one — every shipped probe
+ * attaches a witness object on its pass path (#2619 review N6).
+ */
 export function finalizeRowOutcome(
 	classified: { outcome: string; detail: string },
 	witnessPath: string | undefined,
-): { outcome: string; detail: string };
+	witnessContent?: string,
+): { outcome: string; detail: string; downgraded?: boolean };
+
+/** The report's witness-excerpt column: the downgrade reason, or the probe's. */
+export function rowReportShows(
+	classified: { detail: string; downgraded?: boolean },
+	probeShows: string | undefined,
+): string;
+
+/** The install-selftest row's verdict from the packaged selftest's exit + stdout. */
+export function classifySelftestOutput(
+	code: number,
+	stdout: string,
+): { status: string; detail: string; shows: string };
 
 /**
  * Shell-free `npm` under the pinned scratch env.

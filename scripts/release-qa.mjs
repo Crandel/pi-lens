@@ -504,24 +504,80 @@ export function rowProbeRequest(run) {
 }
 
 /**
+ * The `install-selftest` row's verdict, as a pure function of the packaged
+ * selftest's exit code and stdout (#2619 review N6).
+ *
+ * Extracted so the empty-stdout cell is reachable in a test: a selftest that
+ * exits 0 having printed nothing satisfies "no `[FAIL]` line" vacuously. This
+ * function keeps that reading — the process DID succeed — and
+ * `finalizeRowOutcome` is the single place that refuses to call an empty
+ * witness a pass, rather than two overlapping guards for one property.
+ *
+ * @param {number} code
+ * @param {string} stdout
+ */
+export function classifySelftestOutput(code, stdout) {
+	const lines = String(stdout ?? "").split(/\r?\n/);
+	const failLines = lines.filter((line) => line.includes("[FAIL]"));
+	const summary = lines.find((line) => line.startsWith("selftest:")) ?? "";
+	const shows = `exit ${code}; ${failLines.length} [FAIL] line(s); ${summary}`;
+	return {
+		status: code === 0 && failLines.length === 0 ? "pass" : "fail",
+		detail: shows,
+		shows,
+	};
+}
+
+/**
  * Hard Rule 1, as code: a row is PASS only when an artifact SHOWS the pass
- * criterion (#2619 review, cell C7). A probe that reports success but captures
- * nothing is downgraded to UNTESTED rather than counted as a witnessed pass —
- * "it ran without throwing" is not a witness.
+ * criterion (#2619 review, cells C7 and C7b).
+ *
+ * The ABSENCE check alone is unreachable — every shipped probe attaches a
+ * witness object on its pass path, so `!witnessPath` never fires (#2619 review
+ * N6). The reachable failure is an EMPTY one: `install-selftest` passes on
+ * `exit 0` with no `[FAIL]` line, and writes the selftest's stdout as its
+ * witness, so a packaged selftest that exits 0 having printed nothing would
+ * PASS with a 0-byte evidence file and an empty excerpt — a green row showing
+ * literally nothing. Both are downgraded here.
+ *
+ * `downgraded` is set so the caller can replace the probe's pass excerpt with
+ * the reason: leaving `shows` as the (empty, or now-false) pass line would put
+ * the claim back in the report the downgrade just removed.
  *
  * @param {{ outcome: string, detail: string }} classified
  * @param {string | undefined} witnessPath
+ * @param {string | undefined} witnessContent
  */
-export function finalizeRowOutcome(classified, witnessPath) {
-	if (classified.outcome === OUTCOME.PASS && !witnessPath) {
+export function finalizeRowOutcome(classified, witnessPath, witnessContent) {
+	if (classified.outcome !== OUTCOME.PASS) return classified;
+	const empty = String(witnessContent ?? "").trim() === "";
+	if (!witnessPath || empty) {
 		return {
 			outcome: OUTCOME.UNTESTED,
-			detail:
-				"probe reported pass but captured no witness " +
-				"(hard rule: no witness, no verdict)",
+			detail: witnessPath
+				? "probe reported pass but its witness is empty " +
+					`(${witnessPath} has no content to show)`
+				: "probe reported pass but captured no witness",
+			downgraded: true,
 		};
 	}
 	return classified;
+}
+
+/**
+ * What the report's "what the witness shows" column prints for one row.
+ *
+ * A downgraded row (C7/C7b) shows the DOWNGRADE REASON, never the probe's pass
+ * excerpt: leaving the claim there would put back in the report exactly what
+ * the downgrade removed — a row reading UNTESTED beside a line asserting it
+ * passed.
+ *
+ * @param {{ detail: string, downgraded?: boolean }} classified
+ * @param {string | undefined} probeShows
+ */
+export function rowReportShows(classified, probeShows) {
+	if (classified.downgraded) return classified.detail;
+	return probeShows ?? classified.detail;
 }
 
 /**
@@ -1164,16 +1220,8 @@ const ROW_PROBES = {
 			stdout = `${err?.stdout ?? ""}${err?.stderr ?? ""}`;
 			code = typeof err?.status === "number" ? err.status : 1;
 		}
-		const failLines = stdout
-			.split(/\r?\n/)
-			.filter((line) => line.includes("[FAIL]"));
-		const summary =
-			stdout.split(/\r?\n/).find((line) => line.startsWith("selftest:")) ?? "";
-		const shows = `exit ${code}; ${failLines.length} [FAIL] line(s); ${summary}`;
 		return {
-			status: code === 0 && failLines.length === 0 ? "pass" : "fail",
-			detail: shows,
-			shows,
+			...classifySelftestOutput(code, stdout),
 			witness: { ext: "txt", content: stdout },
 		};
 	},
@@ -1728,16 +1776,21 @@ async function main() {
 			fs.writeFileSync(file, raw.witness.content ?? "");
 			witnessPath = path.relative(opts.out, file).replaceAll("\\", "/");
 		}
-		// Hard Rule 1 as code (cell C7): a pass with nothing to show is not a
-		// pass. Downgraded here rather than trusted.
-		const classified = finalizeRowOutcome(probeOutcome, witnessPath);
+		// Hard Rule 1 as code (cells C7/C7b): a pass with nothing to show — no
+		// witness, or an empty one — is not a pass. Downgraded here rather than
+		// trusted, and the report's excerpt becomes the reason, not the claim.
+		const classified = finalizeRowOutcome(
+			probeOutcome,
+			witnessPath,
+			raw.witness?.content,
+		);
 		results.push({
 			id: row.id,
 			outcome: classified.outcome,
 			detail: classified.detail,
 			implemented: attempted,
 			witnessPath: witnessPath || "—",
-			shows: raw.shows ?? classified.detail,
+			shows: rowReportShows(classified, raw.shows),
 		});
 		log(`  → ${formatOutcome(classified)}`);
 	}
