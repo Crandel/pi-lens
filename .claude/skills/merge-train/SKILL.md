@@ -126,7 +126,8 @@ operator's private notes, so a different orchestrator can run the same train.
   err twice is not the mark of a wise man." (2026-09-03: shapes 28–36 came out
   of one day's reviews this way.)
 - **Keep a lane ledger.** One file, one row per lane: issue/PR, worker id,
-  round, state, head SHA, merge-order note; a header line with the quota
+  round, state, head SHA, merge-order note, and for bug lanes
+  `caught by / should have been caught by`; a header line with the quota
   reading and the merged list. Update it on every dispatch, report and merge.
   It is what survives a context reset.
 - **A lane's worktree lives until its PR merges.** Pruning it after a report
@@ -148,6 +149,30 @@ operator's private notes, so a different orchestrator can run the same train.
 - **Maintainer trailing commits** are for intent-free deltas only (a literal
   NUL byte, a false comment, a missing PR-body heading); anything that changes
   what code MEANS goes through a fix round.
+- **Detection retrospective on every merged bug fix (2026-09-06).** The
+  catalog records the CODE lesson of a bug (a shape, a screen, a guard). Before
+  a bug-labelled lane's ledger row closes, the orchestrator also records the
+  DETECTION lesson in one line: which verification layer caught it (external
+  user, reviewer probe, CI job, governance sweep, install/compat/tool smoke,
+  dogfood, release gate) and which layer SHOULD have caught it earlier and at
+  what cost. If that layer does not exist, file it as an issue with the bug as
+  its named recurrence — the same standard shapes are held to. The ledger
+  carries a `caught by / should have been caught by` column. Record: #2587
+  shipped for four releases with zero skills loading; the shape lesson went
+  into AGENTS.md the same day, the layer lesson (no witnessed real-pi pass,
+  #2606) surfaced only because the maintainer brought an outside skill in.
+- **Harvest every reviewer's "Could not verify" and "Named output".** Those
+  sections hold the structural insights the probes could not close (a
+  runIf-conditional guard, a smoke section that never ran on a real runner, a
+  detector's boundary map). Each entry becomes, before merge, one of: an
+  issue, a ledger note with a reason, or a line in the PR body. Silence is not
+  a disposition.
+- **Session retrospective before the regroup.** One ledger block: what the
+  maintainer had to bring in from outside, why the process did not surface it,
+  and where the lesson was routed (contract, playbook, skill, issue). The
+  2026-09-06 entry: the autoqa witness/reachability rules and the release-QA
+  layer came from a maintainer link, not from the train's own retrospective
+  on #2587.
 - **Refill order** when the quota gate is open: p1 first, then the queued
   follow-ups in ledger order, then the program work (#2421 → #2416 → #2383/#195).
 
