@@ -288,12 +288,17 @@ const CONFIG_RESOLVED_PHASE = "config_resolved";
  * `config_resolution_pending` mark, the `config_resolved` row and claim, and
  * the release of that claim when the root is evicted.
  *
- * `path.resolve` FIRST, then `normalizeFilePath` (#2518 review F6). The two
- * are not interchangeable and neither alone is enough: `normalizeFilePath`
- * folds separators and Windows casing but is the IDENTITY on a POSIX path
- * that merely needs canonicalizing, so `"/proj/"` and `"/proj"` produced two
- * different claim keys — and `path.resolve` alone would leave the Windows
- * casing fold this key has needed since #2552. Resolving here rather than at
+ * Fold separators, THEN canonicalize, then fold again — in that order, and
+ * neither step alone is enough (#2518 review F6). `normalizeFilePath` folds
+ * separators and Windows casing but is the IDENTITY on a POSIX path that
+ * merely needs canonicalizing, so `"/proj/"` and `"/proj"` produced two
+ * different claim keys. `path.resolve` fixes that and nothing else — and it
+ * cannot run first: on POSIX a backslash is an ordinary filename character,
+ * so resolving `"/proj\\sub"` before folding yields
+ * `<process.cwd()>/proj\sub`, a different root entirely. That is the #2526 R2
+ * spelling case (`tests/clients/config-resolved-phase.test.ts`, "a /-vs-\
+ * spelling of one root does not buy a second row"), which caught exactly this
+ * ordering while it was wrong. Resolving here rather than at
  * each caller is what makes the keys identical BY CONSTRUCTION: the callers
  * do not agree today (`initLSPConfig` passes its registry-resolved cwd,
  * `clients/runtime-session.ts`'s two warm-path `loadLSPConfig` calls pass the
@@ -308,7 +313,10 @@ const CONFIG_RESOLVED_PHASE = "config_resolved";
  * exactly the claim `recordConfigResolved` took.
  */
 function configResolutionKey(cwd: string): string {
-	return normalizeFilePath(path.resolve(cwd));
+	// Fold first (separators, Windows casing), canonicalize second (trailing
+	// separators, relative segments), fold again so the result keeps the
+	// forward-slash shape every producer and the analyzer already compare on.
+	return normalizeFilePath(path.resolve(normalizeFilePath(cwd)));
 }
 
 /**
