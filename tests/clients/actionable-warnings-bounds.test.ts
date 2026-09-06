@@ -1,3 +1,4 @@
+// lsp-double: hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592
 /**
  * #2504 AC3 — `buildActionableWarningsReport` must be bounded.
  *

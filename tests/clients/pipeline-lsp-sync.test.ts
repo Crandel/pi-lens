@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gatedPromise, starveBudget } from "../support/fault-injection.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 vi.mock("../../clients/lsp/index.js", () => ({ getLSPService: vi.fn() }));
 
@@ -35,12 +36,15 @@ function mockService(
 	touchFile: () => Promise<unknown>,
 	isSpawnInFlight: () => boolean = () => false,
 ) {
-	vi.mocked(getLSPService).mockReturnValue({
-		supportsLSP: () => true,
-		touchFile: vi.fn(touchFile),
-		isSpawnInFlight: vi.fn(isSpawnInFlight),
-		getAuxiliaryClientsForFile: vi.fn().mockResolvedValue([]),
-	} as any);
+	const touch = vi.fn(touchFile);
+	const spawn = vi.fn(isSpawnInFlight);
+	vi.mocked(getLSPService).mockReturnValue(
+		makeLspServiceDouble({
+			supportsLSP: () => true,
+			touchFile: touch,
+			isSpawnInFlight: spawn,
+		}) as any,
+	);
 }
 
 beforeEach(() => {
@@ -215,12 +219,16 @@ describe("resyncLspFile — bounded pre-dispatch LSP sync", () => {
 	it("degrades to the old timeout wording, without throwing, when the service lacks isSpawnInFlight", async () => {
 		const dbgCalls: string[] = [];
 		const dbgSpy = (msg: string) => dbgCalls.push(msg);
-		vi.mocked(getLSPService).mockReturnValue({
-			supportsLSP: () => true,
-			touchFile: vi.fn(() => new Promise(() => {})),
-			getAuxiliaryClientsForFile: vi.fn().mockResolvedValue([]),
-			// isSpawnInFlight intentionally omitted — partial double / older shape.
-		} as any);
+		const hangingTouch = vi.fn(() => new Promise(() => {}));
+		// Deliberately ABSENT, not stubbed: this exercises the production
+		// fallback for an older host service shape. `omit` is the factory's
+		// first-class way to say that (#2582 F6) — a post-hoc `delete` on the
+		// returned object was untyped and invisible to the sweep.
+		const service = makeLspServiceDouble(
+			{ supportsLSP: () => true, touchFile: hangingTouch },
+			{ omit: ["isSpawnInFlight"] },
+		);
+		vi.mocked(getLSPService).mockReturnValue(service as any);
 
 		await resyncLspFile("/proj/a.ts", "content", true, false, getFlag, dbgSpy);
 
@@ -235,14 +243,63 @@ describe("resyncLspFile — bounded pre-dispatch LSP sync", () => {
 		expect(abandoned?.metadata?.reason).toBe("timeout");
 	});
 
+	// #2582 F3 — the #1766 F3 invariant, re-opened for a DIFFERENT method.
+	// #2540 put the auxiliary kick-off ahead of the primary `touchFile` inside
+	// resyncLspFile's swallow-all catch, so anything that threw out of
+	// auxiliary acquisition (here: a double whose `getAuxiliaryClientsForFile`
+	// returns undefined, so `.catch` is read off undefined) aborted the WHOLE
+	// resync before the primary sync ever started — no touch, and no
+	// lsp_sync_abandoned record for the stall. Auxiliary warmup is a
+	// best-effort overlap; it must never pre-empt the primary sync.
+	it("starts the primary touch and still records the stall when auxiliary acquisition throws", async () => {
+		const dbgCalls: string[] = [];
+		const dbgSpy = (msg: string) => dbgCalls.push(msg);
+		const order: string[] = [];
+		const hangingTouch = vi.fn(() => {
+			order.push("touchFile");
+			return new Promise(() => {});
+		});
+		// The reviewer's probe verbatim: a bare `vi.fn()` returns undefined, so
+		// the production `.catch(...)` reads `catch` off undefined and throws
+		// SYNCHRONOUSLY — the failure direction a plain `.catch` cannot cover.
+		const bareAux = vi.fn(() => {
+			order.push("getAuxiliaryClientsForFile");
+		});
+		vi.mocked(getLSPService).mockReturnValue(
+			makeLspServiceDouble({
+				supportsLSP: () => true,
+				touchFile: hangingTouch,
+				getAuxiliaryClientsForFile: bareAux,
+			}) as any,
+		);
+
+		await resyncLspFile("/proj/a.ts", "content", true, false, getFlag, dbgSpy);
+
+		expect(hangingTouch).toHaveBeenCalledTimes(1);
+		// Ordering is half the invariant: the primary didChange write goes out
+		// before any best-effort auxiliary work, so nothing the auxiliary path
+		// does synchronously can delay (or pre-empt) the edit's own sync.
+		expect(order).toEqual(["touchFile", "getAuxiliaryClientsForFile"]);
+		const joined = dbgCalls.join("\n");
+		expect(joined).not.toContain("after autofix error"); // did not fall into the catch
+		const abandoned = logLatencyMock.mock.calls
+			.map((call) => call[0])
+			.find((entry: any) => entry.phase === "lsp_sync_abandoned");
+		expect(abandoned).toBeDefined();
+		expect(abandoned?.metadata?.reason).toBe("timeout");
+	});
+
 	it("kicks off auxiliary server acquisition concurrently and unawaited (#2540)", async () => {
 		const neverResolvingAux = new Promise<never>(() => {});
 		const getAuxSpy = vi.fn().mockImplementation(() => neverResolvingAux);
-		vi.mocked(getLSPService).mockReturnValue({
-			supportsLSP: () => true,
-			touchFile: vi.fn().mockResolvedValue("done"),
-			getAuxiliaryClientsForFile: getAuxSpy,
-		} as any);
+		const completedTouch = vi.fn().mockResolvedValue("done");
+		vi.mocked(getLSPService).mockReturnValue(
+			makeLspServiceDouble({
+				supportsLSP: () => true,
+				touchFile: completedTouch,
+				getAuxiliaryClientsForFile: getAuxSpy,
+			}) as any,
+		);
 
 		const resyncPromise = resyncLspFile(
 			"/proj/a.ts",
