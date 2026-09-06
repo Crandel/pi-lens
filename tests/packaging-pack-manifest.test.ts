@@ -104,8 +104,21 @@ describe("published manifest carries no devDependencies", () => {
 			});
 			expect(
 				fs.existsSync(realInstallLog) ? fs.readFileSync(realInstallLog) : null,
-				"npm pack must not write into the real ~/.pi-lens/install.log (#2634)",
+				"npm pack must not write into the real ~/.pi-lens/install.log (#2634), " +
+					"or an unrelated concurrent writer touched it during this run",
 			).toEqual(realInstallLogBefore);
+			// The real-home assertion above is liveness-free on its own: drop
+			// `warm-loader-cache` from `prepare` entirely and it stays green just as
+			// happily as a correctly-redirected write does. Assert the SUCCESS path
+			// too — the record must land in the SCRATCH sink `scratchEnv(tmp)`
+			// pins, proving the seam actually ran and was actually redirected, not
+			// merely that nothing reached the real home (review round 1, F1).
+			expect(
+				fs.readFileSync(
+					path.join(tmp, "home", ".pi-lens", "install.log"),
+					"utf8",
+				),
+			).toContain("warm_loader_cache");
 			const filename = fs.readdirSync(tmp).find((f) => f.endsWith(".tgz"));
 			if (!filename) throw new Error("npm pack produced no tarball");
 			// tar with cwd + a relative path: GNU/bsd tar misread `C:...` as a remote host spec.
