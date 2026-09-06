@@ -37,7 +37,7 @@ function loggedPhase(phase: string): boolean {
 
 describe("event-loop hold (#2507)", () => {
 	beforeEach(() => {
-		logLatencyMock.mockClear();
+		logLatencyMock.mockReset();
 		_resetEventLoopHoldForTests();
 	});
 
@@ -188,6 +188,63 @@ describe("event-loop hold (#2507)", () => {
 			label: "lsp_diagnostics",
 			maxHoldMs: getEventLoopHoldMaxMs(),
 		});
+	});
+
+	it("a throwing latency sink cannot break the caller that took the hold", () => {
+		// #2649 verify F3, first half. `recordFirstArm` runs on the acquire path,
+		// so a broken sink used to throw straight out of `acquireEventLoopHold` —
+		// and `normalizeToolDefinition` takes the hold OUTSIDE its own try, so the
+		// tool call rejected with "sink broke" instead of returning its result.
+		// The house rule at `clients/runtime-tool-call.ts`: a guard that fails
+		// because its telemetry broke is worse than no guard.
+		logLatencyMock.mockImplementation(() => {
+			throw new Error("sink broke");
+		});
+
+		let release: (() => void) | undefined;
+		expect(() => {
+			release = acquireEventLoopHold("lsp_diagnostics");
+		}).not.toThrow();
+		// And the hold it handed back is a REAL one, not a swallowed no-op.
+		expect(_eventLoopHoldCountForTests()).toBe(1);
+		expect(_eventLoopKeepAliveForTests()).toEqual({
+			armed: true,
+			hasRef: true,
+		});
+		release?.();
+		expect(_eventLoopHoldCountForTests()).toBe(0);
+		expect(_eventLoopKeepAliveForTests().armed).toBe(false);
+	});
+
+	it("a throwing latency sink cannot strand a survivor un-re-armed", () => {
+		// #2649 verify F3, second half: the force-release log sits between the
+		// reap and the re-arm, so a throw there skipped `armForNextDeadline` and
+		// left the surviving hold referenced by nothing and never re-armed —
+		// the exact outcome the code's own comment names.
+		vi.useFakeTimers();
+		const maxMs = getEventLoopHoldMaxMs();
+		acquireEventLoopHold("lens_diagnostics");
+		vi.advanceTimersByTime(maxMs - 1_000);
+		acquireEventLoopHold("lsp_diagnostics");
+		logLatencyMock.mockImplementation(() => {
+			throw new Error("sink broke");
+		});
+
+		// The reap fires with the sink broken. Nothing may escape the timer
+		// callback either — an uncaught throw there takes the process down.
+		expect(() => vi.advanceTimersByTime(2_000)).not.toThrow();
+
+		expect(_eventLoopHoldCountForTests()).toBe(1);
+		expect(_eventLoopKeepAliveForTests()).toEqual({
+			armed: true,
+			hasRef: true,
+		});
+
+		// Re-armed for the survivor's OWN deadline, not merely left armed.
+		logLatencyMock.mockImplementation(() => undefined);
+		vi.advanceTimersByTime(maxMs);
+		expect(_eventLoopHoldCountForTests()).toBe(0);
+		expect(_eventLoopKeepAliveForTests().armed).toBe(false);
 	});
 
 	it("derives its bound from the longest legitimate operation's own ceiling", () => {

@@ -129,9 +129,12 @@ function armForNextDeadline(current: EventLoopHoldState): void {
 	for (const entry of current.holds.values()) {
 		soonest = Math.min(soonest, entry.acquiredAt + maxMs);
 	}
-	// At least 1ms: a deadline already in the past must fire on a later turn of
-	// the loop, never re-arm at 0 in a tight loop.
-	const delayMs = Math.max(1, soonest - Date.now());
+	// A past-due deadline is left negative on purpose: Node clamps any delay
+	// below 1ms to 1ms, so it fires on a later turn of the loop either way, and
+	// a hand-written floor here would be a guard naming a recurrence that
+	// cannot happen (#2649 verify F4 — probed: 5 re-arms at delay -5000
+	// completed in 5ms, and no test reds without the floor).
+	const delayMs = soonest - Date.now();
 	// NOT `unref()`'d — referencing the loop is this timer's entire job. It is
 	// also the failsafe: when it fires, whatever is stale is over either way.
 	current.timer = setTimeout(() => reapStaleHolds(), delayMs);
@@ -154,15 +157,45 @@ function disarmIfIdle(current: EventLoopHoldState): void {
 function reapStaleHolds(): void {
 	const current = state();
 	current.timer = undefined;
-	const maxMs = getEventLoopHoldMaxMs();
-	const now = Date.now();
-	const released: EventLoopHoldEntry[] = [];
-	for (const [holdId, entry] of current.holds) {
-		if (now - entry.acquiredAt <= maxMs) continue;
-		current.holds.delete(holdId);
-		released.push(entry);
+	try {
+		const maxMs = getEventLoopHoldMaxMs();
+		const now = Date.now();
+		const released: EventLoopHoldEntry[] = [];
+		for (const [holdId, entry] of current.holds) {
+			if (now - entry.acquiredAt <= maxMs) continue;
+			current.holds.delete(holdId);
+			released.push(entry);
+		}
+		if (released.length > 0) {
+			recordForceReleased(released, current.holds.size, maxMs, now);
+		}
+	} finally {
+		// A survivor is held by nothing until this re-arms — the drain — and
+		// forever if it never does — the leak. In a `finally` because this runs
+		// inside a timer callback, where anything that escapes is an uncaught
+		// exception, and because the round-2 code put the log between the reap
+		// and the re-arm: a throwing sink stranded the survivor (#2649 verify
+		// F3). The map is already consistent by here — entries are deleted
+		// before anything is logged.
+		armForNextDeadline(current);
 	}
-	if (released.length > 0) {
+}
+
+/**
+ * The force-release record, and its own absorption. Telemetry may not break
+ * the guard it observes — the house rule spelled at
+ * `clients/runtime-tool-call.ts`'s blocked-attribution cleanup: a guard that
+ * fails because its telemetry broke is worse than no guard. Nothing here has
+ * a fallback sink to escalate to; the keep-alive's correctness does not
+ * depend on the row being written.
+ */
+function recordForceReleased(
+	released: readonly EventLoopHoldEntry[],
+	stillHeld: number,
+	maxMs: number,
+	now: number,
+): void {
+	try {
 		const oldestAcquiredAt = Math.min(
 			...released.map((entry) => entry.acquiredAt),
 		);
@@ -174,14 +207,13 @@ function reapStaleHolds(): void {
 			metadata: {
 				maxHoldMs: maxMs,
 				releasedHolds: released.length,
-				stillHeld: current.holds.size,
+				stillHeld,
 				labels: [...new Set(released.map((entry) => entry.label))].slice(0, 8),
 			},
 		});
+	} catch {
+		// see the doc comment — a broken sink must not reach the reap path
 	}
-	// A survivor is held by nothing until this re-arms — the drain — and
-	// forever if it never does — the leak.
-	armForNextDeadline(current);
 }
 
 /**
@@ -194,14 +226,25 @@ function reapStaleHolds(): void {
  * has.
  */
 function recordFirstArm(entry: EventLoopHoldEntry, maxMs: number): void {
-	if (!claimPhaseOncePerSession(EVENT_LOOP_HOLD_ARMED_PHASE, "process")) return;
-	logLatency({
-		type: "phase",
-		phase: EVENT_LOOP_HOLD_ARMED_PHASE,
-		filePath: "",
-		durationMs: 0,
-		metadata: { label: entry.label, maxHoldMs: maxMs },
-	});
+	try {
+		if (!claimPhaseOncePerSession(EVENT_LOOP_HOLD_ARMED_PHASE, "process")) {
+			return;
+		}
+		logLatency({
+			type: "phase",
+			phase: EVENT_LOOP_HOLD_ARMED_PHASE,
+			filePath: "",
+			durationMs: 0,
+			metadata: { label: entry.label, maxHoldMs: maxMs },
+		});
+	} catch {
+		// This runs on the ACQUIRE path, and `normalizeToolDefinition` takes the
+		// hold outside its own try — so a throw here rejected the tool call with
+		// the sink's error instead of returning the tool's result (#2649 verify
+		// F3). Same house rule as `recordForceReleased` above: the hold is
+		// already taken and armed by this point, so absorbing the throw loses a
+		// log row and nothing else.
+	}
 }
 
 /**

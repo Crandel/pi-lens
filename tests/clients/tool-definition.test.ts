@@ -1,4 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// #2649 verify F3: the hold's own telemetry runs on the acquire path, and the
+// acquire runs OUTSIDE the wrapper's try — so a broken sink used to reject the
+// tool call. Mocked at the module boundary the hold actually writes through.
+const latencySink = { throws: false };
+vi.mock("../../clients/latency-logger.js", async (importActual) => ({
+	...(await importActual<typeof import("../../clients/latency-logger.js")>()),
+	logLatency: () => {
+		if (latencySink.throws) throw new Error("sink broke");
+	},
+}));
+
 import { normalizeToolDefinition } from "../../clients/tool-definition.js";
 import {
 	_eventLoopHoldCountForTests,
@@ -44,6 +56,7 @@ describe("normalizeToolDefinition", () => {
  */
 describe("normalizeToolDefinition — event-loop hold", () => {
 	afterEach(() => {
+		latencySink.throws = false;
 		_resetEventLoopHoldForTests();
 	});
 
@@ -111,6 +124,26 @@ describe("normalizeToolDefinition — event-loop hold", () => {
 			),
 		).resolves.toBe("ok");
 		expect(seen).toEqual(["call-1", { paths: ["a.py"] }, "self"]);
+	});
+
+	it("still settles the tool call when the latency sink throws", async () => {
+		// The verify's F3 shape, at the seam it was reported against: the hold is
+		// taken outside the wrapper's own try, so a throw from its telemetry
+		// surfaced as a REJECTED tool call ("sink broke") rather than the tool's
+		// result. A guard that breaks the call it protects because its telemetry
+		// broke is worse than no guard (`clients/runtime-tool-call.ts`).
+		latencySink.throws = true;
+		const tool = normalizeToolDefinition({
+			name: "sink_tool",
+			description: "Sink",
+			execute: async () => "result",
+		});
+
+		await expect((tool.execute as () => Promise<unknown>)()).resolves.toBe(
+			"result",
+		);
+		expect(_eventLoopHoldCountForTests()).toBe(0);
+		expect(_eventLoopKeepAliveForTests().armed).toBe(false);
 	});
 
 	it("leaves a definition with no execute alone", () => {
