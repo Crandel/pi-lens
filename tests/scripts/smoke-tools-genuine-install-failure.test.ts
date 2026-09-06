@@ -181,6 +181,13 @@ const CASES: Array<{
 		toolchainPresence: { gem: true },
 		expectRow: "fail",
 	},
+	{
+		name: "a genuine gem failure with the toolchain absent is a skip",
+		toolId: "some-gem-tool",
+		attempt: { outcome: "failed", reason: "gem install failed" },
+		toolchainPresence: { gem: false },
+		expectRow: "skip",
+	},
 ];
 
 describe("classifyInstallOutcome (#2638/#2661) — outcome × toolchain table", () => {
