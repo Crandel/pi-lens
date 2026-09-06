@@ -83,11 +83,12 @@ describe("lsp_diagnostics tool", () => {
 				getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
 				runWorkspaceDiagnostics: vi.fn(),
 			},
-			// `omit` is NOT decoration here: `openFileBestEffort` /
-			// `collectSingleFileDiagnostics` branch on
-			// `typeof …touchFile === "function"`, so a factory default silently
-			// moves this suite onto the touch arm. Proven: un-omitting `touchFile`
-			// reds 13 cases in this file (#2592).
+			// `omit` is NOT decoration here: tools/lsp-diagnostics.ts:789 branches
+			// on `typeof serviceWithTouch.touchFile === "function"`, so a factory
+			// default silently moves this suite off the `openFile` arm its cases
+			// assert on. Proven: un-omitting `touchFile` reds 12 of the 59 cases
+			// in this file (#2592). The cases that DO want the touch arm install
+			// `touchFile` on the double themselves.
 			//
 			// `getAdvertisedCommands` is deliberately NOT omitted even though the
 			// pre-#2592 double lacked it: clients/lsp/tsserver-sync.ts bails
