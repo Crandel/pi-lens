@@ -47,7 +47,7 @@ import { CacheManager } from "./clients/cache-manager.js";
 // the same way the per-dispatch path does, so a retired blocker stops gating
 // the commit.
 import { retireInlineBlockerAndResyncGuard } from "./clients/git-guard.js";
-import { resolvePackagePath } from "./clients/package-root.js";
+import { resolveSkillPaths } from "./clients/skills-resolver.js";
 import {
 	clearWidgetState,
 	exportWidgetState,
@@ -1798,12 +1798,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// module's own directory — under the compiled dist/ layout (#182) the module
 		// lives in dist/ but skills/ stays at the package root, so a module-relative
 		// join lands on the non-existent dist/skills/ and skills silently fail to load
-		// (#205). resolvePackagePath walks up to package.json, correct for both the
-		// source (index.ts at root) and dist (dist/index.js) layouts.
-		const skillsDir = resolvePackagePath(import.meta.url, "skills");
-
+		// (#205). resolveSkillPaths walks up to package.json (same as
+		// resolvePackagePath) and ALWAYS returns that path — pi handles an absent
+		// directory gracefully and the manifest may register the same dir — while
+		// separately recording a bounded skills-dir-missing degradation when pi's
+		// own discovery rule (root SKILL.md, nested SKILL.md, loose root .md) would
+		// load nothing there (#2626). Never turn the health check into a [] return:
+		// that inversion dropped real skills on four pi layouts in #2637 round 1.
 		return {
-			skillPaths: [skillsDir],
+			skillPaths: resolveSkillPaths(import.meta.url),
 		};
 	});
 
