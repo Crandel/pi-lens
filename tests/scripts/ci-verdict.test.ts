@@ -129,6 +129,22 @@ describe("computeVerdict — absent-check verdict is mergeable-aware (#2539 roun
 		expect(verdict.exitCode).toBe(EXIT_PENDING);
 	});
 
+	// #2664: the reported live scenario -- BOTH required rows absent (a base
+	// retargeted after open; ci.yml has no `edited` trigger, so neither check
+	// ever registers) with a MERGEABLE head. The issue claimed this exited 0;
+	// it already exits 3 (see the doc comment above computeVerdict), so this
+	// pins that exit code AND the issue's optional hint text, which is the
+	// one piece #2664 actually adds.
+	it("A5 (#2664): both required rows absent + MERGEABLE exits 3 with the retarget hint", () => {
+		const verdict = computeVerdict({ check_runs: [] }, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.rows.every((row) => !row.present)).toBe(true);
+		expect(verdict.reason).toContain("mergeable=MERGEABLE");
+		expect(verdict.reason).toContain(
+			"if the base was retargeted after this PR opened, push a commit or close/reopen to re-arm ci.yml",
+		);
+	});
+
 	it("DIRTY still takes priority over an independently failed sibling check, when CONFLICTING", () => {
 		const payload = {
 			check_runs: [

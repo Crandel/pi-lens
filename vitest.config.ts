@@ -349,6 +349,10 @@ const wallClockBudgetInclude = [
 	// #2613: the resolver CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT
 	// write are the subject under test; no in-process double is faithful.
 	"tests/scripts/resolve-newest-in-range-host.test.ts",
+	// #2668 review F2: two real `node --import <fetch-stub>` child-process
+	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
+	// wiring the library-level suite (in-process) cannot see.
+	"tests/scripts/classify-ci-failure-cli.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL

@@ -176,6 +176,30 @@ head before it re-runs the new claims. A fix round can silently retire a guard
 test went green under its own mutation); the fixer is asked to do the same, and
 the reviewer does not take that on trust.
 
+**A prescribed remedy carries its own class sweep.** When you prescribe a
+fix at one site, grep the sibling call sites and say whether the prescription
+covers them; if you did not, mark it "shape, not verified across callers" so
+the fixer knows to table it. #2642 r2 prescribed a per-caller normalization
+that missed two direct `loadLSPConfig` callers; the fixer's key-derivation
+table caught it and the verify confirmed the override. A prescription the
+fixer proves insufficient with a red is the fixer being right — verify the
+override on its merits, not against the prescription.
+
+**Exemptions added in a fix round are findings until cleared.** A round that
+resolves a red sweep by adding an entry to `DECLARED_EXCEPTIONS`,
+`EXEMPT_SESSION_STATE_FILES`, a hook-await pin or a generation-guard exemption
+must be judged on whether the sweep was correctly firing (silencing) or the
+new code is a legitimate member of the exempt class (registration). Say which,
+per entry, with the reason quoted (#2654 r2: two; #2649 r1: one; #2647 r1:
+a pin bump). The verify brief will ask; answer it unprompted.
+
+**Contract-only rounds are not re-verified** (merge-train round routing,
+2026-09-06). If every finding you raised is a body claim, a docstring, a
+record added with its test, or a test for existing behaviour, say so in the
+verdict ("all findings contract-only; merge on green after the round") so
+the orchestrator does not re-arm you by reflex. Any behaviour finding — a
+verdict, a guard direction, a lifecycle hook, a failsafe — keeps the verify.
+
 ## Materiality bar
 
 A finding must matter. Do not report: stylistic-consistency preferences,

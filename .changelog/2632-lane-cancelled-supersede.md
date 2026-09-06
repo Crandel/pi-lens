@@ -1,0 +1,5 @@
+---
+section: Fixed
+---
+
+- **Merge gate no longer false-fails on a concurrency-superseded cancelled check-run (closes #2632)** — `merge-train-lane.mjs`'s real `evaluateMergeGate` treated a discovered (non-required) check-run's `cancelled` conclusion the same as any other failure, but this repository's `cancel-in-progress: true` leaves a stale cancelled row as the only evidence for a check name for several minutes before its replacement posts (live-probed on PR #2607's "Record post-merge validation"). That row now holds the merge (a new `check-superseded` reason, re-evaluated on the lane's normal 10-minute/`check_suite` cadence, naming the check in the PR comment) instead of being read as a failure, via the same `isUncertainConclusion` predicate `ci-verdict.mjs` already used (#2618) — a required check's (`Unit tests`, `Lint & type-check`) `cancelled` conclusion still fails outright, and a genuinely failing check (including one superseding an unorderable cancelled duplicate) is never masked.

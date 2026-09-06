@@ -29,16 +29,17 @@
  * - rust-analyzer (Rust LSP) [GitHub release]
  * - golangci-lint (Go linting) [GitHub release]
  *
- * Manual install required (25+ tools):
- * - yaml-language-server: npm install -g yaml-language-server
- * - vscode-json-languageserver: npm install -g vscode-langservers-extracted
- * - bash-language-server: npm install -g bash-language-server
- * - svelte-language-server: npm install -g svelte-language-server
- * - vscode-css-languageserver: npm install -g vscode-langservers-extracted
- * - @prisma/language-server: npm install -g @prisma/language-server
- * - dockerfile-language-server: npm install -g dockerfile-language-server-nodejs
- * - @vue/language-server: npm install -g @vue/language-server
- * - And all language-specific servers (gopls, rust-analyzer, etc.)
+ * Every other managed tool (including several the list above omits, e.g.
+ * bash-language-server, yaml-language-server, svelte-language-server,
+ * @prisma/language-server, @vue/language-server, dockerfile-language-server-nodejs,
+ * and vscode-css-languageserver — all of which ARE auto-installed) is
+ * documented by the `TOOLS` array below, not restated here. #2638: a
+ * hand-kept "manual install" list naming specific package specs used to live
+ * in this comment, drifted from `TOOLS` (it named a since-unpublished npm
+ * package for the CSS entry, and several tools it called "manual" were
+ * already auto-install above) and nothing caught it. `TOOLS` is the single
+ * source of truth for every id, package, and strategy; deleted rather than
+ * re-derived, since a comment cannot be generated from code at write time.
  *
  * Strategies:
  * - npm packages via npx/bun
@@ -611,7 +612,7 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-html-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		packageName: "vscode-html-languageserver-bin",
+		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-html-language-server",
 	},
 	{
@@ -695,7 +696,7 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-css-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		packageName: "vscode-css-languageserver",
+		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-css-language-server",
 	},
 	{
@@ -1522,12 +1523,19 @@ export function getInstallFailureReason(toolId: string): string | undefined {
 /**
  * What the last install attempt for a tool actually DID (#1500 review).
  *
- * `installFailureReasons` cannot answer this and never could: it is a REFUSAL
- * map, written by the `PI_LENS_DISABLE_TOOL_INSTALL` branches and the install-lock
- * skip, and by nothing on the genuine-failure or success paths. Inferring
- * attempt-ness from it inverts the answer in both directions — a kill-switch
- * decline reads as a failed download, and a failed download reads as a policy
- * decision. So the outcome is recorded explicitly, at each branch that knows it.
+ * `installFailureReasons` cannot reliably answer this on its own: it started as
+ * a REFUSAL map (written by the `PI_LENS_DISABLE_TOOL_INSTALL` branches and the
+ * install-lock skip) and #2638 added writers on the npm/pip/gem genuine-failure
+ * paths too (so a caller that specifically needs the installer's own error TEXT
+ * for a KNOWN failure — e.g. the tool-smoke lane's row detail — can read it),
+ * but it still says nothing for github/maven/archive failures, and a decline
+ * can still overwrite a stale failure's entry or vice versa across calls.
+ * Inferring ATTEMPT-NESS (did an install even run) from presence-in-this-map
+ * would still invert the answer in both directions — so that question is
+ * answered here instead, explicitly, at each branch that knows it, and a
+ * caller that needs to tell "genuinely failed" from "declined"/"skipped" MUST
+ * gate on `outcome` first and treat `installFailureReasons`/`reason` as detail
+ * only, never as the yes/no signal itself.
  *
  *   * `succeeded`  — an install ran and reported success.
  *   * `failed`     — an install ran and did not succeed. The retry candidate.
@@ -2145,7 +2153,7 @@ const lspTransportRequiredMatcher =
  * correctly reports "no pin" rather than mistaking the scope for a version.
  * Returns undefined when packageName has no explicit `@version` suffix.
  */
-function parsePinnedVersion(packageName: string): string | undefined {
+export function parsePinnedVersion(packageName: string): string | undefined {
 	const at = packageName.lastIndexOf("@");
 	if (at <= 0) return undefined;
 	return packageName.slice(at + 1) || undefined;
@@ -4055,10 +4063,10 @@ async function refreshPackageManagerManagedTool(
 		tool.installStrategy === "pip"
 			? // `-U` is the whole fix: without it pip treats the installed copy as
 				// satisfying the requirement and the day-one version never moves.
-				await installPipTool(tool.packageName, { upgrade: true })
+				await installPipTool(tool.id, tool.packageName, { upgrade: true })
 			: // `gem install` always fetches the newest version that satisfies the
 				// requirement, so the install command IS the upgrade command.
-				await installGemTool(tool.packageName);
+				await installGemTool(tool.id, tool.packageName);
 	if (!installed) {
 		return {
 			ok: false,
@@ -4555,7 +4563,33 @@ async function installArchiveTool(
 	}
 }
 
+/**
+ * Record a genuine package-manager install exception against `toolId` and
+ * log it — the one place `installNpmTool`/`installPipTool`/`installGemTool`'s
+ * catch blocks funnel through (#2661 review F3/Sonar: the three catches were
+ * byte-identical but for the strategy label, a duplication SonarCloud's new-
+ * code gate correctly flagged). The real error (registry E404, EBADENGINE, a
+ * network failure, "no version satisfies…") lands in `installFailureReasons`
+ * so a caller that distinguishes a genuine installer defect from a policy
+ * decline (the tool-smoke lane, #2638) sees the actual message, never the
+ * generic fallback `finishInstallAttempt` uses when nothing set it.
+ */
+function recordPackageManagerInstallException(
+	toolId: string,
+	strategyLabel: string,
+	packageName: string,
+	err: unknown,
+): undefined {
+	const message = (err as Error).message;
+	logSessionStart(
+		`auto-install ${strategyLabel} ${packageName}: exception: ${message}`,
+	);
+	installFailureReasons.set(toolId, message);
+	return undefined;
+}
+
 async function installNpmTool(
+	toolId: string,
 	packageName: string,
 	binaryName: string,
 	verificationArgs: string[] = ["--version"],
@@ -4717,16 +4751,33 @@ async function installNpmTool(
 
 		return binPath;
 	} catch (err) {
-		logSessionStart(
-			`auto-install npm ${packageName}: exception: ${(err as Error).message}`,
+		return recordPackageManagerInstallException(
+			toolId,
+			"npm",
+			packageName,
+			err,
 		);
-		return undefined;
 	}
 }
+/**
+ * The pip command ladder `installPipTool` tries, per platform, in priority
+ * order — exported so a caller that needs to know "is ANY pip toolchain
+ * reachable on this runner" (without running an install) probes the SAME
+ * candidates rather than a second, narrower guess (#2661 review F4/S5: the
+ * tool-smoke lane's own presence check tried bare `pip` only and missed a
+ * `pip3`-only or python-module-only runner).
+ */
+export function pipCommandCandidates(): string[] {
+	return process.platform === "win32"
+		? ["pip", "py", "python"]
+		: ["pip3", "pip", "python3", "python"];
+}
+
 /**
  * Install a pip package tool
  */
 async function installPipTool(
+	toolId: string,
 	packageName: string,
 	/**
 	 * Add `-U`, turning the install into an upgrade. Without it `pip install`
@@ -4743,30 +4794,17 @@ async function installPipTool(
 		const verb = options.upgrade
 			? ["install", "-U", "--user"]
 			: ["install", "--user"];
-		const pipCandidates = isWindows
-			? [
-					{ command: "pip", args: [...verb, packageName] },
-					{
-						command: "py",
-						args: ["-m", "pip", ...verb, packageName],
-					},
-					{
-						command: "python",
-						args: ["-m", "pip", ...verb, packageName],
-					},
-				]
-			: [
-					{ command: "pip3", args: [...verb, packageName] },
-					{ command: "pip", args: [...verb, packageName] },
-					{
-						command: "python3",
-						args: ["-m", "pip", ...verb, packageName],
-					},
-					{
-						command: "python",
-						args: ["-m", "pip", ...verb, packageName],
-					},
-				];
+		// Built from `pipCommandCandidates()` — the single source of truth this
+		// module and any other caller (the tool-smoke lane's toolchain-presence
+		// probe, #2661 review) share, rather than a second, independently
+		// maintained ladder that can drift.
+		const pipCandidates = pipCommandCandidates().map((command) => ({
+			command,
+			args:
+				command === "pip" || command === "pip3"
+					? [...verb, packageName]
+					: ["-m", "pip", ...verb, packageName],
+		}));
 
 		let lastError = "";
 		for (const candidate of pipCandidates) {
@@ -4874,14 +4912,17 @@ async function installPipTool(
 			`Failed to install ${packageName}: no usable pip command found (${lastError || "unknown error"})`,
 		);
 	} catch (err) {
-		logSessionStart(
-			`auto-install pip ${packageName}: exception: ${(err as Error).message}`,
+		return recordPackageManagerInstallException(
+			toolId,
+			"pip",
+			packageName,
+			err,
 		);
-		return undefined;
 	}
 }
 
 async function installGemTool(
+	toolId: string,
 	packageName: string,
 ): Promise<string | undefined> {
 	try {
@@ -4907,10 +4948,12 @@ async function installGemTool(
 
 		return packageName;
 	} catch (err) {
-		logSessionStart(
-			`auto-install gem ${packageName}: exception: ${(err as Error).message}`,
+		return recordPackageManagerInstallException(
+			toolId,
+			"gem",
+			packageName,
+			err,
 		);
-		return undefined;
 	}
 }
 
@@ -5026,6 +5069,7 @@ export async function installTool(toolId: string): Promise<boolean> {
 			case "npm": {
 				if (!tool.packageName || !tool.binaryName) return false;
 				const npmPath = await installNpmTool(
+					tool.id,
 					tool.packageName,
 					tool.binaryName,
 					tool.checkArgs,
@@ -5058,13 +5102,13 @@ export async function installTool(toolId: string): Promise<boolean> {
 
 			case "pip": {
 				if (!tool.packageName) return false;
-				const pipPath = await installPipTool(tool.packageName);
+				const pipPath = await installPipTool(tool.id, tool.packageName);
 				return finishInstallAttempt(tool.id, pipPath !== undefined, startedAt);
 			}
 
 			case "gem": {
 				if (!tool.packageName) return false;
-				const gemPath = await installGemTool(tool.packageName);
+				const gemPath = await installGemTool(tool.id, tool.packageName);
 				return finishInstallAttempt(tool.id, gemPath !== undefined, startedAt);
 			}
 

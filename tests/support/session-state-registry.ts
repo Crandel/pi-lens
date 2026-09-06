@@ -1267,6 +1267,8 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 		"project-scale base measurement, recomputed on its own inputs",
 	"sgconfig.ts":
 		"bundled ast-grep rule snapshots and baselines, shipped with the extension",
+	"tree-sitter-query-loader.ts":
+		"#2636 review round 2, F3: getBundledQueriesRootHealth's memo of the bundled rules/tree-sitter-queries root's health, keyed on the degradation ledger's OWN generation counter (bumped by resetDegradationLedger, wired into handleSessionStart) rather than 'compute once, forever' — round 1's version overclaimed that a bundled install location cannot change mid-process, but a managed-cache RELOCATION of a live install is exactly the failure #2587/#2626 investigated. It is invalidated by its own generation compare on every read (same shape as diagnostic-line-freshness.ts's mtime+size re-stat below), not by an explicit reset call this module would need to register — a session boundary is exactly when it re-probes, it just does so lazily on next access rather than eagerly at session_start.",
 	"dispatch/runners/spotbugs.ts": "SpotBugs installation lookup, host-derived",
 	"generated-artifacts.ts":
 		"generated-file classification derived from path patterns",
@@ -1636,6 +1638,11 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"tree-sitter-shared.ts": 0,
 	// #2366: one bounded pending-delivery map, cleared at primary session_start.
 	"test-runner-delivery.ts": 1,
+	// #2636 review F6: getBundledQueriesRootHealth's memo (a bare module-scope
+	// `let`) plus its `_resetBundledQueriesRootHealthForTests` export (the
+	// scan's reset-signal detector) — see this file's EXEMPT_SESSION_STATE_FILES
+	// entry above for why it is exempt rather than registered.
+	"tree-sitter-query-loader.ts": 2,
 	"tui-fit.ts": 0,
 	"warm-attach.ts": 0,
 	// #2275 added `renderedDependencyDriftFiles` (the drained per-turn footer

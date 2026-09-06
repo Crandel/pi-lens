@@ -2484,6 +2484,222 @@ describe("merge-lane gate (#2185)", () => {
 		).toMatchObject({ merge: true });
 	});
 
+	// #2632 verify round 1, F1: a discovered (non-required) check-run's
+	// CANCELLED conclusion is a concurrency-superseded artifact -- UNCERTAIN
+	// evidence, not proof of anything -- so it must HOLD (deny, re-evaluated
+	// next cycle), not silently read as green. `cancel-in-progress: true`
+	// (ci.yml:15-16) leaves a stale CANCELLED row as the ONLY entry for its
+	// name for several minutes before its replacement posts (live-probed on PR
+	// #2607's "Record post-merge validation": three check-suites on one
+	// commit, the oldest cancelled). `ci-checks.mjs`'s own doc comment on
+	// `isUncertainConclusion` says a caller gates it "to PEND rather than
+	// fail" -- round 1 of this fix instead dropped the row from `failing` and
+	// let it fall through to a green merge, which is wrong: `MERGEABLE_STATES`
+	// admits UNSTABLE, so the `failing` filter is the lane's ONLY gate on a
+	// non-required check, and a superseded row whose replacement later posts
+	// FAILURE would already have merged. F1's remedy is a dedicated HOLD
+	// (`CHECK_SUPERSEDED`) before `failing` runs.
+	it("RED PROOF (#2632 F1): a lone cancelled discovered check (no replacement posted yet) holds, does not merge green", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					...greenChecks(),
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "CANCELLED",
+						startedAt: "2026-09-06T17:21:06Z",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: false,
+			update: false,
+			silent: false,
+			reason: MERGE_GATE_REASON.CHECK_SUPERSEDED,
+		});
+		// F3: the hold names the superseded check, so the PR comment and step
+		// summary show WHY, not just "not green".
+		expect(gate.detail).toContain("Record post-merge validation");
+	});
+
+	// The four-cell table this hold has to get right (F1/F2), all on the SAME
+	// discovered check name "Record post-merge validation" unless noted:
+	it("cancelled + a newer SUCCESS sibling already posted: superseded row is invisible, merges green", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					...greenChecks(),
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "CANCELLED",
+						startedAt: "2026-09-06T17:21:06Z",
+					},
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "SUCCESS",
+						startedAt: "2026-09-06T17:25:29Z",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: true,
+			reason: MERGE_GATE_REASON.GREEN,
+		});
+	});
+
+	// Mutation contrast (both directions of the #2632 hold): a discovered
+	// check that genuinely FAILED (not cancelled, and not preceded by any
+	// cancellation) must still deny -- proves the hold is scoped to CANCELLED
+	// alone, not to "any discovered conclusion" or "isBlockingConclusion
+	// dropped entirely".
+	it("#2632's hold does not mask a discovered check that genuinely failed outright", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					...greenChecks(),
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "FAILURE",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: false,
+			reason: MERGE_GATE_REASON.FAILING_CHECK,
+		});
+	});
+
+	// "Superseded by a newer sibling" regression guard: once the replacement
+	// run HAS posted with a genuine FAILURE, `resolveLatestByName`'s own
+	// started-at ordering (already shipped, untouched by #2632) drops the
+	// older cancelled row before either the hold or the `failing` filter ever
+	// sees it -- the new failure must still deny, not be hidden behind the
+	// older cancellation.
+	it("a newer, genuinely-failing sibling still denies even though an older duplicate was cancelled", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					...greenChecks(),
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "CANCELLED",
+						startedAt: "2026-09-06T17:21:06Z",
+					},
+					{
+						name: "Record post-merge validation",
+						status: "COMPLETED",
+						conclusion: "FAILURE",
+						startedAt: "2026-09-06T17:25:29Z",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: false,
+			reason: MERGE_GATE_REASON.FAILING_CHECK,
+		});
+	});
+
+	// #2618's own rule stays intact: a REQUIRED check's CANCELLED conclusion
+	// gets NO grace, regardless of the #2632 hold above -- it never even
+	// reaches the hold or the `failing` filter, because the required-check
+	// loop above already denies (REQUIRED_CHECK_NOT_SUCCESS) the instant it
+	// sees anything but a literal SUCCESS. "Do not weaken the every
+	// non-advisory check gates rule" (#2632's own constraint) pinned here.
+	it("#2632 does not exempt a REQUIRED check's cancelled conclusion -- it still denies", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					{ name: "Unit tests", status: "COMPLETED", conclusion: "CANCELLED" },
+					{
+						name: "Lint & type-check",
+						status: "COMPLETED",
+						conclusion: "SUCCESS",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: false,
+			reason: MERGE_GATE_REASON.REQUIRED_CHECK_NOT_SUCCESS,
+		});
+	});
+
+	// #2632 verify round 1, F2 (closed by F1, pinned here): an unorderable tie
+	// between a CANCELLED row (cancelled while still QUEUED, so no `startedAt`
+	// at all) and a genuine FAILURE of the SAME name. `preferCheckRun`'s
+	// fail-closed fallback (neither concluded-success, no comparable
+	// timestamp) keeps whichever is the INCUMBENT -- i.e. array order decides
+	// which one `byName` resolves to. Both orders must still deny: the
+	// CANCELLED-wins order denies via the F1 hold (CHECK_SUPERSEDED, not a
+	// pass-through to green), and the FAILURE-wins order denies via
+	// `failing` (FAILING_CHECK) as always -- neither order may merge.
+	it("F2: an unorderable cancelled/FAILURE tie denies in BOTH array orders, never merges", () => {
+		const cancelled = {
+			name: "Record post-merge validation",
+			status: "COMPLETED",
+			conclusion: "CANCELLED",
+			startedAt: null,
+		};
+		const failure = {
+			name: "Record post-merge validation",
+			status: "COMPLETED",
+			conclusion: "FAILURE",
+			startedAt: null,
+		};
+		const cancelledFirst = gateOf(
+			approved({ checkRuns: [...greenChecks(), cancelled, failure] }),
+		);
+		expect(cancelledFirst.merge).toBe(false);
+		expect(cancelledFirst.reason).toBe(MERGE_GATE_REASON.CHECK_SUPERSEDED);
+		const failureFirst = gateOf(
+			approved({ checkRuns: [...greenChecks(), failure, cancelled] }),
+		);
+		expect(failureFirst.merge).toBe(false);
+		expect(failureFirst.reason).toBe(MERGE_GATE_REASON.FAILING_CHECK);
+	});
+
+	// Verify round 2, V1: `!isAdvisoryCheck(c.name) &&` in the `superseded`
+	// hold filter was vacuous -- deleting it left the suite green, because no
+	// prior fixture ever put an ADVISORY-named check into a lone cancelled
+	// state. Under `cancel-in-progress`, an advisory job (`oxfmt format check
+	// (advisory)`, SonarCloud, CodeQL, `greeting`, ...) is cancelled and
+	// re-triggered exactly like any other job -- without this clause, the hold
+	// would park the train PERMANENTLY on an advisory check's transient
+	// cancellation, which is worse than #2632's original bug (that one at
+	// least self-corrected once the replacement posted; a permanently-failing
+	// advisory job would never post one). Mirrors the existing "blocks on a
+	// failing non-advisory check and allows a failing advisory one" and "reads
+	// the (advisory) name suffix" cases below, for the CANCELLED conclusion
+	// specifically.
+	it("V1: a lone cancelled ADVISORY check does not hold the merge", () => {
+		const gate = gateOf(
+			approved({
+				checkRuns: [
+					...greenChecks(),
+					{
+						name: "oxfmt format check (advisory)",
+						status: "COMPLETED",
+						conclusion: "CANCELLED",
+						startedAt: "2026-09-06T17:21:06Z",
+					},
+				],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: true,
+			reason: MERGE_GATE_REASON.GREEN,
+		});
+	});
+
 	// Review round 1, F3: this repository marks a check advisory by NAME
 	// SUFFIX, not by a vendor allowlist. These four names are live job names,
 	// and the oxfmt one was genuinely FAILURE on this PR's own head, so the
