@@ -266,6 +266,12 @@ describe("resolveSkillPaths (#2626) — layout table against pi's real loader", 
 		expect(notified[0]?.level).toBe("warning");
 		expect(notified[0]?.message).toContain("pi-lens:");
 		expect(notified[0]?.message).toContain(expectedSkillsDir);
+		// #2636 review round 2, F1: the shipped notify sentence is user-visible
+		// product text #2626 chose deliberately — it names the exact SYMPTOM
+		// this issue exists to surface. Folding onto the shared
+		// reportBundledResourceDirHealth helper must never silently reword it
+		// to the helper's generic "<label> unavailable" template.
+		expect(notified[0]?.message).toContain("registers zero skills");
 		expect(skillsPhaseEntries()).toEqual([
 			expect.objectContaining({
 				phase: "skills_resolved",
@@ -287,7 +293,15 @@ describe("resolveSkillPaths (#2626) — layout table against pi's real loader", 
 		const group = skillsDegradationGroup();
 		expect(group?.count).toBe(1);
 		expect(group?.latestReasons.at(-1)?.subject).toBe(skillsDir);
+		// #2636 review round 2, F1/M7: the EMPTY-status reason names the
+		// skill-specific predicate ("no SKILL.md"), not the shared helper's
+		// generic "exists but holds nothing" — pins that
+		// `checkSkillsHealth`'s `emptyDescription` override is actually wired,
+		// not silently dropped in favor of the generic default (which would
+		// leave this whole file green otherwise).
+		expect(group?.latestReasons.at(-1)?.reason).toContain("no SKILL.md");
 		expect(notified).toHaveLength(1);
+		expect(notified[0]?.message).toContain("registers zero skills");
 	});
 
 	it("H: skills/.hidden/SKILL.md is skipped (dot-dir), same as pi's own loader — records the degradation", () => {

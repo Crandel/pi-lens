@@ -31,32 +31,6 @@ vi.mock("node:fs", async (importOriginal) => {
 	return { ...actual, readdirSync: vi.fn(actual.readdirSync) };
 });
 
-// #2626 review round 2, F5 pattern: capture logLatency calls to prove the
-// #2636 review F2 gate (the phase record fires ONLY when the bundled root is
-// unhealthy, never on the routine "this language has no bundled queries"
-// path) actually holds.
-const latencyEntries = vi.hoisted(() => {
-	return {
-		entries: [] as Array<{
-			phase?: string;
-			filePath?: string;
-			metadata?: Record<string, unknown>;
-		}>,
-	};
-});
-vi.mock("../../clients/latency-logger.js", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("../../clients/latency-logger.js")>();
-	return {
-		...actual,
-		logLatency: (entry: {
-			phase?: string;
-			filePath?: string;
-			metadata?: Record<string, unknown>;
-		}) => latencyEntries.entries.push(entry),
-	};
-});
-
 import * as fs from "node:fs";
 import {
 	getDegradationSummary,
@@ -394,7 +368,6 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 
 	beforeEach(() => {
 		notified.length = 0;
-		latencyEntries.entries.length = 0;
 		resetDegradationLedger();
 		_resetBundledQueriesRootHealthForTests();
 		vi.mocked(fs.readdirSync).mockClear();
@@ -415,12 +388,6 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 	function degradationGroup() {
 		return getDegradationSummary().find(
 			(g) => g.kind === "tree-sitter-queries-dir-missing",
-		);
-	}
-
-	function resolvedPhaseEntries() {
-		return latencyEntries.entries.filter(
-			(entry) => entry.phase === "tree_sitter_queries_resolved",
 		);
 	}
 
@@ -452,7 +419,6 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 		expect(ruleFilesForLanguage("bash", root)).toEqual([]);
 		expect(degradationGroup()).toBeUndefined();
 		expect(notified).toHaveLength(0);
-		expect(resolvedPhaseEntries()).toEqual([]);
 	});
 
 	// #2636 review F6: getBundledQueriesRootHealth's memo — a real,
@@ -471,6 +437,36 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 		expect(bundledRootCalls).toHaveLength(1);
 	});
 
+	// #2636 review round 2, F3: the memo must re-probe once per SESSION
+	// (never once forever) — a managed-cache relocation of a LIVE install is
+	// exactly the failure #2587/#2626 investigated, so a permanently-cached
+	// "absent" verdict from the first probe would never notice the directory
+	// coming back (or a healthy root going away) later in the same process.
+	it("re-probes exactly once after a session boundary (resetDegradationLedger), not on every call within it", () => {
+		mockBundledQueriesRootAbsent();
+		const root = makeTempRulesRoot();
+
+		ruleFilesForLanguage("bash", root);
+		ruleFilesForLanguage("lua", root);
+		expect(
+			vi
+				.mocked(fs.readdirSync)
+				.mock.calls.filter(([dir]) => dir === BUNDLED_QUERIES_ROOT),
+		).toHaveLength(1);
+
+		// Session boundary — runtime-session.ts's handleSessionStart calls
+		// this first thing in production.
+		resetDegradationLedger();
+
+		ruleFilesForLanguage("bash", root);
+		ruleFilesForLanguage("lua", root);
+		expect(
+			vi
+				.mocked(fs.readdirSync)
+				.mock.calls.filter(([dir]) => dir === BUNDLED_QUERIES_ROOT),
+		).toHaveLength(2);
+	});
+
 	it("never touches the bundled root's own readdirSync on the common, non-empty path (typescript)", () => {
 		const root = makeTempRulesRoot();
 		expect(ruleFilesForLanguage("typescript", root).length).toBeGreaterThan(0);
@@ -480,7 +476,7 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 		expect(bundledRootCalls).toHaveLength(0);
 	});
 
-	it("records a bounded degradation + notify + phase record when the bundled root is actually gone", () => {
+	it("records a bounded degradation + notify when the bundled root is actually gone", () => {
 		mockBundledQueriesRootAbsent();
 		const root = makeTempRulesRoot();
 
@@ -493,16 +489,6 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 		expect(notified[0].message).toContain(
 			"bundled tree-sitter query rules unavailable",
 		);
-		expect(resolvedPhaseEntries()).toEqual([
-			expect.objectContaining({
-				filePath: BUNDLED_QUERIES_ROOT,
-				metadata: expect.objectContaining({
-					languageId: "bash",
-					status: "absent",
-					entryCount: 0,
-				}),
-			}),
-		]);
 	});
 
 	it("collapses every zero-file language into ONE ledger row, not one per language", () => {
@@ -522,17 +508,28 @@ describe("ruleFilesForLanguage — bundled root health (#2636)", () => {
 		).toHaveLength(1);
 	});
 
-	// #2636 review F2: the phase record was mutation-vacuous — deleting the
-	// whole logLatency block left the degradation-ledger assertions above
-	// green, because they never inspect latency.log at all.
-	it("does not write a phase record on the healthy, common path (mutation target for F2's gate)", () => {
+	// #2636 review round 2, F2: the ONLY observability record for this branch
+	// is the degradation ledger row — no separate phase/latency record (see
+	// the source comment). `incrementDegradationCount` bounds durable writes
+	// to power-of-two milestones on its own; this pins that MANY occurrences
+	// of the same failure still write exactly ONE bounded row (not one raw
+	// row per dispatched file), directly answering "what would 200 touches
+	// of a broken root cost" — the ledger's in-memory `count` is the exact
+	// total regardless of how many of those are durably persisted.
+	it("tallies many occurrences into the ledger's exact count, never a raw per-call record", () => {
+		mockBundledQueriesRootAbsent();
 		const root = makeTempRulesRoot();
-		writeRule(
-			root,
-			"rules/tree-sitter-queries/go/present.yml",
-			"id: present\nquery: (identifier) @X\n",
-		);
-		expect(ruleFilesForLanguage("go", root).length).toBeGreaterThan(0);
-		expect(resolvedPhaseEntries()).toEqual([]);
+
+		for (let i = 0; i < 200; i++) {
+			ruleFilesForLanguage("bash", root);
+		}
+
+		expect(notified).toHaveLength(1);
+		expect(degradationGroup()?.count).toBe(200);
+		expect(
+			getDegradationSummary().filter(
+				(g) => g.kind === "tree-sitter-queries-dir-missing",
+			),
+		).toHaveLength(1);
 	});
 });

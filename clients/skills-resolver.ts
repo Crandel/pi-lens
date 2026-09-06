@@ -107,12 +107,20 @@ export function resolveSkillPaths(importMetaUrl: string): string[] {
 		// reads `incrementDegradationCount`'s own return value for the rising
 		// edge, computed after the SAME truncation the ledger stores by, so
 		// there is no separate key to keep in sync.
+		// #2636 review round 2, F1: the shipped notify sentence ("registers
+		// zero skills") is user-visible product text #2626 chose deliberately
+		// — it names the exact SYMPTOM this whole issue exists to surface, so
+		// the shared helper's generic "<label> unavailable" template must
+		// never silently replace it. Passed explicitly rather than inferred
+		// from `label` so this stays a per-caller decision, not a convention
+		// the next caller has to remember.
 		reportBundledResourceDirHealth(
 			SKILLS_DIR_MISSING_KIND,
 			skillsDir,
 			health,
 			"skills",
 			reason,
+			`pi-lens: registers zero skills — ${reason}.`,
 		);
 	}
 

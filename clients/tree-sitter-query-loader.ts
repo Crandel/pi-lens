@@ -13,7 +13,7 @@ import {
 	classifyBundledResourceDir,
 	reportBundledResourceDirHealth,
 } from "./bundled-resource-health.js";
-import { logLatency } from "./latency-logger.js";
+import { getDegradationLedgerGeneration } from "./degradation-ledger.js";
 import { resolvePackagePath } from "./package-root.js";
 
 /**
@@ -22,10 +22,7 @@ import { resolvePackagePath } from "./package-root.js";
  * `BUNDLED_RULES_ROOT`, #2636 review F4) rather than computed a second time,
  * so the "one ledger row, not two" claim for `tree-sitter-queries-dir-missing`
  * rests on reference equality, not merely two independently-resolved strings
- * that happen to match. Computed once at module load: it names an
- * INSTALL-time fact (the package layout), never a session-scoped one, so
- * unlike a "have I recorded this yet" latch it needs no session-boundary
- * reset — same class as `package-root.ts`'s own `getPackageRoot` memo.
+ * that happen to match.
  */
 export const BUNDLED_QUERIES_ROOT = resolvePackagePath(
 	import.meta.url,
@@ -34,21 +31,31 @@ export const BUNDLED_QUERIES_ROOT = resolvePackagePath(
 );
 
 let cachedBundledQueriesRootHealth: BundledResourceHealth | undefined;
+let cachedBundledQueriesRootHealthGeneration: number | undefined;
 
 /**
- * #2636 review F6: `BUNDLED_QUERIES_ROOT`'s health is an INSTALL-time fact
- * (the package layout), immutable for the life of the process — re-probing
- * it with `readdirSync` on every call would be real, MEASURED per-call cost
- * (4.2 µs) paid on a path both `RuleCache`'s constructor and this module's
- * own `ruleFilesForLanguage` reach on EVERY dispatched file
- * (`dispatch/runners/tree-sitter.ts`). Memoized once, same class as
- * `package-root.ts`'s own `getPackageRoot` memo — there is no
- * `resetDegradationLedger`-style session boundary this needs to clear on,
- * because the underlying fact (does the directory exist) cannot change
- * mid-process any more than the package's own install location can.
+ * #2636 review F6/round-2 F3: memoized, but keyed on the degradation
+ * ledger's OWN generation counter (bumped by `resetDegradationLedger`, wired
+ * into `handleSessionStart`) rather than "compute once, forever" — round 1's
+ * version overclaimed that the underlying fact "cannot change mid-process
+ * any more than the package's own install location can", but a managed
+ * extension cache RELOCATING a live install mid-process is exactly the
+ * failure #2587/#2626 investigated: a permanently-cached "absent" verdict
+ * from the FIRST probe would never notice the directory coming back (or
+ * disappearing later), the same silent-zero shape this issue exists to end.
+ * Re-probing once per SESSION (not once per call) is the right middle
+ * ground: a real, measured `readdirSync` cost (4.2 µs) is paid once per
+ * session rather than on every dispatched file — same generation-keyed
+ * pattern `clients/ast-grep-client.ts`'s `ensureRulesHealthReported` uses
+ * for its own per-instance re-check.
  */
 export function getBundledQueriesRootHealth(): BundledResourceHealth {
-	if (!cachedBundledQueriesRootHealth) {
+	const generation = getDegradationLedgerGeneration();
+	if (
+		cachedBundledQueriesRootHealth === undefined ||
+		cachedBundledQueriesRootHealthGeneration !== generation
+	) {
+		cachedBundledQueriesRootHealthGeneration = generation;
 		cachedBundledQueriesRootHealth =
 			classifyBundledResourceDir(BUNDLED_QUERIES_ROOT);
 	}
@@ -58,6 +65,7 @@ export function getBundledQueriesRootHealth(): BundledResourceHealth {
 /** Test-only: clear the memo so a scenario can simulate a different install layout. */
 export function _resetBundledQueriesRootHealthForTests(): void {
 	cachedBundledQueriesRootHealth = undefined;
+	cachedBundledQueriesRootHealthGeneration = undefined;
 }
 
 export function isDisabledQueryDirectoryName(name: string): boolean {
@@ -141,25 +149,25 @@ export function ruleFilesForLanguage(
 	// the extra classification in this COLD branch (never on the common,
 	// non-empty path), key it on the shared ROOT rather than this call's
 	// `languageId` (every language hitting an actually-missing root collapses
-	// into the SAME ledger row instead of one per language), and only WRITE a
-	// record/phase line when the root is actually unhealthy — one of the
-	// seven by-design-empty languages is touched routinely (any `.sh`/`.lua`
-	// edit), and a healthy-root row on every such touch would be per-dispatch
-	// log spam for a fact that never changes (review F2).
+	// into the SAME ledger row instead of one per language), and only RECORD
+	// when the root is actually unhealthy — one of the seven by-design-empty
+	// languages is touched routinely (any `.sh`/`.lua` edit).
+	//
+	// #2636 review round 2, F2: NO separate phase/latency row here (unlike
+	// the ast-grep/skills sibling sites, which log one PER CONSTRUCTION or
+	// PER REQUEST — a bounded cardinality). This branch runs on EVERY
+	// dispatched file while the root stays broken (AGENTS.md's "no raw
+	// per-occurrence log for repeats"): 200 touches of a by-design-empty
+	// language against a broken root would otherwise write 200 raw
+	// `latency.log` rows. `reportBundledResourceDirHealth`'s
+	// `incrementDegradationCount` already answers "did this run" AND "how
+	// many times" in a BOUNDED way — one row per session at count 1, then
+	// only at power-of-two milestones (1, 2, 4, 8, … so 200 occurrences write
+	// exactly 8 durable rows) — so a second, unbounded record here would add
+	// nothing the ledger row lacks.
 	if (files.size === 0) {
 		const health = getBundledQueriesRootHealth();
 		if (health.status !== "healthy") {
-			logLatency({
-				type: "phase",
-				phase: "tree_sitter_queries_resolved",
-				filePath: BUNDLED_QUERIES_ROOT,
-				durationMs: 0,
-				metadata: {
-					languageId,
-					status: health.status,
-					entryCount: 0,
-				},
-			});
 			reportBundledResourceDirHealth(
 				"tree-sitter-queries-dir-missing",
 				BUNDLED_QUERIES_ROOT,

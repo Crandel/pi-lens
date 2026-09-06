@@ -15,6 +15,7 @@ vi.mock("node:fs", async (importOriginal) => {
 import * as fs from "node:fs";
 import {
 	classifyBundledResourceDir,
+	describeBundledResourceHealth,
 	reportBundledResourceDirHealth,
 } from "../../clients/bundled-resource-health.js";
 import {
@@ -99,6 +100,38 @@ describe("classifyBundledResourceDir", () => {
 			status: "unreadable",
 			fsErrorCode: "EACCES",
 		});
+	});
+});
+
+// #2636 review round 2 (rail deliverable): pins the literal reason strings
+// every caller that does NOT override `emptyDescription`/`reasonOverride`
+// (ast-grep, tree-sitter — skills always overrides both, pinned in
+// skills-resolver.test.ts) ships in its degradation-ledger row and notify
+// message. Neither string exists on master (this shared module is new); this
+// is the pin that makes the shape a deliberate, reviewable one going forward.
+describe("describeBundledResourceHealth", () => {
+	it("names the directory for absent and unreadable, generically for empty by default", () => {
+		expect(describeBundledResourceHealth({ status: "absent" }, "/r")).toBe(
+			"no such directory: /r",
+		);
+		expect(
+			describeBundledResourceHealth(
+				{ status: "unreadable", fsErrorCode: "EACCES" },
+				"/r",
+			),
+		).toBe("cannot read /r (EACCES)");
+		expect(describeBundledResourceHealth({ status: "empty" }, "/r")).toBe(
+			"/r exists but holds nothing",
+		);
+	});
+
+	it("lets a caller replace the empty-case description without touching absent/unreadable", () => {
+		expect(
+			describeBundledResourceHealth({ status: "empty" }, "/r", "custom empty"),
+		).toBe("custom empty");
+		expect(
+			describeBundledResourceHealth({ status: "absent" }, "/r", "custom empty"),
+		).toBe("no such directory: /r");
 	});
 });
 

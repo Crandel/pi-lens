@@ -105,6 +105,13 @@ export function describeBundledResourceHealth(
  * appends the entry file's directory) while still sharing the
  * increment/notify mechanics below; the default is this module's own
  * `describeBundledResourceHealth`.
+ *
+ * `notifyMessage` lets a caller replace the DEFAULT `pi-lens: <label>
+ * unavailable — <reason>.` sentence with its own finished wording (#2636
+ * review round 2, F1): `skills-resolver.ts`'s shipped notify text ("registers
+ * zero skills") is user-visible product text #2626 chose deliberately — the
+ * SYMPTOM the notification exists to surface — and folding onto this shared
+ * helper must never silently reword a string a maintainer already tuned.
  */
 export function reportBundledResourceDirHealth(
 	kind: DegradationKind,
@@ -112,6 +119,7 @@ export function reportBundledResourceDirHealth(
 	health: BundledResourceHealth,
 	label: string,
 	reasonOverride?: string,
+	notifyMessage?: string,
 ): void {
 	if (health.status === "healthy") return;
 	const reason = reasonOverride ?? describeBundledResourceHealth(health, dir);
@@ -126,7 +134,7 @@ export function reportBundledResourceDirHealth(
 	});
 	if (isFirstOccurrence) {
 		notifyUserDegradation(
-			`pi-lens: ${label} unavailable — ${reason}.`,
+			notifyMessage ?? `pi-lens: ${label} unavailable — ${reason}.`,
 			"warning",
 		);
 	}
