@@ -41,6 +41,7 @@
  * already-installed servers unless --install is passed.
  */
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
+import { assertFixtureWorkspaceRegistered } from "./lib/lsp-fixture-session-guard.mjs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -228,6 +229,10 @@ for (const fx of fixtures) {
 
 async function probeFixture(fx, dst, row) {
 	fs.cpSync(path.join(repoRoot, fx.dir), dst, { recursive: true });
+	// #2369/#2655: every fixture registers its OWN workspace unconditionally —
+	// see lib/lsp-fixture-session-guard.mjs for why this can't be conditional
+	// on `disableServers`.
+	await initLSPConfig(dst);
 	const absFile = path.join(dst, fx.file);
 	if (fx.gitInit) {
 		try {
@@ -245,6 +250,7 @@ async function probeFixture(fx, dst, row) {
 	if (install && ensureTool) {
 		for (const t of fx.tools ?? []) await ensureTool(t).catch(() => undefined);
 	}
+	await assertFixtureWorkspaceRegistered(fx.lang, dst);
 	if (!lsp.supportsLSP(absFile)) {
 		row.mode = "no-lsp";
 		row.detail = "no LSP server registered for this file";

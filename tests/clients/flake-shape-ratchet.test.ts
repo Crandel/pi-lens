@@ -140,6 +140,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"npm ignoring a handed env, a child's own os.homedir(), and main()'s CLI exit code are each unobservable in-process",
 	},
+	// 2026-09-06 (#2369): the fixture-ordering defect (an earlier LSP_FIXTURES
+	// entry registering a foreign session root, declining a later one) lives
+	// in the CLI's own module-load order; only a real child process is the
+	// script under test.
+	"real-process-spawn:scripts/smoke-tools-lsp-fixture-registration.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the fixture-ordering defect lives in the CLI's own module-load order; no in-process call is the script under test",
+	},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */

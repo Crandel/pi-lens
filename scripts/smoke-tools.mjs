@@ -47,6 +47,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
+import { assertFixtureWorkspaceRegistered } from "./lib/lsp-fixture-session-guard.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -1527,6 +1528,17 @@ async function runLspHandshake({ langs, install, verbose }) {
 			}
 		}
 		const workspace = copyDirToTemp(fx.dir);
+		// #2369: every fixture's temp workspace is a fresh, unregistered session
+		// root. Register it unconditionally (not only for `disableServers`
+		// fixtures) so `isOutsideAllSessionRoots` never declines this workspace's
+		// files just because an EARLIER fixture in the array happened to register
+		// its own (foreign) workspace first and flipped the registry from empty
+		// (fail-open) to non-empty. `disableServers` fixtures still reload below,
+		// after writing `.pi-lens/lsp.json`, so the disabled-server list they set
+		// is the one that lands in the cached config — this early call exists
+		// only for session-root registration, which `initLSPConfig` performs
+		// before anything else regardless of what config is on disk yet.
+		await initLSPConfig(workspace);
 		const absFile = path.join(workspace, fx.file);
 		if (fx.setup) {
 			if (verbose) {
@@ -1593,6 +1605,10 @@ async function runLspHandshake({ langs, install, verbose }) {
 				);
 			}
 		}
+		// Harness guard (#2369/#2655): every fixture must register its OWN
+		// workspace as a session root before it is touched — see
+		// lib/lsp-fixture-session-guard.mjs for why.
+		await assertFixtureWorkspaceRegistered(fx.lang, workspace);
 		try {
 			if (!lsp.supportsLSP(absFile)) {
 				push("skip", "no LSP server registered for this file");
