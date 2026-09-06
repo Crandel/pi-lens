@@ -1149,30 +1149,19 @@ export async function resyncLspFile(
 				// old wording blamed as "slow/wedged" did not exist yet. Distinguish
 				// the two via a fresh, synchronous inFlight lookup so the record keeps
 				// the discriminating identity (which server, which lifecycle state).
-				// Guarded: a service shape lacking the method must degrade to the
-				// old "timeout"/slow-wedged wording, not throw into the catch below
-				// and suppress this record entirely (#1766 F3).
-				//
-				// #2592 re-evaluated this at the baseline's zero, as the earlier
-				// wording asked, and KEPT it. The hand-rolled population is gone
-				// (`tests/support/lsp-double-baseline.json` is `{}`), but the
-				// population was the EVIDENCE the risk was live, never the reason:
-				// the reason is that this line sits inside a swallow-all catch that
-				// owns the ONLY record of a real production stall, so one missing
-				// method anywhere upstream deletes the observability rather than
-				// degrading it. And "population zero" is a RATCHET result, not a
-				// proof: `tests/support/lsp-double-gate.ts` documents its own false
-				// negatives (class-instance doubles, `Object.assign`-built objects,
-				// doubles assembled in another module, indirection past
-				// MAX_RESOLUTION_DEPTH). Deleting a guard on the strength of a
-				// detector that names its own blind spots is the #2568 deletion
-				// lesson in reverse. Delete this typeof and the "lacks
-				// isSpawnInFlight" case in tests/clients/pipeline-lsp-sync.test.ts
-				// turns red.
+				// #2592: the `typeof lspService.isSpawnInFlight === "function"`
+				// hedge that used to wrap this call is GONE. It existed for one
+				// reason — 19 hand-rolled `getLSPService` doubles that lacked the
+				// method, whose TypeError would have landed in the catch below and
+				// suppressed this record entirely (#1766 F3) — and that population
+				// is now zero: every double is seeded from
+				// `makeLspServiceDouble`, `tests/support/lsp-double-baseline.json`
+				// is `{}`, and `tests/config/lsp-service-double-sweep.test.ts` reds
+				// on a fresh hand-rolled one. The real `LSPService` has always had
+				// the method (clients/lsp/index.ts), so the fallback was a test
+				// shape leaking into production — AGENTS.md shape 7.
 				const spawnInFlight =
-					!abort?.aborted &&
-					typeof lspService.isSpawnInFlight === "function" &&
-					lspService.isSpawnInFlight(filePath);
+					!abort?.aborted && lspService.isSpawnInFlight(filePath);
 				const reason = abort?.aborted
 					? "aborted"
 					: spawnInFlight

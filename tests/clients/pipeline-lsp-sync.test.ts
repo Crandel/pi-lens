@@ -211,23 +211,33 @@ describe("resyncLspFile — bounded pre-dispatch LSP sync", () => {
 		expect(abandoned?.metadata?.reason).toBe("timeout");
 	});
 
-	// #1766 review F3: a service double (or a future service shape) that lacks
-	// isSpawnInFlight must not throw. An unguarded call throws into the
-	// swallow-all catch in resyncLspFile, which suppresses the
-	// lsp_sync_abandoned record entirely — a stall that used to be logged
-	// (even with the wrong reason) would go completely silent.
-	it("degrades to the old timeout wording, without throwing, when the service lacks isSpawnInFlight", async () => {
+	// #1766 review F3, restated for the #2592 contract. The invariant is
+	// unchanged: a stall must never go UNRECORDED because the spawn-state
+	// discriminator misbehaved — an unguarded call that throws lands in
+	// resyncLspFile's swallow-all catch and takes the lsp_sync_abandoned
+	// record with it.
+	//
+	// What changed is where the invariant is enforced. Production used to
+	// hedge with `typeof lspService.isSpawnInFlight === "function"`, for the
+	// 19 hand-rolled doubles that lacked the method; #2592 migrated all of
+	// them onto `makeLspServiceDouble` and deleted the hedge, so the contract
+	// is now "every double carries the whole surface". This case pins THAT:
+	// a bare factory double — no isSpawnInFlight override, exactly what a
+	// test that does not care about spawn state writes today — still reaches
+	// the discriminator and still records the stall.
+	//
+	// It is the only case here that leans on the factory DEFAULT rather than
+	// an override, so dropping `isSpawnInFlight` from the factory's surface
+	// reds this and leaves the two cases above (which override it) green.
+	it("records the stall through the factory's default isSpawnInFlight, without falling into the catch", async () => {
 		const dbgCalls: string[] = [];
 		const dbgSpy = (msg: string) => dbgCalls.push(msg);
 		const hangingTouch = vi.fn(() => new Promise(() => {}));
-		// Deliberately ABSENT, not stubbed: this exercises the production
-		// fallback for an older host service shape. `omit` is the factory's
-		// first-class way to say that (#2582 F6) — a post-hoc `delete` on the
-		// returned object was untyped and invisible to the sweep.
-		const service = makeLspServiceDouble(
-			{ supportsLSP: () => true, touchFile: hangingTouch },
-			{ omit: ["isSpawnInFlight"] },
-		);
+		const service = makeLspServiceDouble({
+			supportsLSP: () => true,
+			touchFile: hangingTouch,
+		});
+		expect(typeof service.isSpawnInFlight).toBe("function");
 		vi.mocked(getLSPService).mockReturnValue(service as any);
 
 		await resyncLspFile("/proj/a.ts", "content", true, false, getFlag, dbgSpy);
