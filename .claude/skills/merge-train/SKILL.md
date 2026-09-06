@@ -68,6 +68,12 @@ reviewed, zero unreviewed merges). Apply it to each PR in the queue.
 6. **After each merge.** Master moved: check other open PRs for BEHIND/DIRTY,
    check in-flight agents for file overlap with the merged diff and nudge
    affected ones to merge origin/master before their next push.
+   Then prune the lane: `git worktree remove` every tree on the merged
+   branch (fixer AND reviewer trees, wherever they were created) and delete
+   the merged local branch. A lane's tree lives until its PR merges, not
+   after — the orchestrator owns this step; the reaper only sees
+   `.claude/worktrees/agent-*`, and on 2026-09-06 twenty-one merged trees
+   were still standing at the regroup.
 
 ## Queue ordering
 
