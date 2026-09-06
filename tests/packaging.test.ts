@@ -367,10 +367,17 @@ describe("pi-tui peer range covers every tested host version (#2586)", () => {
 	// the unit suite actually installs and runs against; "0.85.1" is also
 	// named literally per the issue's acceptance criterion, even though it
 	// coincides with the lockfile-derived entry after the devDependency bump.
+	// "0.84.1" pins the LOW end of the range explicitly (#2586 review F3):
+	// the lockfile-derived entry alone dedupes to a single 0.85.1 value once
+	// the devDependency is bumped, so a mutation that silently drops 0.84.x
+	// support (e.g. narrowing the range to "^0.85.0") would stay green
+	// without it. #257's install-selftest.mjs cites 0.84.1 as a version this
+	// repo already verified pi's package-manager resolver against, so it's
+	// not an arbitrary floor.
 	const lockVersion =
 		lock.packages?.["node_modules/@earendil-works/pi-tui"]?.version;
 	const testedVersions = [
-		...new Set([lockVersion, "0.85.1"].filter(Boolean)),
+		...new Set([lockVersion, "0.85.1", "0.84.1"].filter(Boolean)),
 	] as string[];
 
 	it("lists at least one tested version to guard", () => {
