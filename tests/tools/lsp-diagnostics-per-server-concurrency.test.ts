@@ -1,4 +1,3 @@
-// lsp-double: hand-rolled double on the lsp tools seam, burn-down tracked in #2592
 /**
  * #631: `lsp_diagnostics`' batch/directory scan (`collectBatchDiagnostics` in
  * tools/lsp-diagnostics.ts) used to fan files out across a flat, server-
@@ -23,6 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const mocked = vi.hoisted(() => ({ service: null as unknown }));
 const { getServersForFileWithConfig } = vi.hoisted(() => ({
@@ -96,12 +96,17 @@ describe("lsp_diagnostics batch — per-server serialization (#631)", () => {
 			return [];
 		});
 
-		mocked.service = {
-			touchFile,
-			getDiagnostics: vi.fn().mockResolvedValue([]),
-			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
-			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-		};
+		mocked.service = makeLspServiceDouble(
+			{
+				touchFile,
+				getDiagnostics: vi.fn().mockResolvedValue([]),
+				getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
+				getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+			},
+			// See lsp-diagnostics-cache.test.ts: absence of `getAdvertisedCommands`
+			// is what keeps clients/lsp/tsserver-sync.ts off this path (#2592).
+			{ omit: ["getAdvertisedCommands"] },
+		);
 	});
 
 	function writeFiles(names: string[]): string[] {

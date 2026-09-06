@@ -1,9 +1,9 @@
-// lsp-double: hand-rolled double on the lsp tools seam, burn-down tracked in #2592
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const mocked = vi.hoisted(() => ({
 	service: null as unknown,
@@ -60,28 +60,38 @@ describe("lsp_diagnostics tool", () => {
 		mocked.warmAttached = false;
 		mocked.attachedDiagnostics.mockReset();
 		reconcileScanDiagnosticsMock.mockReset();
-		mocked.service = {
-			openFile: vi.fn().mockResolvedValue(undefined),
-			getDiagnostics: vi.fn().mockImplementation(async (filePath: string) => {
-				if (filePath.endsWith("bad.ts")) {
-					return [
-						{
-							severity: 1,
-							message: "Type 'string' is not assignable to type 'number'.",
-							range: {
-								start: { line: 0, character: 16 },
-								end: { line: 0, character: 24 },
+		mocked.service = makeLspServiceDouble(
+			{
+				openFile: vi.fn().mockResolvedValue(undefined),
+				getDiagnostics: vi.fn().mockImplementation(async (filePath: string) => {
+					if (filePath.endsWith("bad.ts")) {
+						return [
+							{
+								severity: 1,
+								message: "Type 'string' is not assignable to type 'number'.",
+								range: {
+									start: { line: 0, character: 16 },
+									end: { line: 0, character: 24 },
+								},
+								source: "ts",
 							},
-							source: "ts",
-						},
-					];
-				}
-				return [];
-			}),
-			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
-			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-			runWorkspaceDiagnostics: vi.fn(),
-		};
+						];
+					}
+					return [];
+				}),
+				getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
+				getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+				runWorkspaceDiagnostics: vi.fn(),
+			},
+			// `omit` is NOT decoration: production observes the ABSENCE of both of
+			// these with a `typeof … === "function"` guard, so a factory default
+			// would silently switch this suite onto the other branch —
+			// `touchFile` at tools/lsp-diagnostics.ts (the openFile fallback the
+			// cases below assert on) and `getAdvertisedCommands` at
+			// clients/lsp/tsserver-sync.ts (the "older service shape" fallback
+			// the #611 case names in its title). #2592.
+			{ omit: ["touchFile", "getAdvertisedCommands"] },
+		);
 	});
 
 	it("uses attached diagnostics for a batch without local warm-up or touches", async () => {

@@ -11,13 +11,17 @@
  * every such test the full surface with focused overrides; this sweep keeps
  * the hand-rolled population from growing back.
  *
- * ## Why a ratchet and not a clean gate
+ * ## The baseline is EMPTY (#2592)
  *
- * 18 hand-rolled doubles in 17 files survive today, on seams this issue did
- * not scope (`tests/tools/lsp-*`, `tests/clients/mcp/*`,
- * `tests/clients/actionable-warnings*`, `dispatch/runners/pyright-*`). They
- * are pinned in `tests/support/lsp-double-baseline.json` and tracked to burn
- * down in #2592.
+ * #2585 shipped this as a ratchet over 18 surviving hand-rolled doubles in 17
+ * files. #2592 migrated all 17 onto the factory, so
+ * `tests/support/lsp-double-baseline.json` is now `{}` and the ratchet is a
+ * plain gate: with nothing pinned, EVERY live hit is a `new-file` red. The
+ * ratchet machinery is kept rather than deleted because it is what makes the
+ * gate re-openable — a future double that genuinely cannot use the factory
+ * pays the two-part admission below instead of being waved through, and the
+ * `vanished-pin` / `dead-admission` rules keep a half-burnt pin from
+ * lingering.
  *
  * ## The admission gate, and why it exists
  *
@@ -40,8 +44,9 @@
  * Round 3 tried to spare the seventeen inherited files by exempting an
  * `ORIGINAL_POPULATION` Set, and the verifier walked straight through it: a
  * fresh double, one baseline line, one line in the Set, 29/29 green. An exempt
- * tier IS a door. There is now one path in and one path out, and the seventeen
- * carry their headers like everything else.
+ * tier IS a door. There is one path in and one path out; the seventeen carried
+ * their headers like everything else until #2592 removed all three parts per
+ * file.
  *
  * ## The rules
  *
@@ -106,11 +111,13 @@ const BASELINE: Baseline = JSON.parse(
  * away, and it is the Screen clause of AGENTS.md shape 38 failing on the very
  * guard that introduced the shape.
  *
- * So there is ONE path in and one path out, for the seventeen files inherited
- * from #2582 exactly as for anything added tomorrow: a pin in
+ * So there is ONE path in and one path out, for anything added tomorrow
+ * exactly as for the seventeen files inherited from #2582: a pin in
  * `tests/support/lsp-double-baseline.json`, an entry here naming the issue
  * that tracks it, and a `// lsp-double: <reason>` header in the file itself.
  * Burn-down removes all three; the dead-admission rule reds on any leftover.
+ * #2592 burnt all seventeen down, which is why this map is now empty — and
+ * empty is the state the cell-by-cell tests below exist to keep meaningful.
  *
  * The old tier was also inverted in its own terms: keeping a burned-down file
  * in `ORIGINAL_POPULATION` PERMITTED a silent re-pin rather than preventing
@@ -119,42 +126,7 @@ const BASELINE: Baseline = JSON.parse(
  * That array is gone too: a migrated file that regrows a double is now a
  * `new-file` red like any other.
  */
-const ADMITTED: Readonly<Record<string, string>> = {
-	"tests/clients/actionable-warnings-bounds.test.ts":
-		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
-	"tests/clients/actionable-warnings-deferred-bounds.test.ts":
-		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
-	"tests/clients/actionable-warnings-history.test.ts":
-		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
-	"tests/clients/actionable-warnings-lsp-cache.test.ts":
-		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
-	"tests/clients/actionable-warnings.test.ts":
-		"hand-rolled double on the actionable-warnings deferred path, burn-down tracked in #2592",
-	"tests/clients/dispatch/runners/pyright-environment.test.ts":
-		"hand-rolled double on the dispatch-runner seam, burn-down tracked in #2592",
-	"tests/clients/lsp-document-symbols.test.ts":
-		"hand-rolled double on a seam #2582 did not scope, burn-down tracked in #2592",
-	"tests/clients/mcp/analyze.test.ts":
-		"hand-rolled double on the MCP session seam, burn-down tracked in #2592",
-	"tests/clients/mcp/session-context-eviction.test.ts":
-		"hand-rolled double on the MCP session seam, burn-down tracked in #2592",
-	"tests/clients/mcp/session-test-findings-retire.test.ts":
-		"hand-rolled double on the MCP session seam, burn-down tracked in #2592",
-	"tests/clients/mcp/session.test.ts":
-		"hand-rolled double on the MCP session seam, burn-down tracked in #2592",
-	"tests/clients/warm-attach-confirmation.test.ts":
-		"hand-rolled double on a seam #2582 did not scope, burn-down tracked in #2592",
-	"tests/tools/lsp-diagnostics-cache.test.ts":
-		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
-	"tests/tools/lsp-diagnostics-inferred-project.test.ts":
-		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
-	"tests/tools/lsp-diagnostics-per-server-concurrency.test.ts":
-		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
-	"tests/tools/lsp-diagnostics.test.ts":
-		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
-	"tests/tools/lsp-navigation.test.ts":
-		"hand-rolled double on the lsp tools seam, burn-down tracked in #2592",
-};
+const ADMITTED: Readonly<Record<string, string>> = {};
 
 /** Shortest text this gate will accept as a reason, in either half. */
 const MIN_REASON = 15;

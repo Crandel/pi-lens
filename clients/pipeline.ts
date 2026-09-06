@@ -1151,13 +1151,24 @@ export async function resyncLspFile(
 				// the discriminating identity (which server, which lifecycle state).
 				// Guarded: a service shape lacking the method must degrade to the
 				// old "timeout"/slow-wedged wording, not throw into the catch below
-				// and suppress this record entirely (#1766 F3). The recurrence is
-				// LIVE, not historical: 19 hand-rolled `getLSPService` doubles in 18
-				// test files still lack this method, every one of them pinned in
-				// `tests/support/lsp-double-baseline.json` and tracked to burn down
-				// in #2592. Delete this typeof and the "lacks isSpawnInFlight" case
-				// in tests/clients/pipeline-lsp-sync.test.ts turns red. Re-evaluate
-				// the guard when that baseline reaches zero, not before.
+				// and suppress this record entirely (#1766 F3).
+				//
+				// #2592 re-evaluated this at the baseline's zero, as the earlier
+				// wording asked, and KEPT it. The hand-rolled population is gone
+				// (`tests/support/lsp-double-baseline.json` is `{}`), but the
+				// population was the EVIDENCE the risk was live, never the reason:
+				// the reason is that this line sits inside a swallow-all catch that
+				// owns the ONLY record of a real production stall, so one missing
+				// method anywhere upstream deletes the observability rather than
+				// degrading it. And "population zero" is a RATCHET result, not a
+				// proof: `tests/support/lsp-double-gate.ts` documents its own false
+				// negatives (class-instance doubles, `Object.assign`-built objects,
+				// doubles assembled in another module, indirection past
+				// MAX_RESOLUTION_DEPTH). Deleting a guard on the strength of a
+				// detector that names its own blind spots is the #2568 deletion
+				// lesson in reverse. Delete this typeof and the "lacks
+				// isSpawnInFlight" case in tests/clients/pipeline-lsp-sync.test.ts
+				// turns red.
 				const spawnInFlight =
 					!abort?.aborted &&
 					typeof lspService.isSpawnInFlight === "function" &&

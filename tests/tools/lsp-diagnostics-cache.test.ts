@@ -1,4 +1,3 @@
-// lsp-double: hand-rolled double on the lsp tools seam, burn-down tracked in #2592
 /**
  * #671: `lsp_diagnostics`' batch/directory sweep (`collectBatchDiagnostics` /
  * `mapWithConcurrency` in tools/lsp-diagnostics.ts) used to call `touchFile`
@@ -19,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const mocked = vi.hoisted(() => ({ service: null as unknown }));
 const { getServersForFileWithConfig } = vi.hoisted(() => ({
@@ -69,13 +69,22 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 		});
 
 		touchFile = vi.fn().mockResolvedValue({ diags: [] });
-		mocked.service = {
-			touchFile,
-			getDiagnostics: vi.fn().mockResolvedValue([]),
-			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
-			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-			ensureWarmForSweep: vi.fn().mockResolvedValue({ performedWarmup: false }),
-		};
+		mocked.service = makeLspServiceDouble(
+			{
+				touchFile,
+				getDiagnostics: vi.fn().mockResolvedValue([]),
+				getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
+				getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+				ensureWarmForSweep: vi
+					.fn()
+					.mockResolvedValue({ performedWarmup: false }),
+			},
+			// `getAdvertisedCommands` is observed by ABSENCE at
+			// clients/lsp/tsserver-sync.ts:424 (`typeof … !== "function"` → the
+			// "older service shape" bail-out). A factory default would switch the
+			// tsserver-sync branch on under this suite's cache assertions. #2592.
+			{ omit: ["getAdvertisedCommands"] },
+		);
 	});
 
 	afterEach(() => {

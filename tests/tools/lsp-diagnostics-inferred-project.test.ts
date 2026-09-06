@@ -1,4 +1,3 @@
-// lsp-double: hand-rolled double on the lsp tools seam, burn-down tracked in #2592
 /**
  * #1645 review F3: `lsp_diagnostics` writes the SAME widget store as
  * `lens_diagnostics mode=full`. One store, one demotion rule — otherwise an
@@ -9,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const mocked = vi.hoisted(() => ({
 	service: null as unknown,
@@ -42,28 +42,35 @@ import { createLspDiagnosticsTool } from "../../tools/lsp-diagnostics.js";
 const INFERRED_BODY = { configFileName: "/dev/null/inferredProject1*" };
 
 function makeService() {
-	return {
-		openFile: vi.fn().mockResolvedValue(undefined),
-		getDiagnostics: vi.fn(async () => [
-			{
-				severity: 1,
-				message: "Cannot find name 'describe'.",
-				range: {
-					start: { line: 0, character: 0 },
-					end: { line: 0, character: 8 },
+	return makeLspServiceDouble(
+		{
+			openFile: vi.fn().mockResolvedValue(undefined),
+			getDiagnostics: vi.fn(async () => [
+				{
+					severity: 1,
+					message: "Cannot find name 'describe'.",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 8 },
+					},
+					source: "typescript",
+					code: 2582,
 				},
-				source: "typescript",
-				code: 2582,
-			},
-		]),
-		getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
-		getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-		runWorkspaceDiagnostics: vi.fn(),
-		executeReadOnlyCommandOnLiveClient: vi.fn(async () => ({
-			executed: true,
-			result: { success: true, body: INFERRED_BODY },
-		})),
-	};
+			]),
+			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
+			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+			runWorkspaceDiagnostics: vi.fn(),
+			executeReadOnlyCommandOnLiveClient: vi.fn(async () => ({
+				executed: true,
+				result: { success: true, body: INFERRED_BODY },
+			})),
+		},
+		// Both absences are observed by production, not incidental: `touchFile`
+		// at tools/lsp-diagnostics.ts:789 (this suite asserts the openFile
+		// branch) and `getAdvertisedCommands` at clients/lsp/tsserver-sync.ts:424.
+		// #2592.
+		{ omit: ["touchFile", "getAdvertisedCommands"] },
+	);
 }
 
 describe("lsp_diagnostics — inferred-project demotion (#1645 F3)", () => {
