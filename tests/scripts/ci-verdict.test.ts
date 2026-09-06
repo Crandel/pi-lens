@@ -662,7 +662,41 @@ describe("computeVerdict — a discovered row's cancelled conclusion is uncertai
 		};
 		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
 		expect(verdict.exitCode).toBe(EXIT_PENDING);
-		expect(verdict.reason).toContain("Record post-merge validation");
+		// #2618 fix round 3: the reason must NOT say "still queued or in
+		// progress" for a row the table itself reports as `completed
+		// cancelled` -- that reads as a contradiction. It gets its own clause.
+		expect(verdict.reason).not.toMatch(/still queued or in progress/);
+		expect(verdict.reason).toContain(
+			"cancelled and not yet re-reported (a superseded run; pends until the replacement posts -- this does not time out on its own): Record post-merge validation",
+		);
+	});
+
+	it("a still-running row and an uncertain cancelled row get separate clauses in the same reason", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "Record post-merge validation",
+					conclusion: "cancelled",
+					id: 3,
+				}),
+				checkRun({
+					name: "Production install build (--omit=dev, from source)",
+					status: "in_progress",
+					conclusion: null,
+					id: 4,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.reason).toContain(
+			"still queued or in progress: Production install build (--omit=dev, from source)",
+		);
+		expect(verdict.reason).toContain(
+			"cancelled and not yet re-reported (a superseded run; pends until the replacement posts -- this does not time out on its own): Record post-merge validation",
+		);
 	});
 
 	// The SAME live shape once a replacement HAS posted: `resolveLatestByName`

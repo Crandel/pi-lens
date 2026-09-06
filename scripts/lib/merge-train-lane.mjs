@@ -166,10 +166,15 @@ export const CONCLUDED_STATUS = "COMPLETED";
 export const PASSING_CONCLUSION = "SUCCESS";
 
 // States the merge API will actually accept. Review round 1, F1: this
-// repository's master protection has `strict: true` (probed 2026-08-26 via
-// `GET /branches/master/protection`), so GitHub REFUSES to merge a BEHIND
-// head -- and every open PR was BEHIND at the time. BEHIND therefore is not a
-// merge state; it is an UPDATE state, handled below.
+// repository's master protection was read as `strict: true` when probed
+// 2026-08-26 via `GET /branches/master/protection` -- and every open PR was
+// BEHIND at the time, so GitHub's merge API was assumed to refuse a BEHIND
+// head. Re-probed 2026-09-06 (#2618 fix round 3): master protection is
+// actually `strict: false` today (no branch-is-up-to-date requirement). The
+// BEHIND-as-update-not-merge handling below is unchanged regardless --
+// routing a BEHIND head through the update-branch lever first is still
+// correct/safe even when not strictly enforced, and re-gates the PR on its
+// new head's own checks either way.
 export const MERGEABLE_STATES = new Set(["CLEAN", "UNSTABLE"]);
 
 // A green PR sitting BEHIND gets the branch update instead of a merge. The

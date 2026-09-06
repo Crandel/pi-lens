@@ -364,11 +364,37 @@ export function computeVerdict(
 		reason = `gating check(s) completed with a non-success conclusion: ${failingGatingRows.map((row) => `${row.name} (${row.conclusion})`).join(", ")}`;
 	} else if (pendingGatingRows.length > 0) {
 		exitCode = EXIT_PENDING;
-		reason = anyAbsent
-			? mergeable == null
-				? "one or more required checks are absent and there is no PR context (bare-SHA target) to confirm they are not merge-conflicted; treating as pending, not DIRTY -- pass a PR number, or wait for CI to register"
-				: `one or more required checks are absent but the PR is not merge-conflicted (mergeable=${mergeable}); CI likely hasn't registered yet -- treating as pending, not DIRTY`
-			: `gating check(s) still queued or in progress: ${pendingGatingRows.map((row) => row.name).join(", ")}`;
+		if (anyAbsent) {
+			reason =
+				mergeable == null
+					? "one or more required checks are absent and there is no PR context (bare-SHA target) to confirm they are not merge-conflicted; treating as pending, not DIRTY -- pass a PR number, or wait for CI to register"
+					: `one or more required checks are absent but the PR is not merge-conflicted (mergeable=${mergeable}); CI likely hasn't registered yet -- treating as pending, not DIRTY`;
+		} else {
+			// Split by STATUS, not just "pending": an uncertain (cancelled,
+			// discovered) row is already COMPLETED -- reporting it as "still
+			// queued or in progress" alongside the table's own `completed
+			// cancelled` row two lines up would read as a contradiction. It gets
+			// its own clause explaining WHY a completed row still pends (#2618
+			// fix round 3).
+			const stillRunning = pendingGatingRows.filter(
+				(row) => row.status !== "completed",
+			);
+			const uncertain = pendingGatingRows.filter(
+				(row) => row.status === "completed",
+			);
+			const parts = [];
+			if (stillRunning.length > 0) {
+				parts.push(
+					`still queued or in progress: ${stillRunning.map((row) => row.name).join(", ")}`,
+				);
+			}
+			if (uncertain.length > 0) {
+				parts.push(
+					`cancelled and not yet re-reported (a superseded run; pends until the replacement posts -- this does not time out on its own): ${uncertain.map((row) => row.name).join(", ")}`,
+				);
+			}
+			reason = `gating check(s) ${parts.join("; ")}`;
+		}
 	} else {
 		exitCode = EXIT_SUCCESS;
 		reason = "every gating check concluded success";
