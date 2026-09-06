@@ -400,7 +400,12 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "typescript-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		packageName: "typescript-language-server",
+		// Pinned below the package's own floor: 6.0.0 declares
+		// engines.node >=22.22.2, above the pi host's own floor (pi-lens
+		// must never require more than pi does — #2633) — an unpinned
+		// install here resolves latest and prints EBADENGINE on any pi
+		// host's supported Node. 5.3.0's own floor is engines.node >=20.
+		packageName: "typescript-language-server@5.3.0",
 		binaryName: "typescript-language-server",
 	},
 	{

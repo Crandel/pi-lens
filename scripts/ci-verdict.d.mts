@@ -18,6 +18,7 @@ export interface VerdictRow {
 	status: string | null;
 	conclusion: string | null;
 	url: string | null;
+	gating: boolean;
 }
 
 export interface Verdict {
@@ -55,6 +56,7 @@ export declare function pollVerdict(args: {
 	>;
 	waitSeconds: number | null;
 	mergeable?: string | null;
+	requiredChecks?: string[];
 	sleepImpl?: (ms: number) => Promise<void>;
 	now?: () => number;
 }): Promise<{ verdict: Verdict; polls: number }>;
@@ -81,6 +83,14 @@ export declare function fetchCheckRunsPayload(
 	ghExec?: GhExec,
 	timeoutMs?: number,
 ): { total_count?: number; check_runs?: unknown[] };
+
+export declare const PROTECTED_BRANCH: string;
+
+export declare function resolveRequiredCheckNames(
+	repository: string,
+	ghExec?: GhExec,
+	timeoutMs?: number,
+): string[] | null;
 
 export declare function parseArgs(argv: string[]): {
 	target: string | null;

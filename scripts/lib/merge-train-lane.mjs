@@ -22,7 +22,26 @@
  * state to drift.
  */
 
-import { REQUIRED_CHECKS, resolveLatestByName } from "./ci-checks.mjs";
+import {
+	ADVISORY_CHECKS,
+	ADVISORY_SUFFIX,
+	BLOCKING_CONCLUSIONS,
+	isAdvisoryCheck,
+	isBlockingConclusion,
+	REQUIRED_CHECKS,
+	resolveLatestByName,
+} from "./ci-checks.mjs";
+
+// Re-exported unchanged for this module's existing importers (#2609 moved
+// the definitions to ci-checks.mjs, the shared module, so ci-verdict.mjs can
+// use the SAME advisory/blocking policy instead of a second hand-rolled
+// copy -- see ci-checks.mjs for the reasoning and the live-probe evidence).
+export {
+	ADVISORY_CHECKS,
+	ADVISORY_SUFFIX,
+	BLOCKING_CONCLUSIONS,
+	isAdvisoryCheck,
+};
 import { commentMarkerExists, paginate } from "./github-paging.mjs";
 import {
 	classifyActionFailure,
@@ -140,44 +159,22 @@ function parseGraphqlDateTime(value, field, page, number) {
 	return timestamp;
 }
 
-// How this repository ACTUALLY marks a check advisory: the workflow job name
-// ends in "(advisory)". Probed 2026-08-26 against the live rollups of every
-// open PR -- `oxfmt format check (advisory)`, `PR body (advisory)`,
-// `Vale prose lint (advisory)`, `OSV scan (advisory)`. Review round 1, F3: a
-// hand-written allowlist of two vendor names read `oxfmt format check
-// (advisory): FAILURE` as blocking and refused to merge this PR's own head.
-// The suffix is the single source of truth the repository already maintains;
-// the two vendor names below carry no suffix and stay explicit.
-export const ADVISORY_SUFFIX = "(advisory)";
-export const ADVISORY_CHECKS = new Set(["SonarCloud Code Analysis", "CodeQL"]);
-
-export function isAdvisoryCheck(name) {
-	return (
-		ADVISORY_CHECKS.has(name) || String(name ?? "").endsWith(ADVISORY_SUFFIX)
-	);
-}
-
 // Only positive evidence of a settled pass. GitHub's CheckRun status is
 // QUEUED / IN_PROGRESS / COMPLETED and conclusion is null until COMPLETED
 // (probed 2026-08-26 against this repository's own open PRs).
 export const CONCLUDED_STATUS = "COMPLETED";
 export const PASSING_CONCLUSION = "SUCCESS";
 
-// A non-advisory check in any of these states blocks the merge.
-export const BLOCKING_CONCLUSIONS = new Set([
-	"FAILURE",
-	"TIMED_OUT",
-	"CANCELLED",
-	"ACTION_REQUIRED",
-	"STARTUP_FAILURE",
-	"STALE",
-]);
-
 // States the merge API will actually accept. Review round 1, F1: this
-// repository's master protection has `strict: true` (probed 2026-08-26 via
-// `GET /branches/master/protection`), so GitHub REFUSES to merge a BEHIND
-// head -- and every open PR was BEHIND at the time. BEHIND therefore is not a
-// merge state; it is an UPDATE state, handled below.
+// repository's master protection was read as `strict: true` when probed
+// 2026-08-26 via `GET /branches/master/protection` -- and every open PR was
+// BEHIND at the time, so GitHub's merge API was assumed to refuse a BEHIND
+// head. Re-probed 2026-09-06 (#2618 fix round 3): master protection is
+// actually `strict: false` today (no branch-is-up-to-date requirement). The
+// BEHIND-as-update-not-merge handling below is unchanged regardless --
+// routing a BEHIND head through the update-branch lever first is still
+// correct/safe even when not strictly enforced, and re-gates the PR on its
+// new head's own checks either way.
 export const MERGEABLE_STATES = new Set(["CLEAN", "UNSTABLE"]);
 
 // A green PR sitting BEHIND gets the branch update instead of a merge. The
@@ -285,12 +282,14 @@ export function evaluateMergeGate(pr, health, { approvedBy } = {}) {
 
 	// Judge the RESOLVED run per name, so a superseded duplicate cannot block
 	// a head whose current run passed, and a newer failing duplicate cannot be
-	// hidden by an older passing one.
+	// hidden by an older passing one. `isBlockingConclusion` (#2618
+	// fix-round-2, F5 net-count fold), not a direct `BLOCKING_CONCLUSIONS.has`
+	// -- this repo's GraphQL rollup already reports UPPERCASE conclusions so
+	// the two were behaviorally identical here, but a second hand-rolled
+	// case-sensitive comparison of the SAME set is exactly the duplication
+	// `isBlockingConclusion` exists to remove (ci-checks.mjs).
 	const failing = [...byName.values()].filter(
-		(c) =>
-			!isAdvisoryCheck(c.name) &&
-			c.conclusion != null &&
-			BLOCKING_CONCLUSIONS.has(c.conclusion),
+		(c) => !isAdvisoryCheck(c.name) && isBlockingConclusion(c.conclusion),
 	);
 	if (failing.length > 0)
 		return deny(
