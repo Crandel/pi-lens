@@ -93,6 +93,75 @@ export function passFloorBreach(
 ): string | null;
 /** Fixtures flagged `tier1` — the scheduled parser lane's selection. */
 export function tier1Fixtures(): SmokeFixture[];
+/** One TOOLS registry entry, as far as this classification cares. */
+export interface SmokeToolDefinition {
+	installStrategy?: string;
+}
+/** The installer's own record of what its last install attempt for a tool did. */
+export interface SmokeInstallAttempt {
+	outcome: "succeeded" | "failed" | "declined" | "skipped";
+	reason?: string;
+}
+export interface ClassifyInstallOutcomeDeps {
+	getInstallAttempt: (toolId: string) => SmokeInstallAttempt | undefined;
+	toolsById: ReadonlyMap<string, SmokeToolDefinition>;
+	toolchainPresence: Record<string, boolean>;
+	/** The pip command ladder to probe, in priority order (installer's own). */
+	pipCandidates: readonly string[];
+}
+export interface InstallOutcomeRow {
+	row: "fail" | "skip";
+	detail: string;
+}
+/**
+ * Classify why `toolId` never resolved via `ensureTool`, using the
+ * installer's own attempt record (`getInstallAttempt`) — never the
+ * `getInstallFailureReason` refusal map alone, which cannot answer whether an
+ * install even ran (#2638/#2661). `{row: "fail"}` only for a genuine
+ * installer defect: an attempt that actually ran and failed
+ * (`outcome === "failed"`), not a transient network condition, on a strategy
+ * whose toolchain this runner has (npm always; pip/gem when confirmed
+ * present). Every other case is `{row: "skip"}`.
+ */
+export function classifyInstallOutcome(
+	toolId: string,
+	deps: ClassifyInstallOutcomeDeps,
+): InstallOutcomeRow;
+/**
+ * Is this pip candidate command actually usable — `pip`/`pip3` via `--version`,
+ * a python-family command via `-m pip --version` (#2661 round 2 R2-F2: a bare
+ * `python3 --version` succeeds even with no `pip` module installed).
+ */
+export function pipCandidateUsable(command: string): boolean;
+/**
+ * The row a fixture's `ensureTool` step should report: the first GENUINE
+ * install failure among `toolIds` (`classifyInstallOutcome`), or a "skip"
+ * carrying `fallbackSkipDetail` when every unavailable tool in the list is
+ * legitimately declined/skipped/toolchain-absent/transient.
+ */
+export function resolveUnavailabilityRow(
+	toolIds: readonly string[],
+	unavailableTools: ReadonlySet<string>,
+	deps: ClassifyInstallOutcomeDeps,
+	fallbackSkipDetail: string,
+): InstallOutcomeRow;
+/**
+ * Ensures every tool in `toolIds`, returning which never resolved and a
+ * SNAPSHOT of each one's `getInstallAttempt` record taken the instant it was
+ * found unavailable — never a live reference read later (#2661 round 2
+ * R2-F3). `onEnsured`, when given, fires after each `ensureTool` call.
+ */
+export function ensureFixtureTools(
+	toolIds: readonly string[],
+	ensureTool: ((toolId: string) => Promise<string | undefined>) | undefined,
+	getInstallAttempt:
+		| ((toolId: string) => SmokeInstallAttempt | undefined)
+		| undefined,
+	onEnsured?: (toolId: string, resolved: string | undefined) => void,
+): Promise<{
+	unavailableTools: Set<string>;
+	attemptSnapshots: Map<string, SmokeInstallAttempt | undefined>;
+}>;
 export const FIXTURES: SmokeFixture[];
 export const LSP_FIXTURES: LspFixture[];
 export const FORMAT_FIXTURES: FormatFixture[];
