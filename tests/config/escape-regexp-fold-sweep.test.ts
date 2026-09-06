@@ -23,20 +23,32 @@
  *      `.map((token) => token.replace(...))` copy read before its fold, so
  *      an inline arrow callback counts as a "definition" too.
  *
- * It deliberately does NOT flag a bare inline `value.replace(<escape>)`
- * that is not itself a function/arrow body (e.g. `const esc =
- * dep.replace(...)` in `deps-centralization.test.ts`, or the same shape in
- * `scripts/lib/merge-train-lane.mjs`, `scripts/rollup-changelog.mjs`,
- * `scripts/run-all-ts-rules-posthog.mjs`, `scripts/lib/compat-contracts.mjs`,
- * `tests/clients/config-deprecation-registry.test.ts`, and
- * `tests/support/public-surface-drift.ts`): each is a single one-off
- * computation at its own call site, not a copy-pasted HELPER, and
- * `merge-train-lane.mjs` in particular runs in a workflow with no build step
- * before it (`.github/workflows/merge-train-lane.yml`), so importing the
- * compiled `clients/string-utils.js` there would break that job. Folding a
- * true one-off into an import trades one inline call for a dependency with
- * no duplication removed; the ladder's step 1 ("does this need to exist")
- * says no.
+ * Round 2 (F1): the scan tree used to stop at `clients`/`tools`/`mcp`/`tests`
+ * with only `.ts`, so the very recurrence this file's header names —
+ * `scripts/lib/astgrep-self-scan.mjs`'s renamed `escapeRegex` — was outside
+ * the swept tree and a reintroduction there passed silently. `scripts` is now
+ * scanned too, with `.mjs` added to the extensions (never bare `.js`: a bare
+ * `.js` would also match compiled output sitting next to its `.ts` source —
+ * `clients/string-utils.js` itself — and self-flag the canonical file's own
+ * build artifact as a second "copy" of its own body).
+ *
+ * It deliberately does NOT flag a bare inline `value.replace(<escape>)` that
+ * is not itself a function/arrow body — e.g. `const escapedSha =
+ * mergeSha.replace(...)` in `scripts/lib/merge-train-lane.mjs`, and the same
+ * shape in `scripts/rollup-changelog.mjs`, `scripts/run-all-ts-rules-posthog.mjs`,
+ * and `scripts/lib/compat-contracts.mjs`: each is a single one-off
+ * computation at its own call site, not a copy-pasted HELPER. These four
+ * specifically stay un-folded (not merely un-flagged) because
+ * `merge-train-lane.mjs`'s workflow (`.github/workflows/merge-train-lane.yml`)
+ * runs `node scripts/merge-train-lane.mjs` directly with no `npm install`/
+ * `npm run build` step before it, so importing the compiled
+ * `clients/string-utils.js` there would 404 that job; the other three keep
+ * the same one-off shape for consistency rather than for their own
+ * build-order reason. (Round 2 F3: three PLAIN test-side one-offs that
+ * looked like the same case — `tests/clients/deps-centralization.test.ts`,
+ * `tests/clients/config-deprecation-registry.test.ts`,
+ * `tests/support/public-surface-drift.ts` — turned out to have no such
+ * constraint and are folded onto the `sweep-kit.js` re-export instead.)
  *
  * A DIFFERENT character class is a variant, not a copy, and stays out of
  * this sweep's reach on purpose: `clients/file-utils.ts`'s `globToRegExp`
@@ -89,20 +101,41 @@ const ARROW_SHAPE = new RegExp(
 		ESCAPE_CALL,
 );
 
+// ".mjs", not ".js": scripts/lib/*.mjs are hand-written source, but a bare
+// ".js" would also match compiled output sitting next to its .ts source
+// (clients/string-utils.js itself, and every other clients/*.js this repo's
+// build emits in place) and self-flag the canonical file's own build
+// artifact as a second "copy" of its own body.
+const CANDIDATE_EXTENSIONS = [".ts", ".mjs"];
+
+// A real per-directory floor (not the `assertNonEmptyScan` default of 1) —
+// set well below each directory's actual population (434/17/5/91/1073 at
+// authoring time) so normal file growth/removal never trips it, but a
+// directory silently dropped from the scan (e.g. `scripts` reverted after
+// F1, or a whole tree renamed) reliably does. Mirrors
+// `tests/config/tracked-control-bytes.test.ts`'s per-population floors.
+const CANDIDATE_DIRS: ReadonlyArray<{ dir: string; floor: number }> = [
+	{ dir: "clients", floor: 380 },
+	{ dir: "tools", floor: 10 },
+	{ dir: "mcp", floor: 3 },
+	{ dir: "scripts", floor: 60 },
+	{ dir: "tests", floor: 900 },
+];
+
 function listCandidateFiles(): string[] {
 	const files: string[] = [];
-	for (const dir of ["clients", "tools", "mcp", "tests"]) {
+	for (const { dir, floor } of CANDIDATE_DIRS) {
 		const abs = path.join(root, dir);
-		try {
-			files.push(
-				...listSourceFiles(abs, {
-					extensions: [".ts"],
-					skipDeclarations: true,
-				}),
-			);
-		} catch {
-			// directory doesn't exist in this checkout; nothing to scan
-		}
+		// A configured scan directory that has gone missing (renamed, deleted)
+		// must fail loud, not silently scan fewer files than intended — the
+		// #1718 empty-sweep shape one layer up: `listSourceFiles` itself throws
+		// on a missing `dir`, and this must not swallow that.
+		const found = listSourceFiles(abs, {
+			extensions: CANDIDATE_EXTENSIONS,
+			skipDeclarations: true,
+		});
+		assertNonEmptyScan(`${dir}/ (.ts + .mjs)`, found.length, floor);
+		files.push(...found);
 	}
 	return files;
 }
@@ -110,7 +143,13 @@ function listCandidateFiles(): string[] {
 describe("escapeRegExp single-source-of-truth (#2558)", () => {
 	it("has no local escaping-helper definition outside the canonical leaf", () => {
 		const files = listCandidateFiles();
-		assertNonEmptyScan("clients/tools/mcp/tests source files", files.length);
+		// Belt-and-suspenders total floor on top of each directory's own floor
+		// above (~1620 at authoring time).
+		assertNonEmptyScan(
+			"clients/tools/mcp/scripts/tests source files",
+			files.length,
+			1400,
+		);
 
 		const offenders: string[] = [];
 		for (const file of files) {
