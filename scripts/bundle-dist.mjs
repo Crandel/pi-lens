@@ -30,25 +30,46 @@
  * `exec --package` syntax; pi always installs via npm so the shipping path is
  * npm. A non-npm `npm_execpath` (pnpm/yarn/bun) is rejected with a clear error.
  *
- * WHY THE SPAWN RUNS FROM A TEMP CWD, NOT `root` (#2590)
- * `npm exec --package <spec>` does not only check the npx cache: npm's
- * libnpmexec builds an Arborist tree rooted at the spawn's cwd
- * (`localArb.loadActual()`) and, for each `--package` spec, queries that
- * tree's FULL inventory (every nested `node_modules`, not just top-level
- * deps) for a version satisfying the spec. If ANY nested copy matches — e.g.
- * a transitive dependency that happens to vendor an `esbuild` at
- * `ESBUILD_VERSION` — npm treats the package as already present and skips
- * the npx-cache install entirely. `binPaths` (what gets prepended to the
- * child's PATH) is populated only on the separate bare-`npx <bin>` swap path,
- * never on this explicit `--package` path, so the matched-but-not-linked
+ * WHY `--prefix` AND NOT A DIFFERENT `cwd` (#2590, #2594 review F1)
+ * `npm exec --package <spec>` does not only check the npx cache: npm's own
+ * `lib/commands/exec.js` calls libnpmexec with TWO separate directories —
+ * `path: this.npm.localPrefix` (where it LOOKS for an already-satisfying
+ * install) and `runPath: process.cwd()` (where it RUNS the resolved binary
+ * from). `libnpmexec`'s `missingFromTree` builds an Arborist tree rooted at
+ * `path` and queries that tree's FULL inventory (every nested
+ * `node_modules`, not just top-level deps) for a version satisfying the
+ * spec. If ANY nested copy matches — e.g. a transitive dependency that
+ * happens to vendor an `esbuild` at `ESBUILD_VERSION` — npm treats the
+ * package as already present and skips the npx-cache install entirely;
+ * `binPaths` (what gets prepended to the child's PATH) is populated only on
+ * a *different* code path (`needPackageCommandSwap`, the bare `npx <bin>`
+ * form — not this explicit `--package` form), so the matched-but-not-linked
  * nested copy leaves the child with no esbuild anywhere on PATH at all —
  * `esbuild: not found`, reproduced verbatim when
- * `@earendil-works/pi-coding-agent` nested a transitive `esbuild@0.28.1`.
- * Running the spawn from a freshly created temp directory with no
- * `package.json` anywhere in its ancestry gives Arborist an empty tree, so
- * this is independent of whatever the project's own `node_modules` contains.
- * `distEntry` and the esbuild `--outfile` are both already absolute paths, so
- * nothing about the actual bundling is affected by the child's cwd.
+ * `@earendil-works/pi-coding-agent` nested a transitive `esbuild@0.28.1`,
+ * and reproduced synthetically in review with a throwaway nested
+ * `esbuild/package.json` (under some other package's own `node_modules`)
+ * pinned to the same version.
+ *
+ * A first attempt at this fix moved the spawn's `cwd` to a temp directory,
+ * which also moves `runPath` (it defaults to `process.cwd()`) — but esbuild
+ * bakes its bundled-module-path banner COMMENTS relative to ITS OWN cwd, so
+ * that shipped a `dist/index.js` with hundreds of machine- and
+ * worktree-specific relative paths (`// ../../home/<user>/...`) baked into
+ * it, a different artifact than master's (see tests/packaging.test.ts's
+ * "bakes no user-profile absolute path into the bundle").
+ *
+ * The actual fix: keep the spawn's `cwd` (and therefore `runPath`) at
+ * `root` — verified via `@npmcli/config`'s `loadLocalPrefix()`: passing
+ * `--prefix` on the CLI sets `localPrefix` to that literal value with NO
+ * walk-up at all, so it is independent of `cwd`/`runPath` — and pass
+ * `--prefix <freshly created empty temp dir>` on the npm CLI invocation.
+ * That empty directory has no `package.json`/`node_modules` of its own, so
+ * Arborist's tree there is always empty and npm always installs into its
+ * own npx cache. `distEntry` and the esbuild `--outfile` are both already
+ * absolute paths, so nothing about esbuild's OUTPUT changes; the fix
+ * touches only what npm's exec resolution can see, never what esbuild
+ * itself runs from.
  *
  * USAGE
  *   node scripts/bundle-dist.mjs   # invoked by `npm run bundle:dist`
@@ -98,14 +119,18 @@ const isNpmCli = npmCli
 	: false;
 
 /**
- * cwd for the `npm exec --package esbuild@…` spawn — see the header comment
- * "WHY THE SPAWN RUNS FROM A TEMP CWD, NOT `root`" (#2590). Must have no
- * `package.json` anywhere in its ancestry, so npm's Arborist-based
- * `exec --package` resolution always sees an empty dependency tree and
- * installs into its own npx cache instead of matching a nested transitive
- * copy already present somewhere in the project's `node_modules`. A fresh
- * `mkdtemp` under the OS temp dir guarantees that: it is never inside `root`
- * and `root` is never inside it.
+ * A freshly created, empty directory for the `npm exec --prefix` flag — see
+ * the header comment "WHY `--prefix` AND NOT A DIFFERENT `cwd`" (#2590,
+ * #2594 review F1). `mkdtempSync` guarantees the directory itself is
+ * newly created and empty (the one thing this fix actually depends on:
+ * `--prefix` bypasses npm's walk-up entirely, so Arborist reads exactly this
+ * directory and nothing above it). It is created under `os.tmpdir()`, which
+ * — on every platform and default `TMPDIR`/`TMP`/`TEMP` this runs on today —
+ * also sits outside `root`'s ancestry; that is how this implementation
+ * happens to achieve it, not a property `mkdtemp` itself guarantees (an
+ * unusual `TMPDIR` override pointed inside the project would not defeat
+ * correctness here, since `--prefix` does not walk up from it, but would
+ * defeat the ancestry check the test for this function asserts).
  *
  * Exported as a pure, directly testable unit — see
  * tests/scripts/bundle-dist.test.ts — since faithfully exercising npm's real
@@ -113,8 +138,46 @@ const isNpmCli = npmCli
  *
  * @returns {string} a freshly created, empty temporary directory
  */
-export function resolveBundleExecCwd() {
+export function resolveBundleExecPrefix() {
 	return mkdtempSync(path.join(os.tmpdir(), "pilens-bundle-"));
+}
+
+/**
+ * Build the argv + spawn options for the esbuild `npm exec` invocation.
+ * Pure and side-effect-free (takes the prefix directory as an input rather
+ * than creating one) so a test can pin the exact production shape without
+ * spawning anything — see tests/scripts/bundle-dist.test.ts (#2594 review
+ * F2: a test that only checked `resolveBundleExecPrefix()` in isolation
+ * would stay green even if the call site stopped using its result).
+ *
+ * `cwd: root` is load-bearing — see the header comment — and asserted
+ * directly, not inferred from the absence of a `cwd` override.
+ *
+ * @param {{ npmCli: string, execPrefix: string }} args
+ * @returns {{ command: string, argv: string[], options: { cwd: string, stdio: "inherit" } }}
+ */
+export function buildEsbuildExecInvocation({ npmCli: npmCliPath, execPrefix }) {
+	return {
+		command: process.execPath,
+		argv: [
+			npmCliPath,
+			"exec",
+			"--prefix",
+			execPrefix,
+			"--yes",
+			"--package",
+			`esbuild@${ESBUILD_VERSION}`,
+			"--",
+			"esbuild",
+			distEntry,
+			"--bundle",
+			"--platform=node",
+			"--format=esm",
+			...EXTERNAL.map((name) => `--external:${name}`),
+			`--outfile=${tmpOut}`,
+		],
+		options: { cwd: root, stdio: "inherit" },
+	};
 }
 
 export function main() {
@@ -150,36 +213,29 @@ export function main() {
 		process.exit(1);
 	}
 
-	const execCwd = resolveBundleExecCwd();
+	// mkdtempSync runs inside the try so a TMPDIR failure surfaces through the
+	// existing "[bundle] esbuild failed: …" message rather than an uncaught
+	// stack trace (#2594 review F3). No retry/fallback: there is no recorded
+	// recurrence of mkdtemp failing here, so none is built for it.
+	let execPrefix;
 	let bundleFailed = false;
 	try {
-		execFileSync(
-			process.execPath,
-			[
-				npmCli,
-				"exec",
-				"--yes",
-				"--package",
-				`esbuild@${ESBUILD_VERSION}`,
-				"--",
-				"esbuild",
-				distEntry,
-				"--bundle",
-				"--platform=node",
-				"--format=esm",
-				...EXTERNAL.map((name) => `--external:${name}`),
-				`--outfile=${tmpOut}`,
-			],
-			{ cwd: execCwd, stdio: "inherit" },
-		);
+		execPrefix = resolveBundleExecPrefix();
+		const { command, argv, options } = buildEsbuildExecInvocation({
+			npmCli,
+			execPrefix,
+		});
+		execFileSync(command, argv, options);
 	} catch (err) {
 		console.error(`[bundle] esbuild failed: ${err?.message ?? err}`);
 		bundleFailed = true;
 	} finally {
 		// Tidiness, not correctness: npm's own package cache lives under npm's
-		// cache dir, not this cwd, so nothing load-bearing is left behind here
-		// either way — but don't leak temp directories on every build.
-		rmSync(execCwd, { recursive: true, force: true });
+		// cache dir, not this directory, so nothing load-bearing is left behind
+		// here either way — but don't leak temp directories on every build.
+		if (execPrefix) {
+			rmSync(execPrefix, { recursive: true, force: true });
+		}
 	}
 	if (bundleFailed) {
 		process.exit(1);
