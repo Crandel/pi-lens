@@ -625,7 +625,15 @@ earns patience instead of dying by construction. Past the window, the server's
 live process tree is sampled twice across `notifyStallCpuSampleMs()`
 (`notifyStallCpuVerdict` -> `sampleProcessTreeCpuPercent`, `clients/
 resource-sampler.ts`); a BUSY server is left alone and the timer re-arms, and
-only a flat or unmeasured one is torn down. The hard cap still kills a server
+only a flat or unmeasured one is torn down. The verdict is the SECOND read
+alone: both platform samplers report a rate SINCE THE PREVIOUS OBSERVATION of
+that pid — the heartbeat sampler (`clients/quiet-window.ts`) reads every
+recorded LSP child once per tick, and pidusage keeps 60s of per-pid history —
+so the first read only re-anchors the baseline. Folding it into the verdict
+(`Math.max(first, second)`) let CPU the process had already stopped burning
+vote "busy", and the issue's own shape (a scanner that drains its burst and
+THEN wedges) survived every re-arm and died at the cap as `cap-exceeded`
+instead of on its budget as `budget-exceeded-cpu-flat`. The hard cap still kills a server
 whose CPU burns past its deadline: the replacement is the self-heal. The record
 `lsp_notify_backpressure_broken` names which discriminator fired
 (`budget-exceeded-cpu-flat`, `budget-exceeded`, or `cap-exceeded`) and carries
