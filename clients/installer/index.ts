@@ -612,7 +612,6 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-html-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		// #2638: bin-name mismatch on the bare package — see git log.
 		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-html-language-server",
 	},
@@ -697,7 +696,6 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "vscode-css-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		// #2638: bare package unpublished (E404) — see git log.
 		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-css-language-server",
 	},
