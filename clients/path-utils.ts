@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { minimatch } from "./deps/minimatch.js";
+import { escapeRegExp } from "./string-utils.js";
 
 /**
  * Detect a positively Windows-shaped path, regardless of the host OS.
@@ -766,11 +767,6 @@ export const UV_WORKSPACE_EXCLUDE_DIALECT: WorkspaceMemberGlobDialect = {
 	normalizePattern: (pattern) => path.posix.normalize(toPosix(pattern)),
 };
 
-/** Escape one character that carries no glob meaning into a literal. */
-function escapeRegExpChar(ch: string): string {
-	return ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /**
  * Index of the `]` closing the character class opened at `open`, or `-1` when
  * the run is unterminated (in which case the `[` is a literal). A leading `!`
@@ -815,7 +811,7 @@ function globRunToRegExpSource(
 				continue;
 			}
 		}
-		out += escapeRegExpChar(ch);
+		out += escapeRegExp(ch);
 	}
 	return out;
 }

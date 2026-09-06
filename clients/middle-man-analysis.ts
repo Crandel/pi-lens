@@ -29,6 +29,7 @@
  */
 
 import type { ModuleSymbolEntry } from "./module-report.js";
+import { escapeRegExp } from "./string-utils.js";
 
 /** Self-reference token + member-access separator, per languageId. Both the
  * self→field and field→method hops use the SAME separator in every language
@@ -72,10 +73,6 @@ const MIN_CANDIDATE_METHODS = 2;
  * "mostly" — a class with a couple of forwarding convenience methods among
  * real logic must NOT flag (the exact distinction #325 asks for). */
 const DELEGATION_RATIO_THRESHOLD = 0.9;
-
-function escapeRegExp(s: string): string {
-	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function buildForwardRegex(token: string, sep: string): RegExp {
 	const t = escapeRegExp(token);
