@@ -23,12 +23,10 @@ import {
 describe("checkNicobailonChildEnv", () => {
 	const GOOD = `
 export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
-export const SUBAGENT_RUN_ID_ENV = "PI_SUBAGENT_RUN_ID";
-export const SUBAGENT_CHILD_AGENT_ENV = "PI_SUBAGENT_CHILD_AGENT";
 env[SUBAGENT_CHILD_ENV] = "1";
 `;
 
-	it("passes when the child flag is set and both identity consts exist", () => {
+	it("passes when the child flag is set", () => {
 		const result = checkNicobailonChildEnv(GOOD);
 		expect(result.pass).toBe(true);
 	});
@@ -40,14 +38,26 @@ env[SUBAGENT_CHILD_ENV] = "1";
 		expect(result.detail).toContain("PI_SUBAGENT_CHILD");
 	});
 
-	it("fails when the run-id const is missing", () => {
-		const noRunId = GOOD.replace(
-			'export const SUBAGENT_RUN_ID_ENV = "PI_SUBAGENT_RUN_ID";',
+	it("fails when the const definition is missing (assignment alone isn't enough)", () => {
+		const noConst = GOOD.replace(
+			'export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";',
 			"",
 		);
-		const result = checkNicobailonChildEnv(noRunId);
+		const result = checkNicobailonChildEnv(noConst);
 		expect(result.pass).toBe(false);
-		expect(result.detail).toContain("PI_SUBAGENT_RUN_ID");
+	});
+
+	// #2581: pi-subagents@0.65.0's native-AgentSession rewrite removed
+	// PI_SUBAGENT_RUN_ID / PI_SUBAGENT_CHILD_AGENT from the whole package —
+	// child identity moved to an in-process object, not env vars. pi-lens's
+	// getSubagentIdentity() already treats their absence as best-effort
+	// undefined (tests/clients/subagent-mode.test.ts), so this is no longer
+	// a contract failure — only the child flag itself gates pi-lens behavior.
+	it("passes even when the (now-removed upstream) identity consts are absent", () => {
+		const result = checkNicobailonChildEnv(GOOD);
+		expect(GOOD).not.toContain("PI_SUBAGENT_RUN_ID");
+		expect(GOOD).not.toContain("PI_SUBAGENT_CHILD_AGENT");
+		expect(result.pass).toBe(true);
 	});
 
 	it("fails on an unrelated source", () => {

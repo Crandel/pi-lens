@@ -10,39 +10,44 @@
 // these functions with file contents.
 
 /**
- * Contract 1 (nicobailon/pi-subagents): the child-process env var names the
- * extension sets on every spawned subagent. We depend on `PI_SUBAGENT_CHILD`
- * being set to the literal string `"1"` (subagent-mode.ts reads it that way),
- * plus the run-id/child-agent-name identity vars existing in the same file
- * (best-effort identity surfaced in the latency log — absence degrades to
- * "unknown", never breaks). Verified against `src/runs/shared/pi-args.ts`.
+ * Contract 1 (nicobailon/pi-subagents): `PI_SUBAGENT_CHILD` is set to the
+ * literal string `"1"` on every process that hosts a child session
+ * (`subagent-mode.ts`'s `isSubagentSession()` is the only part of this
+ * pi-lens depends on for BEHAVIOR — light mode gating). Verified against
+ * `src/runs/shared/pi-args.ts` pre-0.65.0, `src/runs/shared/
+ * child-runtime-config.ts` (the const) + `src/runs/background/
+ * subagent-runner.ts` (the assignment) at 0.66.0 — the caller concatenates
+ * both files' sources (`compat-contract-locator.mjs`'s `locateContractSources`,
+ * #2581) since they split apart in pi-subagents@0.65.0's native-AgentSession
+ * rewrite.
  *
- * @param {string} source contents of pi-args.ts (or wherever the child env is built)
+ * `PI_SUBAGENT_RUN_ID` / `PI_SUBAGENT_CHILD_AGENT` — the best-effort identity
+ * vars this contract used to also require — were REMOVED from pi-subagents
+ * entirely in that same 0.65.0 rewrite (grep-verified absent from the whole
+ * 0.66.0 source tree, #2581): child identity is now passed through an
+ * in-process `ChildRuntimeConfig` object, not env vars, because foreground
+ * children no longer spawn a separate `pi` process at all. This is real
+ * upstream drift, but NOT one pi-lens needs a code fix for:
+ * `getSubagentIdentity()` was already documented and tested as best-effort,
+ * degrading to `runId`/`agentName: undefined` when the vars are absent
+ * (`tests/clients/subagent-mode.test.ts`) — that degraded state is now the
+ * PERMANENT one for this vocabulary, not a transient gap, so this check no
+ * longer requires them.
+ *
+ * @param {string} source concatenated contents of every file backing the
+ *   child-flag const + assignment (see locateContractSources)
  * @returns {{ pass: boolean, detail: string }}
  */
 export function checkNicobailonChildEnv(source) {
 	const setsChildFlag =
 		/env(?:\[[^\]]+\]|\.\w+)\s*=\s*["']1["']/.test(source) &&
 		/SUBAGENT_CHILD_ENV\s*=\s*["']PI_SUBAGENT_CHILD["']/.test(source);
-	const hasRunId = /SUBAGENT_RUN_ID_ENV\s*=\s*["']PI_SUBAGENT_RUN_ID["']/.test(
-		source,
-	);
-	const hasChildAgent =
-		/SUBAGENT_CHILD_AGENT_ENV\s*=\s*["']PI_SUBAGENT_CHILD_AGENT["']/.test(
-			source,
-		);
-	const pass = setsChildFlag && hasRunId && hasChildAgent;
+	const pass = setsChildFlag;
 	return {
 		pass,
 		detail: pass
-			? "PI_SUBAGENT_CHILD='1' set unconditionally; PI_SUBAGENT_RUN_ID + PI_SUBAGENT_CHILD_AGENT present"
-			: `missing: ${[
-					!setsChildFlag && "PI_SUBAGENT_CHILD='1' assignment",
-					!hasRunId && "PI_SUBAGENT_RUN_ID const",
-					!hasChildAgent && "PI_SUBAGENT_CHILD_AGENT const",
-				]
-					.filter(Boolean)
-					.join(", ")}`,
+			? "PI_SUBAGENT_CHILD='1' set unconditionally (RUN_ID/CHILD_AGENT identity vars no longer required — removed upstream at pi-subagents@0.65.0, #2581; getSubagentIdentity() already degrades to unknown)"
+			: "missing: PI_SUBAGENT_CHILD='1' assignment",
 	};
 }
 
@@ -205,6 +210,74 @@ export function checkTintinwebInProcessBind(source) {
 }
 
 /**
+ * Single source of truth for "which contract, which package, which input,
+ * which check function" — both `runAllContractChecks` below and
+ * scripts/compat-contracts.mjs's per-contract file locator (#2581) key off
+ * this list, so a contract's id/package/description is never hand-duplicated
+ * between the pure checks here and the orchestration script that resolves
+ * their source files.
+ *
+ * `inputKey` names the field of the `inputs` object `runAllContractChecks`
+ * reads the (already-resolved) source text from.
+ */
+export const CONTRACTS = [
+	{
+		id: "nicobailon.child-env",
+		package: "pi-subagents",
+		description: "PI_SUBAGENT_CHILD env var set on every child-hosting process",
+		inputKey: "nicobailonPiArgsSource",
+		check: checkNicobailonChildEnv,
+	},
+	{
+		id: "avtc.child-env",
+		package: "avtc-pi-subagent",
+		description:
+			"PI_SUBAGENT_CHILD_AGENT + PI_SUBAGENT_PARENT_PID pair set on every spawned child",
+		inputKey: "avtcProcessRunnerSource",
+		check: checkAvtcChildEnv,
+	},
+	{
+		id: "sdk.extension-cache",
+		package: "@earendil-works/pi-coding-agent",
+		description: "process-global extensionCache Map in the extension loader",
+		inputKey: "sdkLoaderSource",
+		check: checkSdkExtensionCache,
+	},
+	{
+		id: "sdk.bind-extensions-session-start",
+		package: "@earendil-works/pi-coding-agent",
+		description:
+			"bindExtensions() unconditionally emits a session_start-typed event",
+		inputKey: "sdkAgentSessionSource",
+		check: checkSdkBindExtensionsEmitsSessionStart,
+	},
+	{
+		id: "sdk.invalidate-called",
+		package: "@earendil-works/pi-coding-agent",
+		description:
+			"invalidate() called from the sequential session-replacement path",
+		inputKey: "sdkAgentSessionSource",
+		check: checkSdkInvalidateCalled,
+	},
+	{
+		id: "sdk.stale-ctx-message",
+		package: "@earendil-works/pi-coding-agent",
+		description:
+			'stale-ctx error message contains "stale after session replacement"',
+		inputKey: "sdkAgentSessionSource",
+		check: checkSdkStaleCtxMessage,
+	},
+	{
+		id: "tintinweb.in-process-bind",
+		package: "@tintinweb/pi-subagents",
+		description:
+			"constructs DefaultResourceLoader + calls bindExtensions() in-process",
+		inputKey: "tintinwebAgentRunnerSource",
+		check: checkTintinwebInProcessBind,
+	},
+];
+
+/**
  * Run every contract check and return a combined report. Each entry name
  * matches what the workflow step / alert-issue body prints, so a failure is
  * traceable straight back to a specific dependency + source file.
@@ -218,56 +291,12 @@ export function checkTintinwebInProcessBind(source) {
  * }} inputs
  */
 export function runAllContractChecks(inputs) {
-	const results = [
-		{
-			id: "nicobailon.child-env",
-			package: "pi-subagents",
-			description:
-				"PI_SUBAGENT_CHILD/RUN_ID/CHILD_AGENT env vars set on every spawned child",
-			...checkNicobailonChildEnv(inputs.nicobailonPiArgsSource),
-		},
-		{
-			id: "avtc.child-env",
-			package: "avtc-pi-subagent",
-			description:
-				"PI_SUBAGENT_CHILD_AGENT + PI_SUBAGENT_PARENT_PID pair set on every spawned child",
-			...checkAvtcChildEnv(inputs.avtcProcessRunnerSource),
-		},
-		{
-			id: "sdk.extension-cache",
-			package: "@earendil-works/pi-coding-agent",
-			description: "process-global extensionCache Map in the extension loader",
-			...checkSdkExtensionCache(inputs.sdkLoaderSource),
-		},
-		{
-			id: "sdk.bind-extensions-session-start",
-			package: "@earendil-works/pi-coding-agent",
-			description:
-				"bindExtensions() unconditionally emits a session_start-typed event",
-			...checkSdkBindExtensionsEmitsSessionStart(inputs.sdkAgentSessionSource),
-		},
-		{
-			id: "sdk.invalidate-called",
-			package: "@earendil-works/pi-coding-agent",
-			description:
-				"invalidate() called from the sequential session-replacement path",
-			...checkSdkInvalidateCalled(inputs.sdkAgentSessionSource),
-		},
-		{
-			id: "sdk.stale-ctx-message",
-			package: "@earendil-works/pi-coding-agent",
-			description:
-				'stale-ctx error message contains "stale after session replacement"',
-			...checkSdkStaleCtxMessage(inputs.sdkAgentSessionSource),
-		},
-		{
-			id: "tintinweb.in-process-bind",
-			package: "@tintinweb/pi-subagents",
-			description:
-				"constructs DefaultResourceLoader + calls bindExtensions() in-process",
-			...checkTintinwebInProcessBind(inputs.tintinwebAgentRunnerSource),
-		},
-	];
+	const results = CONTRACTS.map(({ id, package: pkg, description, inputKey, check }) => ({
+		id,
+		package: pkg,
+		description,
+		...check(inputs[inputKey]),
+	}));
 	const allPass = results.every((r) => r.pass);
 	return { results, allPass };
 }
