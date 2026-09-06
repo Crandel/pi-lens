@@ -741,26 +741,37 @@ function sourceTagForToolId(toolId: string): ProbeEvidence["source"] {
 }
 
 /**
- * `binary`/`source` for a probe that resolved through pi-lens's OWN release-
- * managed install (`~/.pi-lens/bin`) rather than through PATH (#2140). A reader
+ * `binary`/`source` for a probe that resolved through one of pi-lens's OWN
+ * managed installs rather than through PATH or a project venv (#2140). A reader
  * of latency.log could otherwise not tell the two apart, and the whole point of
- * the fix is that the managed directory now answers where PATH used to miss.
+ * the fix is that the managed directories now answer where PATH used to miss.
  *
- * The question is put to `findManagedToolBinary` — the same function that
- * produced the path — and settled by string identity, NOT by a path-prefix
- * predicate over the managed directory: a second opinion about which paths are
- * managed is exactly the parallel-list drift `sourceTagForToolId` exists to
- * avoid, and it would answer differently for case or separator variants.
+ * BOTH managed rungs are asked, in the order `createVenvFinder` walks them
+ * (#2140 review F1). The first version asked only about the release directory,
+ * so every npm-shim hit — knip, jscpd, madge, pyright, biome, htmlhint,
+ * stylelint — logged an evidence-free row indistinguishable from a PATH hit,
+ * while the doc claimed the opposite. Each rung is asked of THE function that
+ * produced its own paths (`managedNodeToolCandidates`, `findManagedToolBinary`)
+ * and settled by string identity, never by a path-prefix predicate over a
+ * directory: a second opinion about which paths are managed is exactly the
+ * parallel-list drift `sourceTagForToolId` exists to avoid, and it would answer
+ * differently for case or separator variants.
  *
- * A PATH/venv resolution returns no keys at all, so `source` present IS the
- * managed-dir hit. `binary` is a BASENAME, never the absolute path — same rule
- * as every other evidence field (#1568 review).
+ * `binary` present IS the managed hit; `source` names the family whenever the
+ * command is a registry id (`sourceTagForToolId` reads the registry's own
+ * `installStrategy`). A managed shim whose COMMAND is not itself a registry id
+ * — `markdownlint-cli2`, installed under registry id `markdownlint` — carries
+ * `binary` alone rather than a guessed family. `binary` is a BASENAME, never
+ * the absolute path — same rule as every other evidence field (#1568 review).
  */
 async function describeManagedResolution(
 	tool: string,
 	resolved: string,
 ): Promise<ProbeEvidence> {
-	if ((await findManagedToolBinary(tool)) !== resolved) return {};
+	const managed =
+		managedNodeToolCandidates(tool).includes(resolved) ||
+		(await findManagedToolBinary(tool)) === resolved;
+	if (!managed) return {};
 	const source = sourceTagForToolId(tool);
 	return {
 		binary: path.basename(resolved),
@@ -1120,7 +1131,16 @@ export function createAvailabilityChecker(
 				return false;
 			}
 
+			// Resolution is measured separately from the spawn (#2140 review F2).
+			// It is no longer free — the managed rungs stat two directories and,
+			// on a first touch, pay their own verification spawn — and it runs
+			// BEFORE `startedAt`, so neither `durationMs` nor
+			// `recordAvailabilityProbeOverrun` can see it. Folding it into
+			// `durationMs` would instead charge the probe budget for work that
+			// budget does not govern, so the two spans are reported side by side.
+			const resolveStartedAt = Date.now();
 			const cmd = await findCommand(resolvedCwd);
+			const resolveMs = Date.now() - resolveStartedAt;
 			// #1995: a command cooling down after a RUNTIME timeout (lint or
 			// autofix lane blew its real budget) must not re-probe on every
 			// edit - the positive verdict is effectively cooled. Consult-only:
@@ -1188,6 +1208,7 @@ export function createAvailabilityChecker(
 					evidence: {
 						...describeProbeEvidence(result),
 						...(await describeManagedResolution(command, cmd)),
+						resolveMs,
 					},
 				});
 				return true;

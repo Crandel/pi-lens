@@ -88,12 +88,54 @@ function writeManagedBinary(): string {
 	return binPath;
 }
 
-/** The checker exactly as `clients/dispatch/runners/actionlint.ts` builds it. */
-async function actionlintChecker() {
+/**
+ * The npm-strategy sibling: `ensureTool` puts these in
+ * `<pi-lens home>/tools/node_modules/.bin`, and `pyright` is a registry id, so
+ * `sourceTagForToolId` can name the family (#2140 review F1).
+ */
+function writeManagedNpmShim(): string {
+	const binPath = path.join(
+		tmpHome,
+		"tools",
+		"node_modules",
+		".bin",
+		process.platform === "win32" ? "pyright.cmd" : "pyright",
+	);
+	fs.mkdirSync(path.dirname(binPath), { recursive: true });
+	fs.writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
+	fs.chmodSync(binPath, 0o755);
+	return binPath;
+}
+
+/** A working project venv copy, which must outrank both managed rungs. */
+function writeVenvBinary(tool: string): string {
+	const binPath = path.join(cwd, ".venv", "bin", tool);
+	fs.mkdirSync(path.dirname(binPath), { recursive: true });
+	fs.writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
+	fs.chmodSync(binPath, 0o755);
+	return binPath;
+}
+
+/** A release-managed binary for a tool other than actionlint. */
+function writeManagedBinaryNamed(tool: string): string {
+	const binPath = path.join(tmpHome, "bin", tool);
+	fs.mkdirSync(path.dirname(binPath), { recursive: true });
+	fs.writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
+	fs.chmodSync(binPath, 0o755);
+	return binPath;
+}
+
+/** A checker built exactly as the dispatch runner for `command` builds it. */
+async function checkerFor(command: string, windowsExt = ".exe") {
 	const helpers =
 		await import("../../../../clients/dispatch/runners/utils/runner-helpers.js");
 	helpers.resetDispatchAvailabilityState();
-	return helpers.createAvailabilityChecker("actionlint", ".exe");
+	return helpers.createAvailabilityChecker(command, windowsExt);
+}
+
+/** The checker exactly as `clients/dispatch/runners/actionlint.ts` builds it. */
+async function actionlintChecker() {
+	return checkerFor("actionlint", ".exe");
 }
 
 async function spawnMock() {
@@ -110,6 +152,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.useRealTimers();
 	removeTempDirSync(tmpHome);
 	removeTempDirSync(cwd);
 });
@@ -133,9 +176,77 @@ describe("availability probe: pi-lens's own managed bin dir (#2140)", () => {
 			verdict: "available",
 			outcome: "success",
 			// Which directory answered, in the record a log reader already reads:
-			// `source` present IS the managed-dir hit, absent is PATH/venv.
+			// `binary` present IS a managed hit, absent is PATH/venv.
 			evidence: { binary: "actionlint", source: "github-release" },
 		});
+	});
+
+	it("names the npm-shim rung's managed hit too (review F1)", async () => {
+		// The first version of the evidence asked only about `~/.pi-lens/bin`,
+		// so every npm-strategy managed hit — knip, jscpd, madge, pyright,
+		// biome, htmlhint, stylelint — logged an evidence-free row that a reader
+		// could not tell from a PATH hit, while the field's doc claimed
+		// otherwise.
+		const shim = writeManagedNpmShim();
+		(await spawnMock()).mockImplementation(async (command: string) =>
+			command === shim ? (versionOk() as never) : (enoent() as never),
+		);
+
+		const checker = await checkerFor("pyright", ".exe");
+
+		expect(await checker.isAvailableAsync(cwd)).toBe(true);
+		expect(checker.getCommand(cwd)).toBe(shim);
+		expect(decisions()[0].metadata.evidence).toMatchObject({
+			binary: path.basename(shim),
+			source: "managed-dir",
+		});
+	});
+
+	it("keeps the project venv ahead of both managed rungs", async () => {
+		// shellcheck is `installStrategy: "github"` AND ships on PyPI
+		// (shellcheck-py), so "a venv copy and a managed copy both work" is a
+		// real machine state, not a contrived one. Hoisting the managed rung
+		// above the venv lookup is otherwise invisible: it kept 6 files / 120
+		// tests green before this case existed.
+		const venv = writeVenvBinary("shellcheck");
+		const managed = writeManagedBinaryNamed("shellcheck");
+		(await spawnMock()).mockImplementation(async (command: string) =>
+			command === venv || command === managed
+				? (versionOk() as never)
+				: (enoent() as never),
+		);
+
+		const checker = await checkerFor("shellcheck", ".exe");
+
+		expect(await checker.isAvailableAsync(cwd)).toBe(true);
+		expect(checker.getCommand(cwd)).toBe(venv);
+		// A venv hit is not a managed hit, and must not be labelled as one.
+		expect(decisions()[0].metadata.evidence.binary).toBeUndefined();
+		expect(decisions()[0].metadata.evidence.source).toBeUndefined();
+	});
+
+	it("reports the resolution span beside the probe span (review F2)", async () => {
+		// `findCommand` runs BEFORE the probe's `startedAt`, so the managed
+		// rungs' stat + verification spawn were charged to nobody: a 621ms
+		// managed hit logged `durationMs: 308`. Fake clock, not wall clock —
+		// every spawn through this seam advances Date by a fixed step, so the
+		// verification spawn (resolution) and the `--version` spawn (probe)
+		// land in their own fields with exact values.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const managed = writeManagedBinary();
+		(await spawnMock()).mockImplementation(async (command: string) => {
+			if (command !== managed) return enoent() as never;
+			vi.setSystemTime(new Date(Date.now() + 250));
+			return versionOk() as never;
+		});
+
+		const checker = await actionlintChecker();
+
+		expect(await checker.isAvailableAsync(cwd)).toBe(true);
+		// Two spawns, one per span: verification inside the resolver, then the
+		// probe itself. Neither may absorb the other.
+		expect(decisions()[0].metadata.evidence.resolveMs).toBe(250);
+		expect(decisions()[0].durationMs).toBe(250);
 	});
 
 	it("keeps a tool that is in neither PATH nor the managed dir unavailable", async () => {
