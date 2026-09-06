@@ -349,6 +349,12 @@ const wallClockBudgetInclude = [
 	// #2613: the resolver CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT
 	// write are the subject under test; no in-process double is faithful.
 	"tests/scripts/resolve-newest-in-range-host.test.ts",
+	// #2613 review S2/T3: the drift-notifier CLI's --dry-run env-reading and
+	// report-building wiring is the subject; no in-process double is faithful.
+	"tests/scripts/notify-install-smoke-drift.test.ts",
+	// #2613 review S3a: the retry wrapper's real exit code and distinct
+	// `::error::infra:` label on exhaustion are the subject under test.
+	"tests/scripts/npm-retry.test.ts",
 	// #2668 review F2: two real `node --import <fetch-stub>` child-process
 	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
 	// wiring the library-level suite (in-process) cannot see.

@@ -16,4 +16,5 @@ export function buildDriftIssueBody(
 
 export function findDriftTrackingIssue(
 	issues: { number: number; title: string }[] | null | undefined,
+	title?: string,
 ): { number: number; title: string } | null;

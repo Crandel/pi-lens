@@ -102,6 +102,29 @@ describe("findDriftTrackingIssue (#594)", () => {
 		expect(findDriftTrackingIssue([])).toBeNull();
 	});
 
+	// #2613 review S2/T3: generalized to take an explicit title so a second
+	// consumer (scripts/lib/install-smoke-drift.mjs) reuses this ONE finder
+	// instead of a second title-matching copy. The single-arg form above
+	// (this module's OWN DRIFT_ISSUE_TITLE) must keep working unchanged.
+	it("matches an EXPLICIT title, ignoring this module's own DRIFT_ISSUE_TITLE", () => {
+		const issues = [
+			{ number: 1, title: DRIFT_ISSUE_TITLE },
+			{
+				number: 2,
+				title: "install-smoke: pi-coding-agent@latest install drift detected",
+			},
+		];
+		expect(
+			findDriftTrackingIssue(
+				issues,
+				"install-smoke: pi-coding-agent@latest install drift detected",
+			),
+		).toEqual({
+			number: 2,
+			title: "install-smoke: pi-coding-agent@latest install drift detected",
+		});
+	});
+
 	it("exposes stable, fixed identifiers so the tracker is always found the same way", () => {
 		expect(DRIFT_ISSUE_LABEL).toBe("nightly-drift");
 		expect(DRIFT_ISSUE_TITLE).toBe("nightly: silentOnClean drift detected");
