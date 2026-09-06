@@ -2,12 +2,15 @@
 section: Fixed
 ---
 
-- **The bundled skills now actually load after an install (closes #2587)** —
-  the `pi.skills` manifest entry pointed at `../../skills`, which resolves
-  *outside* the published package on every install layout (npm, `git:` clones,
-  managed extension caches), so pi silently registered none of the four
-  shipped pi-lens skills — `pi-lens-ast-grep`, `pi-lens-lsp-navigation`,
-  `pi-lens-write-ast-grep-rule`, `pi-lens-write-tree-sitter-rule` — on any
-  release from 3.8.51 onward. pi resolves a non-glob manifest entry against
-  the package root, so the entry is back to `./skills` and all four register
-  again.
+- **`pi.skills` no longer escapes the published package (closes #2587)** —
+  the manifest entry pointed at `../../skills`, which resolves *outside* the
+  installed package on every layout (npm, `git:` clones, managed caches). The
+  four shipped skills still registered through the extension's own
+  `resources_discover` handler, but where the escaped path landed on an
+  existing directory (your project's `skills/`, or `<cache>/npm/skills`) pi
+  adopted that foreign tree as a pi-lens package resource and a same-named
+  entry there shadowed the real `pi-lens-ast-grep`,
+  `pi-lens-lsp-navigation`, `pi-lens-write-ast-grep-rule` or
+  `pi-lens-write-tree-sitter-rule`. pi resolves a non-glob manifest entry
+  against the package root, so the entry is now `./skills` and only the
+  package's own skills are registered.
