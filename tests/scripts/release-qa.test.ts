@@ -39,6 +39,7 @@ import {
 	formatOutcome,
 	implementedRowIds,
 	parseArgs,
+	dirtyCheckoutRefusal,
 	parseBaselineRows,
 	PINNED_ENV_KEYS,
 	pollToTerminal,
@@ -508,6 +509,20 @@ describe("release-QA scratch hermeticity (#2619 review F1)", () => {
 		);
 		expect(seen.piLensHome).toBe(path.join(scratchRoot, "home", ".pi-lens"));
 		expect(seen.npmCache).toBe(path.join(scratchRoot, "npm-cache"));
+	});
+});
+
+describe("release-QA dirty-checkout refusal (#2619 review F1)", () => {
+	it("passes a clean checkout through", () => {
+		expect(dirtyCheckoutRefusal("")).toBeNull();
+		expect(dirtyCheckoutRefusal("  \n ")).toBeNull();
+	});
+
+	it("refuses a dirty checkout and names what is uncommitted", () => {
+		const refusal = dirtyCheckoutRefusal(" M scripts/release-qa.mjs\n");
+		expect(refusal).toContain("the checkout is dirty");
+		expect(refusal).toContain("M scripts/release-qa.mjs");
+		expect(refusal).toContain("--from npm:<spec>");
 	});
 });
 

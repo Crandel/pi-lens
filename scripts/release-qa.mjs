@@ -334,6 +334,28 @@ export function shipVerdict(results, options = {}) {
 }
 
 /**
+ * The refusal message for a dirty checkout, or null when it is clean.
+ *
+ * A `--from tree` run packs `git archive HEAD`, so an uncommitted edit would be
+ * QA'd as its last commit and the report's "QA target" would name something the
+ * operator is not looking at. That is a USAGE error (exit 4), not a candidate
+ * failure: nothing about the release was measured, and reporting every row
+ * FAILed for it would be the runner lying in the other direction.
+ *
+ * @param {string} porcelain  output of `git status --porcelain`
+ * @returns {string | null}
+ */
+export function dirtyCheckoutRefusal(porcelain) {
+	const dirty = String(porcelain ?? "").trim();
+	if (dirty === "") return null;
+	return (
+		"the checkout is dirty, so `git archive HEAD` would pack something other " +
+		"than what you are looking at. Commit first, or QA a published release " +
+		`with --from npm:<spec>. Uncommitted:\n${dirty}`
+	);
+}
+
+/**
  * Exit code per verdict.
  *
  * | code | verdict | meaning |
@@ -603,19 +625,6 @@ export const PINNED_ENV_KEYS = Object.freeze([
  * which is why a bare tree export is enough and a full clone is not needed.
  */
 function exportHeadForPack(scratchRoot) {
-	const dirty = String(
-		gitExecFileSync(["status", "--porcelain"], {
-			cwd: REPO_ROOT,
-			encoding: "utf8",
-		}),
-	).trim();
-	if (dirty !== "") {
-		throw new Error(
-			"the checkout is dirty, so `git archive HEAD` would pack something " +
-				"other than what you are looking at. Commit first, or QA a " +
-				`published release with --from npm:<spec>. Uncommitted:\n${dirty}`,
-		);
-	}
 	const commit = String(
 		gitExecFileSync(["rev-parse", "HEAD"], {
 			cwd: REPO_ROOT,
@@ -1287,6 +1296,19 @@ async function main() {
 			console.error(`[release-qa] baseline: ${error}`);
 		process.exit(4);
 	}
+	if (opts.from === "tree") {
+		const refusal = dirtyCheckoutRefusal(
+			gitExecFileSync(["status", "--porcelain"], {
+				cwd: REPO_ROOT,
+				encoding: "utf8",
+			}),
+		);
+		if (refusal) {
+			console.error(`[release-qa] ${refusal}`);
+			process.exit(4);
+		}
+	}
+
 	const scratchRoot = fs.mkdtempSync(
 		path.join(os.tmpdir(), "pi-lens-release-qa-"),
 	);
@@ -1344,6 +1366,19 @@ async function main() {
 		if (opts.from === "tree") {
 			const exported = exportHeadForPack(scratchRoot);
 			exportedCommit = exported.commit;
+			// The export carries no node_modules, and `prepare`'s bundle step
+			// (scripts/bundle-dist.mjs) inlines the pure-JS runtime deps with
+			// esbuild — so without them it fails on `Could not resolve
+			// "minimatch"`. Production deps only: the toolchain `prepare` needs
+			// (tsc, esbuild) is fetched through npx/npm-exec into the cache, not
+			// the project tree. `--ignore-scripts` so this install does not run
+			// `prepare` itself; the pack below runs it once, properly.
+			log(`installing production deps into the export (npm ci --omit=dev)`);
+			npm(
+				["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"],
+				exported.dir,
+				env,
+			);
 			log(`packing the exported ${exported.commit} (npm pack --json)`);
 			// --pack-destination keeps the tarball out of the export too, and the
 			// JSON is sliced from the first `[` because the `prepare` script

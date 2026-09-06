@@ -106,6 +106,13 @@ export function shipVerdict(
  * is SKIPPED without `--git-ref`. A CI lane treats 2 as a warning, 1/3/4 as
  * failures.
  */
+/**
+ * The refusal message for a dirty checkout, or null when it is clean. A
+ * `--from tree` run packs `git archive HEAD`, so an uncommitted edit would be
+ * QA'd as its last commit — a usage error (exit 4), not a candidate failure.
+ */
+export function dirtyCheckoutRefusal(porcelain: string): string | null;
+
 export function verdictExitCode(verdict: string): number;
 
 /**
