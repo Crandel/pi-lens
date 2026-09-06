@@ -810,7 +810,7 @@ interface WorkspaceGlobSplit {
 }
 
 /**
- * May `step` consume `ch`?
+ * May a wildcard with this separator policy consume `ch`?
  *
  * A separator-confined wildcard (`[^/]` in the regex this replaced) takes
  * anything but `/`. A separator-CROSSING one — uv `exclude`'s `*`/`?`, and
