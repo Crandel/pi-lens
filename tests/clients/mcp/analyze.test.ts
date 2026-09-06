@@ -1,4 +1,3 @@
-// lsp-double: hand-rolled double on the MCP session seam, burn-down tracked in #2592
 /**
  * analyzeFile facade: runs the dispatch pipeline and maps the DispatchResult +
  * latency report into the JSON contract the MCP server returns.
@@ -14,6 +13,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DispatchLatencyReport } from "../../../clients/dispatch/dispatcher.js";
+import { makeLspServiceDouble } from "../../support/lsp-service-double.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 vi.mock("../../../clients/dispatch/dispatcher.js", async (importOriginal) => {
@@ -40,10 +40,11 @@ vi.mock("../../../clients/dispatch/fact-runner.js", async (importOriginal) => {
 const mockTouchFile = vi.hoisted(() => vi.fn(async () => undefined));
 const mockSupportsLSP = vi.hoisted(() => vi.fn((_file: string) => false));
 vi.mock("../../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		supportsLSP: mockSupportsLSP,
-		touchFile: mockTouchFile,
-	}),
+	getLSPService: () =>
+		makeLspServiceDouble({
+			supportsLSP: mockSupportsLSP,
+			touchFile: mockTouchFile,
+		}),
 }));
 
 // #536: buildOrUpdateGraph is mocked so this suite asserts the GATING logic

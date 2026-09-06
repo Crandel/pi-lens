@@ -1,7 +1,7 @@
-// lsp-double: hand-rolled double on the dispatch-runner seam, burn-down tracked in #2592
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeLspServiceDouble } from "../../../support/lsp-service-double.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
@@ -14,7 +14,10 @@ const resolveAvailableOrInstall = vi.hoisted(() => vi.fn());
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
 vi.mock("../../../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({ getClientForFile }),
+	// The runner's warm-up (`clients/dispatch/runners/pyright.ts`) awaits
+	// `getClientForFile` inside a swallow-all catch, so a partial double here
+	// fails silently — factory-seeded, with only that method asserted (#2592).
+	getLSPService: () => makeLspServiceDouble({ getClientForFile }),
 }));
 
 vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({

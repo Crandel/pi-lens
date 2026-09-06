@@ -1,4 +1,3 @@
-// lsp-double: hand-rolled double on the MCP session seam, burn-down tracked in #2592
 /**
  * session: drives pi-lens's real lifecycle handlers for the MCP path. The
  * handlers (handleSessionStart/handleTurnEnd) and the bootstrap bundle are
@@ -11,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../../clients/cache-manager.js";
+import { makeLspServiceDouble } from "../../support/lsp-service-double.js";
 import { gatedPromise } from "../../support/fault-injection.js";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -52,7 +52,9 @@ vi.mock("../../../clients/ast-grep-client.js", () => ({
 	AstGrepClient: class {},
 }));
 vi.mock("../../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({ getAliveClientCount: () => 2 }),
+	// `getMcpSessionContext` reads only `getAliveClientCount`; the rest of the
+	// surface comes from the factory (#2592).
+	getLSPService: () => makeLspServiceDouble({ getAliveClientCount: () => 2 }),
 	resetLSPService: vi.fn(),
 }));
 // Hoisted (not inlined in the factory) so the delivery tests can make a consume
