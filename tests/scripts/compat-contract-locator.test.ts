@@ -69,7 +69,12 @@ describe("locateContractSource", () => {
 		expect(result.observedAt).toBe("0.65.0");
 	});
 
-	it("prefers the FIRST existing candidate when somehow both exist", () => {
+	// #2680 F1: an npm install (or a partial/stale publish) can leave a file
+	// at an OLD candidate path on disk even after the package's CURRENT
+	// version moved the logic elsewhere — first-match-wins in authored
+	// (oldest-first) order would certify that leftover corpse as the live
+	// contract. The live package's own current layout must always win.
+	it("prefers the NEWEST existing candidate when both exist (stale leftover must never outrank the live layout)", () => {
 		fs.mkdirSync(path.join(packageDir, "src/runs/shared"), {
 			recursive: true,
 		});
@@ -85,8 +90,35 @@ describe("locateContractSource", () => {
 		const result = locateContractSource(packageDir, CANDIDATES);
 		expect(result.found).toBe(true);
 		if (!result.found) throw new Error("unreachable");
-		expect(result.relativePath).toBe("src/runs/shared/pi-args.ts");
-		expect(result.source).toBe("OLD");
+		expect(result.relativePath).toBe("src/runs/shared/child-runtime-config.ts");
+		expect(result.observedAt).toBe("0.65.0");
+		expect(result.source).toBe("NEW");
+	});
+
+	// The reviewer's exact #2680 F1 probe: a stale leftover file at the OLD
+	// path still carries content that would SATISFY the check (the flag is
+	// still set there), while the live file at the NEW path has genuinely
+	// dropped it. Preferring the stale file would make Layer A print
+	// "ALL CONTRACT CHECKS VERIFIED" — certifying a corpse instead of the
+	// package's actual current behavior.
+	it("resolves the live (newest) file even when the stale leftover's content would satisfy a check and the live one wouldn't", () => {
+		fs.mkdirSync(path.join(packageDir, "src/runs/shared"), {
+			recursive: true,
+		});
+		fs.writeFileSync(
+			path.join(packageDir, "src/runs/shared/pi-args.ts"),
+			"export const SUBAGENT_CHILD_ENV = 'PI_SUBAGENT_CHILD';\nenv[SUBAGENT_CHILD_ENV] = '1';",
+		);
+		fs.writeFileSync(
+			path.join(packageDir, "src/runs/shared/child-runtime-config.ts"),
+			"// flag no longer set here in the live version",
+		);
+
+		const result = locateContractSource(packageDir, CANDIDATES);
+		expect(result.found).toBe(true);
+		if (!result.found) throw new Error("unreachable");
+		expect(result.relativePath).toBe("src/runs/shared/child-runtime-config.ts");
+		expect(result.source).not.toContain("SUBAGENT_CHILD_ENV");
 	});
 
 	it("reports found:false with every tried candidate when the file is ABSENT everywhere", () => {

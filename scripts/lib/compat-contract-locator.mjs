@@ -29,18 +29,28 @@ import * as path from "node:path";
 /** @typedef {{ path: string, observedAt: string }} ContractSourceCandidate */
 
 /**
- * Resolve the first existing candidate file under `packageDir`.
+ * Resolve the NEWEST-observed candidate file that actually exists under
+ * `packageDir`. Candidate lists are still AUTHORED oldest-observed-layout
+ * first (append the newest layout at the end, per docs/subagent-compat.md) —
+ * but resolution walks the list newest-to-oldest, because a package upgrade
+ * can leave a stale file at an OLD path on disk (an npm install that adds
+ * files without pruning ones the new version's `package.json` `files` list
+ * no longer references, a partially-applied publish, ...) while the live
+ * code has moved on. First-match-wins in authored (oldest-first) order would
+ * certify that leftover corpse as the current contract instead of reading
+ * where the package's OWN current layout actually put the logic (#2680 F1).
  *
  * @param {string} packageDir absolute path to the installed package
  *   (e.g. `<scratch>/node_modules/pi-subagents`) to resolve candidates against
- * @param {ContractSourceCandidate[]} candidates tried in order — put the
- *   version each was OBSERVED at so a failure detail can say exactly what
- *   was tried and when it was last known to work
+ * @param {ContractSourceCandidate[]} candidates authored oldest-observed
+ *   first; walked newest-first so a live relocation always wins over a
+ *   stale leftover at an older path
  * @returns {{ found: true, relativePath: string, observedAt: string, source: string }
  *         | { found: false, tried: ContractSourceCandidate[] }}
  */
 export function locateContractSource(packageDir, candidates) {
-	for (const candidate of candidates) {
+	for (let i = candidates.length - 1; i >= 0; i--) {
+		const candidate = candidates[i];
 		const filePath = path.join(packageDir, candidate.path);
 		if (fs.existsSync(filePath)) {
 			return {
