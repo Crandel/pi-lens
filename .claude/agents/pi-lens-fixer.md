@@ -203,6 +203,30 @@ can still recombine into a bug when master moved the seam you built on), and
 update the PR body with an honest review-round section. Report what changed per
 finding with its red-run evidence.
 
+**A reviewer's prescribed remedy is a hypothesis, not an order.** Reproduce
+the finding, then test the prescription against your own table of the seam
+before applying it; if the prescription is insufficient, ship the correct
+shape and quote the red that the prescription alone leaves (#2642 r3: the
+reviewer prescribed a one-word per-caller normalization; the key-derivation
+table showed two direct `loadLSPConfig` callers it never reached, and
+mutation M7b — the prescription as written — reds the two-loaders case. The
+reviewer verified the override and withdrew the prescription). Compliance
+without that red is how a round ships the reviewer's blind spot.
+
+**When a verify round finds a NEW defect on your fix, the next round carries
+a table, not just the patch** (the orchestrator's round-count rail). Name the
+seam's axis and enumerate it from grep: every writer/reader of a key with the
+exact expression that derives it (#2642 r3), every call into an external sink
+or timer with "if it throws / if it never returns" columns (#2649 r3). Both
+tables found sites the prescribed patch would have missed. Fix everything the
+table exposes in the same round; a table that finds nothing is quoted too.
+
+**A governance exemption added in a fix round is a finding until the reviewer
+clears it.** Name each one in the review-round section with the reason the
+file demands and why it is a registration rather than silencing (#2654 r2
+added two — `sweep-floor-coverage` and `generation-guard-sweep` — and the
+verify brief asked for exactly that judgement).
+
 ## Hard-won mechanics (2026-08-26 harvest — each cost a fix round)
 
 - **Screen the diff against shapes 28–36 before pushing** (hot-path hoist for a
