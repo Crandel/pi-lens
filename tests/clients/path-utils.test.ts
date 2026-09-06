@@ -1101,6 +1101,17 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvExclude: false,
 	},
 	{
+		// The separator alone is not the component: `crates/**` compiled to
+		// `^crates/.+$`, so the `.+` (one character, then any number) has to
+		// survive the step split that put the `/` in its own step (#2603).
+		axis: "a TRAILING `**` is not satisfied by the separator alone",
+		pattern: "crates/**",
+		relativePath: "crates/",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
 		axis: "an INTERIOR `**` may consume zero components",
 		pattern: "a/**/b",
 		relativePath: "a/b",
@@ -1303,6 +1314,27 @@ const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
 		uvMembers: false,
 		uvExclude: true,
 	},
+	// A separator-CROSSING wildcard is `.`, not "any character": the regex the
+	// step table replaced spelled `**` as `.+`, and minimatch's globstar is
+	// `.`-based too, so neither has ever matched across a line terminator inside
+	// a directory name. The pair below is the positive control and the pin —
+	// widening the crossing predicate to "any character" reds the second row.
+	{
+		axis: "`**` crosses an ordinary directory name",
+		pattern: "**/c",
+		relativePath: "ab/c",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "`**` does NOT cross a newline inside a directory name (`.`, not any char)",
+		pattern: "**/c",
+		relativePath: "a\nb/c",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
 	// #2591 review round 2, F2: a glob character class is not a JS character
 	// class. `[z-a]` is a legal glob whose range is empty (it matches nothing)
 	// and an illegal RegExp ("Range out of order"). Pre-fix these THREW a
@@ -1491,9 +1523,12 @@ const UV_DIFFERENTIAL_PATHS = [
 	"packages/x/y/z",
 	"a-c",
 	"a/x/c",
-	// #2603: tails the interleaved patterns above can and cannot reach.
+	// #2603: tails the interleaved patterns above can and cannot reach, and a
+	// directory name carrying a line terminator — the character a
+	// separator-crossing wildcard has never been able to cross.
 	"a/b/zzz",
 	"a/b/c/d/zzz",
+	"a\nb/c",
 ] as const;
 
 /**
@@ -1520,6 +1555,18 @@ const UV_MINIMATCH_DIVERGENCES = new Map<string, string>([
 	// called `a{b,c}` upstream. The fold moves uv TOWARD upstream here.
 	["a{b,c} ab", "minimatch-only brace expansion; rust glob has none"],
 	["a{b,c} a{b,c}", "minimatch-only brace expansion; rust glob has none"],
+	// minimatch short-circuits a pattern that is NOTHING BUT `**` to
+	// match-everything; every other spelling of it goes through a `.`-based
+	// group, as did the regex this matcher replaced, and `.` excludes the four
+	// line terminators. So a bare `**` matches a directory name containing a
+	// `\n` in minimatch and not here. INHERITED, not introduced: the pre-fold
+	// minimatch call and the #2591 regex disagreed the same way, and #2591's
+	// corpus simply carried no such path. Upstream rust `glob` is char-based and
+	// would match, so this is a recorded limitation rather than a choice; it
+	// needs a real directory whose name contains a newline to observe.
+	["** a\nb/c", "minimatch's bare-`**` match-everything short-circuit"],
+	["**/** a\nb/c", "minimatch's bare-`**` match-everything short-circuit"],
+	["**/**/** a\nb/c", "minimatch's bare-`**` match-everything short-circuit"],
 ]);
 
 describe("the uv-members dialect reproduces the pre-fold minimatch answers (#2591)", () => {
