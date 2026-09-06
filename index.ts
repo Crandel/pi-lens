@@ -47,7 +47,7 @@ import { CacheManager } from "./clients/cache-manager.js";
 // the same way the per-dispatch path does, so a retired blocker stops gating
 // the commit.
 import { retireInlineBlockerAndResyncGuard } from "./clients/git-guard.js";
-import { resolvePackagePath } from "./clients/package-root.js";
+import { resolveSkillPaths } from "./clients/skills-resolver.js";
 import {
 	clearWidgetState,
 	exportWidgetState,
@@ -1798,12 +1798,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// module's own directory — under the compiled dist/ layout (#182) the module
 		// lives in dist/ but skills/ stays at the package root, so a module-relative
 		// join lands on the non-existent dist/skills/ and skills silently fail to load
-		// (#205). resolvePackagePath walks up to package.json, correct for both the
-		// source (index.ts at root) and dist (dist/index.js) layouts.
-		const skillsDir = resolvePackagePath(import.meta.url, "skills");
-
+		// (#205). resolveSkillPaths walks up to package.json (same as
+		// resolvePackagePath) and additionally reports the absent-or-empty case
+		// instead of silently returning a path that yields zero skills (#2626).
 		return {
-			skillPaths: [skillsDir],
+			skillPaths: resolveSkillPaths(import.meta.url),
 		};
 	});
 
