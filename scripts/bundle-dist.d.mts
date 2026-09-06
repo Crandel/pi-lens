@@ -1,5 +1,3 @@
-export declare function resolveBundleExecPrefix(): string;
-
 export declare function buildEsbuildExecInvocation(args: {
 	npmCli: string;
 	execPrefix: string;
