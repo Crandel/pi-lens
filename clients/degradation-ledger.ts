@@ -117,11 +117,14 @@ export type DegradationKind =
 	 * #2518: the session-root registry hit its cap and dropped a root this
 	 * process was serving, together with that root's loaded LSP config — so the
 	 * operator's `lsp.disabledServers` denial for it stops applying until the
-	 * next caller re-initializes it (`shouldInitializeSessionRoot` guarantees
-	 * one does, which is why this is a degradation and not a fault). Subject is
-	 * the cap itself, so a process cycling through hundreds of roots writes ONE
-	 * row rather than one per dropped root; the reason names the first root
-	 * dropped, which is what a reader tunes the cap against.
+	 * next session start or tool call NAMING that root loads it again
+	 * (`shouldInitializeSessionRoot` guarantees those two entry points do,
+	 * which is why this is a degradation and not a fault; the readers of the
+	 * denial trigger no load). Subject is the cap itself, so a process cycling
+	 * through hundreds of roots keys ONE tally rather than one per dropped root
+	 * — and it is a TALLY (`incrementDegradationCount`), because the number of
+	 * roots this process has had to drop is exactly what an operator tunes the
+	 * cap against. The reason names the first root dropped.
 	 */
 	| "lsp-session-root-evicted"
 	/**

@@ -33,11 +33,39 @@ import {
 	isSessionRootRegistered,
 	shouldInitializeSessionRoot,
 } from "../../../clients/lsp/session-roots.js";
+import {
+	clearLatencyLog,
+	flushLatencyLog,
+	getLatencyLogPath,
+} from "../../../clients/latency-logger.js";
+import { normalizeFilePath } from "../../../clients/path-utils.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 const DENIED_SERVER = "typos";
 const dirs: string[] = [];
 let previousHome: string | undefined;
+let previousTestMode: string | undefined;
+
+/**
+ * The `config_resolved` rows this process wrote for `root` — the positive
+ * record that a resolution HAPPENED, which `recordConfigResolved`
+ * (`clients/lsp/config.ts`) claims once per (session, root). Read from the
+ * real latency log, keyed with the same `normalizeFilePath` the row is
+ * stamped with.
+ */
+async function configResolvedRowsFor(root: string): Promise<unknown[]> {
+	await flushLatencyLog();
+	const file = getLatencyLogPath();
+	const text = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+	const wanted = normalizeFilePath(root);
+	return text
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>)
+		.filter(
+			(entry) => entry.phase === "config_resolved" && entry.filePath === wanted,
+		);
+}
 
 /** A project root whose `.pi-lens.json` denies {@link DENIED_SERVER}. */
 function denyingRoot(): string {
@@ -62,20 +90,29 @@ function foreignRoot(index: number): string {
 	return dir;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
 	previousHome = process.env.PI_LENS_HOME;
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-2518-home-"));
 	dirs.push(home);
 	process.env.PI_LENS_HOME = home;
+	// The latency sink is off under test mode, and the `config_resolved` row is
+	// half of what this file asserts (review F1).
+	previousTestMode = process.env.PI_LENS_TEST_MODE;
+	process.env.PI_LENS_TEST_MODE = "0";
 	resetLSPConfigStateForTests();
 	resetDegradationLedger();
+	clearLatencyLog();
+	await flushLatencyLog();
 });
 
-afterEach(() => {
+afterEach(async () => {
+	await flushLatencyLog();
 	resetLSPConfigStateForTests();
 	resetDegradationLedger();
 	if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = previousHome;
+	if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+	else process.env.PI_LENS_TEST_MODE = previousTestMode;
 	for (const dir of dirs.splice(0)) removeTempDirSync(dir);
 });
 
@@ -167,7 +204,35 @@ describe("#2518 a live session root's denial survives foreign cwd traffic", () =
 			(group) => group.kind === "lsp-session-root-evicted",
 		);
 		expect(evictions).toHaveLength(1);
-		// Bounded: two evictions happened above, one row was written.
+		// Two roots were dropped (130 registered, cap 128). The tally is the
+		// event total an operator tunes the cap against...
+		expect(evictions[0]?.count).toBe(2);
+		// ... and it stays ONE entry, because the subject is the cap and not the
+		// evicted root: a process cycling roots must not grow the ledger.
 		expect(evictions[0]?.latestReasons).toHaveLength(1);
+		expect(evictions[0]?.latestReasons[0]?.reason).toContain("(count: 2)");
+	}, 120_000);
+
+	it("re-arms the config_resolved record for a root the cap dropped", async () => {
+		const root = denyingRoot();
+		await initLSPConfig(root);
+		expect(await configResolvedRowsFor(root)).toHaveLength(1);
+
+		// A second resolution of a root that is STILL served needs no second
+		// row — the store already holds that answer.
+		await initLSPConfig(root);
+		expect(await configResolvedRowsFor(root)).toHaveLength(1);
+
+		for (let index = 0; index < 129; index++) {
+			await initLSPConfig(foreignRoot(index));
+		}
+		expect(isSessionRootRegistered(root)).toBe(false);
+
+		// Now the answer is GONE, so the reload is a real second resolution and
+		// must say what it resolved to. Without releasing the once-claim with
+		// the entry, the reload publishes a `config_resolution_pending` mark
+		// that no row ever answers.
+		await initLSPConfig(root);
+		expect(await configResolvedRowsFor(root)).toHaveLength(2);
 	}, 120_000);
 });

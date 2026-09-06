@@ -722,6 +722,27 @@ export function claimPhaseOncePerSession(
 }
 
 /**
+ * Release ONE scope's claim for `phase` — the narrow sibling of
+ * {@link releaseOncePerSessionPhase}, which releases every scope of a phase.
+ *
+ * #2518 review F1. A claim is a promise that this session's record for the
+ * (phase, scope) pair has already been written, which holds only while the
+ * state that record described is still there. When that state is DROPPED —
+ * the session-root registry evicting a root, taking its resolved LSP config
+ * with it — the next load for that scope is a genuine SECOND resolution, and
+ * its row is the only thing that says what the reloaded config was. So the
+ * claim is released with the state it described; a claim outliving its state
+ * silences the record for the rest of the session, which is catalog shape 17
+ * pointed at a positive-observability record.
+ *
+ * Bounded by the caller: releases are as frequent as the evictions that cause
+ * them, and those are counted (`lsp-session-root-evicted`).
+ */
+export function releasePhaseClaim(phase: string, scope: string): void {
+	oncePerSessionPhases.delete(claimKey(phase, scope));
+}
+
+/**
  * Release every scope's claim for ONE phase, without touching the others
  * (#2526 review round 2, S1).
  *

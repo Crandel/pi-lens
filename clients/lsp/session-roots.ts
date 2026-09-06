@@ -49,7 +49,7 @@
  */
 
 import { BoundedFifoMap } from "../bounded-cache.js";
-import { recordDegradationOnce } from "../degradation-ledger.js";
+import { incrementDegradationCount } from "../degradation-ledger.js";
 import type { RegisteredLSPConfig } from "./config.js";
 import { isSameOrWithin } from "./server.js";
 import path from "node:path";
@@ -77,33 +77,51 @@ const sessionRoots = new BoundedFifoMap<
  * The cap dropped a root this process was serving. Its files fall back to
  * pre-#2052 clamp behavior and its `lsp.disabledServers` denial stops applying
  * until something initializes the root again — which `shouldInitializeSessionRoot`
- * now guarantees the next caller does, because the registration went with the
- * payload.
+ * now guarantees the next SESSION START OR TOOL CALL naming that root does,
+ * because the registration went with the payload. Nothing else re-initializes:
+ * the readers of the denial (`isServerDisabled`, `getServersForFileWithConfig`,
+ * `getServerInitOverride`) ask the store, they never load it.
  *
- * ONE row per session, with a constant subject: `recordDegradationOnce`'s
- * dedupe keys are unbounded, so a per-root subject would grow a key per root a
- * long-lived process ever cycles through — a container bounded on one axis and
- * unbounded on another, which is the shape this whole fix is about.
+ * A CONSTANT subject, counted rather than latched (#2518 review F3). The
+ * subject cannot be the evicted root: the ledger's `recordDegradationOnce` /
+ * `incrementDegradationCount` dedupe keys are unbounded, so a per-root subject
+ * would grow one key per root a long-lived process ever cycles through — a
+ * container bounded on one axis and unbounded on another, which is the shape
+ * this whole fix is about. That argument bounds the SUBJECT; it is not an
+ * argument for throwing the tally away, and the number of roots this process
+ * has had to drop is exactly what an operator tunes the cap against. The
+ * ledger keeps one entry per kind/subject and emits durable rows only on
+ * power-of-two counts, so counting is as bounded here as latching.
+ *
+ * Returns the evicted roots so the caller can drop the per-root session
+ * bookkeeping that described them — `initLSPConfig` releases each one's
+ * `config_resolved` claim (review F1).
  */
 function noteEvictedRoots(
 	evicted: Array<[string, RegisteredLSPConfig | undefined]>,
-): void {
-	if (evicted.length === 0) return;
-	recordDegradationOnce({
-		kind: "lsp-session-root-evicted",
-		subject: `cap=${SESSION_ROOT_CAP}`,
-		reason: `session root registry at capacity; dropped ${evicted[0]?.[0]} and will re-initialize it on next use`,
-	});
+): string[] {
+	const roots = evicted.map(([root]) => root);
+	if (roots.length > 0) {
+		incrementDegradationCount({
+			kind: "lsp-session-root-evicted",
+			subject: `cap=${SESSION_ROOT_CAP}`,
+			reason: `session root registry at capacity; dropped ${roots[0]} and will load it again on the next session start or tool call naming that root`,
+		});
+	}
+	return roots;
 }
 
-/** Record a session cwd as served. Idempotent; re-registering refreshes nothing. */
-export function registerSessionRoot(cwd: string): void {
+/**
+ * Record a session cwd as served. Idempotent; re-registering refreshes nothing.
+ * Returns the roots this insertion dropped at the cap, oldest first.
+ */
+export function registerSessionRoot(cwd: string): string[] {
 	const root = path.resolve(cwd);
 	// Present already: leave the entry alone. Writing the `undefined`
 	// placeholder over a loaded config would blank a served root's denial for
 	// the length of the re-initializing load — the #2518 window in miniature.
-	if (sessionRoots.has(root)) return;
-	noteEvictedRoots(sessionRoots.set(root, undefined));
+	if (sessionRoots.has(root)) return [];
+	return noteEvictedRoots(sessionRoots.set(root, undefined));
 }
 
 /**
@@ -114,12 +132,14 @@ export function registerSessionRoot(cwd: string): void {
  * belongs in the registry — and it is a PAIR, which is what keeps the payload
  * from outliving the registration or the registration from outliving the
  * payload.
+ *
+ * Returns the roots this write dropped at the cap, oldest first.
  */
 export function setSessionRootConfig(
 	cwd: string,
 	config: RegisteredLSPConfig,
-): void {
-	noteEvictedRoots(sessionRoots.set(path.resolve(cwd), config));
+): string[] {
+	return noteEvictedRoots(sessionRoots.set(path.resolve(cwd), config));
 }
 
 /**

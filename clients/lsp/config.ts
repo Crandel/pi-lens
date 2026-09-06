@@ -73,6 +73,7 @@ import {
 	currentSessionRecordId,
 	logLatency,
 	releaseOncePerSessionPhase,
+	releasePhaseClaim,
 } from "../latency-logger.js";
 import { getPiLensGlobalConfigPath } from "../lens-config.js";
 import { normalizeFilePath } from "../path-utils.js";
@@ -567,6 +568,33 @@ export function registerLSPConfig(config: LSPConfig): RegisteredLSPConfig {
 }
 
 /**
+ * Drop the `config_resolved` claim of every root the registry just evicted
+ * (#2518 review F1).
+ *
+ * `recordConfigResolved` claims that row once per (session, root), which is
+ * right while the resolved config is still in the store: a second
+ * `loadLSPConfig` for a root already resolved this session re-derives the same
+ * answer and needs no second row. An EVICTED root is the other case — its
+ * resolved config is gone, the reload is a genuine second resolution, and its
+ * row is the only record of what the reloaded config was. Without this release
+ * the reload publishes a `config_resolution_pending` mark that no row ever
+ * answers, which reads in the analyzer exactly like a resolution that never
+ * finished.
+ *
+ * Rows stay bounded because evictions do, and evictions are counted:
+ * `lsp-session-root-evicted` in the degradation ledger.
+ *
+ * `normalizeFilePath` is the claim's own key function — the same one
+ * `recordConfigResolved` stamps the claim with — not `path.resolve`, so the
+ * release cannot miss a claim on a platform where the two differ.
+ */
+function forgetConfigResolvedClaims(evictedRoots: readonly string[]): void {
+	for (const root of evictedRoots) {
+		releasePhaseClaim(CONFIG_RESOLVED_PHASE, normalizeFilePath(root));
+	}
+}
+
+/**
  * Initialize LSP configuration (call at session start).
  * Deduplicates concurrent calls for the same workspace.
  *
@@ -582,16 +610,14 @@ export async function initLSPConfig(cwd: string): Promise<void> {
 	// #2052: this cwd is now a served session root. Registered BEFORE the
 	// in-flight dedup return below, so a concurrent duplicate init still
 	// registers it rather than returning early with the root unrecorded.
-	registerSessionRoot(normalizedCwd);
+	forgetConfigResolvedClaims(registerSessionRoot(normalizedCwd));
 
 	const existing = configInFlight.get(normalizedCwd);
 	if (existing) return existing;
 
 	const promise = (async () => {
-		setSessionRootConfig(
-			normalizedCwd,
-			registerLSPConfig(await loadLSPConfig(cwd, os.homedir())),
-		);
+		const config = registerLSPConfig(await loadLSPConfig(cwd, os.homedir()));
+		forgetConfigResolvedClaims(setSessionRootConfig(normalizedCwd, config));
 	})();
 
 	configInFlight.set(normalizedCwd, promise);
