@@ -271,6 +271,25 @@ fixture garbage into the real telemetry (#2506). Before every such probe:
 `PILENS_DATA_DIR` likewise when the probe touches project-scoped data. A probe
 that forgets is a finding against YOUR report, not the PR's.
 
+## Before you call it done
+
+Interrogate your own diff from first principles before reporting; re-climb
+the minimalism ladder on what you BUILT, not just on what you planned:
+
+1. What here is unnecessary, over-complicated, or resting on an assumption you
+   never verified? Challenge each one with a probe, not a hunch.
+2. What can be deleted entirely? (Inert branches, plumbing nothing reads,
+   a fixture-only axis, an exemption list beside the gate it exempts.)
+3. What becomes simpler once the deletions are gone?
+
+Prefer deleting over simplifying, simplifying over optimizing, optimizing over
+automating. And it might already be done: if the diff survives the three
+questions, leave it alone — churn is not rigor. The 2026-09-06 record: #2585
+r1 shipped 28 laundered call sites and dead `keys` plumbing; #2583 r2 shipped
+two mutation-inert branches under a ticked checklist box; #2595 r1 shipped an
+axis no manifest can reach. #2599 is the positive case — four `omit` entries
+deleted before reporting because the mutation showed they did nothing.
+
 ## Report format
 
 Outcome first: branch, PR URL, then root cause in two sentences, red-run
