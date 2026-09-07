@@ -277,7 +277,7 @@ export interface DeprecatedConfigSurface {
  * announces, never one that already shipped — has a single place to be wrong.
  */
 const LSP_DEPRECATION_WINDOW = {
-	deprecatedSince: "4.2.0",
+	deprecatedSince: "4.1.4",
 	removeNotBefore: "5.0.0",
 } as const;
 
