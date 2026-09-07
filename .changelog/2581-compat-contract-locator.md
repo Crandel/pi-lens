@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **compat-smoke Layer A resolves each pinned contract's source file independently (refs #2581)** — `pi-subagents@0.65.0` relocated the file behind the `PI_SUBAGENT_CHILD` env-var contract and removed the `PI_SUBAGENT_RUN_ID`/`PI_SUBAGENT_CHILD_AGENT` identity vars entirely, so the nightly's Layer A read a single hardcoded path inside one shared try/catch and reported an `INFRA FAILURE` (a plain `ENOENT`) as generic contract drift for the whole run, blinding verification of the other six contracts too. `scripts/compat-contracts.mjs` now resolves each contract's source through an ordered candidate-path list (`scripts/lib/compat-contract-locator.mjs`) and reports one of three outcomes per contract — verified / drift / infra — instead of a single pass/fail; `docs/subagent-compat.md` documents all three. The identity-var requirement was dropped from `checkNicobailonChildEnv` since pi-lens's `getSubagentIdentity()` already degrades gracefully when they're absent — no runtime behavior changed.

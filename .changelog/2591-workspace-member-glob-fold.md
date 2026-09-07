@@ -1,5 +1,0 @@
----
-section: Changed
----
-
-- **One dialect-parameterized workspace-member glob matcher (closes #2591)** — `matchesWorkspaceMemberPattern(pattern, relativePath, dialect)` in `clients/path-utils.ts` replaces the two hand-rolled member matchers: cargo's private per-segment regex compiler in `clients/lsp/server.ts` and uv's private minimatch options block in `clients/python-environment.ts`, both now thin callers passing a dialect constant. The dialects diverge on `**` (a cargo pattern containing one still never matches, byte-for-byte unchanged, so Rust-LSP workspace hoisting is untouched), on whether `*`/`?` may cross `/`, on character classes, and on pattern normalization. uv's `exclude` list, pinned to `astral-sh/uv@3c979abda4530fe9bf3d92e9bcf5c5575e3b3126`, matches with `require_literal_separator: false`, so a `*` in an exclusion now crosses `/` (`exclude = ['packages/a*c']` excludes `packages/a/b/c`) instead of being documented as an unimplementable limitation — an excluded nested project falls back to its own `.venv`. npm/pnpm's `expandWorkspacePattern` stays separate by decision: it expands the filesystem rather than matching a candidate path.

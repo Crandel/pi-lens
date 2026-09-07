@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **Workspace-member globs no longer wedge a turn on an interleaved `**` chain (closes #2603)** — `matchesWorkspaceMemberPattern` compiled a pattern to one anchored whole-path regex in which every `**` emitted its own nullable `.+`, so N of them explored 2^N splits of a non-matching path; #2591 collapsed CONSECUTIVE `**`s, but a collapse cannot fire across a separating component, so `("**/*" x12)/zzz` against a 40-component project still took 124900 ms inside the `detectPythonEnvironment` call that `clients/test-runner-client.ts`, `clients/dispatch/runners/pyright.ts` and `clients/lsp/server.ts` await with no timeout. A pattern now compiles to a list of bounded steps decided by one memoized (step, position) table — O(steps x characters), no backtracking — and the same shapes answer in about 2 ms in both uv dialects. Answers are unchanged in all three dialects (cargo, uv `members`, uv `exclude`), including the fail-closed answer for an uncompilable character class.
