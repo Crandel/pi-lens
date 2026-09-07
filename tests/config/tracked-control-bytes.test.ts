@@ -86,8 +86,12 @@ export function formatControlByteScan(result: ControlByteScanResult): string {
 describe("tracked source files contain no literal control bytes (#2571)", () => {
 	it("scans a non-empty tracked TypeScript, JavaScript, and Markdown population", () => {
 		const files = trackedSourceFiles();
-		// Calibration: 1,514 TypeScript, 99 MJS, and 175 Markdown files are
-		// tracked on this tree. Each floor is below half its live population.
+		// Calibration: 1,514 TypeScript, 99 MJS, and 64 Markdown files are
+		// tracked on this tree OUTSIDE `.changelog/`. Each floor is below half
+		// its live population. The Markdown floor deliberately ignores the
+		// `.changelog/*.md` fragments: they are transient and vanish on every
+		// release roll (the 4.1.4 bump consumed 151 of them and a floor of 80,
+		// calibrated while they existed, went red on the release PR).
 		assertNonEmptyScan("git ls-files source population", files.length, 800);
 		assertNonEmptyScan(
 			"git ls-files TypeScript population",
@@ -102,7 +106,7 @@ describe("tracked source files contain no literal control bytes (#2571)", () => 
 		assertNonEmptyScan(
 			"git ls-files Markdown population",
 			files.filter((file) => file.endsWith(".md")).length,
-			80,
+			30,
 		);
 		const result = scanTrackedSourceFiles(files);
 		const report = formatControlByteScan(result);
