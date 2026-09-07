@@ -144,6 +144,33 @@ after a run must be identical, and
 Never run any release probe without those pins — an unpinned probe writes into
 the maintainer's real `~/.pi` and `~/.pi-lens` (#2506).
 
+### 3b. Pre-bump dry roll (before opening the bump PR)
+
+The bump PR changes three things the unit suite reads as data: the package
+version, the `CHANGELOG.md` release headings, and the `.changelog/` fragment
+population (which the roll DELETES). Tests calibrated against the pre-roll
+tree go red only on the bump PR, after the gate has already said ship. The
+4.1.4 bump (2026-09-07) hit two: `config-deprecation-registry` demanded
+`deprecatedSince <= the announcing release` (the window said 4.2.0; the
+Deprecated entries shipped in 4.1.4), and `tracked-control-bytes`'s Markdown
+floor of 80 had been calibrated while 110 fragments existed (64 files remain).
+
+So, in a scratch export, roll for the target version and run the tests that
+read release state:
+
+```
+S=$(mktemp -d) && git archive HEAD | tar -x -C "$S"
+node scripts/changelog-release.mjs <version> --root-dir "$S"
+(cd "$S" && npm version <version> --no-git-tag-version >/dev/null && ln -s "$OLDPWD/node_modules" node_modules && npm run build >/dev/null && \
+  npx vitest run $(grep -rl "CHANGELOG.md\|\.changelog\|package.json" tests/ | grep -v "^tests/support\|fixtures" | tr '\n' ' '))
+```
+
+Every red here is a release-only calibration: fix it IN the bump PR (a
+trailing commit after the bump+roll commit is fine) and name it in the PR
+body. Also read the rolled section for a "next version" literal that the
+fragments assumed (`4.2.0` in a `Deprecated since …` line when the release is
+a patch) and correct it in code, docs and the rolled section together.
+
 ### 4. Report
 
 The runner writes `release-qa-report.md` and `release-qa-evidence/<row-id>.*`.
