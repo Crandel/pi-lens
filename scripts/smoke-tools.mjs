@@ -47,7 +47,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
-import { assertFixtureWorkspaceRegistered } from "./lib/lsp-fixture-session-guard.mjs";
+import {
+	bootstrapFixtureWorkspace,
+	withScratchHome,
+} from "./lib/lsp-fixture-workspace.mjs";
+import { safeRm } from "./lib/safe-rm.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -1256,24 +1260,6 @@ function parseArgs(argv) {
 const TMP_PREFIX = "pi-lens-smoke-";
 
 /**
- * Best-effort temp cleanup. On Windows the spawned LSP servers keep a handle on
- * the workspace until THIS process exits, so an in-run rmSync can EPERM; never
- * let that abort the run.
- */
-function safeRm(dir) {
-	try {
-		fs.rmSync(dir, {
-			recursive: true,
-			force: true,
-			maxRetries: 3,
-			retryDelay: 200,
-		});
-	} catch {
-		// leftover temp dir — swept on the next run (see sweepLeftovers)
-	}
-}
-
-/**
  * Sweep leftovers from PRIOR runs. Those runs' LSP servers have long since
  * exited, so their workspace locks are released and the dirs delete cleanly —
  * this is why cleanup belongs at startup, not in the same process that holds the
@@ -1564,16 +1550,33 @@ export function classifyInstallOutcome(toolId, deps) {
  * legitimately declined/skipped/toolchain-absent/transient. The single call
  * site all three `runLspHandshake` unavailability branches share (#2661
  * review F3 — three near-identical inline blocks collapsed to one).
+ *
+ * `attemptSnapshots` is the actual `Map` `ensureFixtureTools` returned — not
+ * a `deps`-shaped object carrying its own `getInstallAttempt` closure that a
+ * future edit could reassemble either way. #2670 (from the #2661 r3 verify):
+ * the previous signature took a `deps` object whose caller built
+ * `{ ...classifyDeps, getInstallAttempt: (id) => attemptSnapshots.get(id) }`
+ * at the call site — nothing stopped a later edit from swapping that closure
+ * for the module-global `getInstallAttempt` (mutation E, #2661), which
+ * stayed green because no test exercised the call site's own wiring. Taking
+ * the snapshot Map as its own positional parameter and deriving
+ * `getInstallAttempt` from it INTERNALLY (always overriding anything a
+ * caller's `restDeps` might carry under that key) removes the shape that
+ * mutation needs to exist in.
  */
 export function resolveUnavailabilityRow(
 	toolIds,
 	unavailableTools,
-	deps,
+	attemptSnapshots,
+	restDeps,
 	fallbackSkipDetail,
 ) {
 	for (const id of toolIds) {
 		if (!unavailableTools.has(id)) continue;
-		const outcome = classifyInstallOutcome(id, deps);
+		const outcome = classifyInstallOutcome(id, {
+			...restDeps,
+			getInstallAttempt: (toolId) => attemptSnapshots.get(toolId),
+		});
 		if (outcome.row === "fail") return outcome;
 	}
 	return { row: "skip", detail: fallbackSkipDetail };
@@ -1758,23 +1761,21 @@ async function runLspHandshake({ langs, install, verbose }) {
 				}
 			},
 		);
-		const fixtureClassifyDeps = {
-			...classifyDeps,
-			getInstallAttempt: (toolId) => attemptSnapshots.get(toolId),
-		};
-		const workspace = copyDirToTemp(fx.dir);
-		// #2369: every fixture's temp workspace is a fresh, unregistered session
-		// root. Register it unconditionally (not only for `disableServers`
-		// fixtures) so `isOutsideAllSessionRoots` never declines this workspace's
-		// files just because an EARLIER fixture in the array happened to register
-		// its own (foreign) workspace first and flipped the registry from empty
-		// (fail-open) to non-empty. `disableServers` fixtures still reload below,
-		// after writing `.pi-lens/lsp.json`, so the disabled-server list they set
-		// is the one that lands in the cached config — this early call exists
-		// only for session-root registration, which `initLSPConfig` performs
-		// before anything else regardless of what config is on disk yet.
-		await initLSPConfig(workspace);
-		const absFile = path.join(workspace, fx.file);
+		// #2369/#2655/#2658: every fixture's temp workspace registers itself as a
+		// served session root unconditionally (not only for `disableServers`
+		// fixtures) — see lib/lsp-fixture-workspace.mjs / lib/lsp-fixture-
+		// session-guard.mjs for why this can't be conditional. `fx.setup`/
+		// `fx.lombokJar` (below) don't touch git/LSP-config state, so running
+		// them after registration+gitInit+disable+assert is order-safe.
+		const { workspace, absFile, cleanup } = await bootstrapFixtureWorkspace(
+			fx,
+			{ initLSPConfig, repoRoot, tmpPrefix: "pi-lens-smoke-" },
+		);
+		if (verbose && fx.disableServers) {
+			console.error(
+				`[${fx.lang}] disabled [${fx.disableServers.join(",")}] via .pi-lens/lsp.json → expecting ${fx.expectServerId}`,
+			);
+		}
 		if (fx.setup) {
 			if (verbose) {
 				const desc = Array.isArray(fx.setup) ? fx.setup.join(" ") : fx.setup;
@@ -1789,7 +1790,7 @@ async function runLspHandshake({ langs, install, verbose }) {
 					detail: setupResult.detail,
 					diags: 0,
 				});
-				safeRm(workspace);
+				cleanup();
 				continue;
 			}
 		}
@@ -1805,45 +1806,14 @@ async function runLspHandshake({ langs, install, verbose }) {
 					detail: `lombok.jar unavailable: ${err?.message ?? err}`,
 					diags: 0,
 				});
-				safeRm(workspace);
+				cleanup();
 				continue;
-			}
-		}
-		// Some auxiliary servers (opengrep) root at the nearest .git — give the
-		// temp workspace one so the copied fixture is treated as in-workspace.
-		if (fx.gitInit) {
-			try {
-				gitExecFileSync(["init", "-q"], {
-					cwd: workspace,
-					stdio: "ignore",
-				});
-			} catch {
-				// git unavailable — opengrep falls back to cwd; may not scan the temp file
 			}
 		}
 		const auxIds = fx.auxiliaryServerIds ?? [];
 		const useAux = auxIds.length > 0;
 		const push = (state, detail, diags = 0) =>
 			rows.push({ lang: fx.lang, runner: fx.serverHint, state, detail, diags });
-		// Alternate-primary fixtures: disable the default server for this workspace
-		// so getClientForFile falls through to the alternate.
-		if (fx.disableServers) {
-			fs.mkdirSync(path.join(workspace, ".pi-lens"), { recursive: true });
-			fs.writeFileSync(
-				path.join(workspace, ".pi-lens", "lsp.json"),
-				JSON.stringify({ disabledServers: fx.disableServers }, null, 2),
-			);
-			await initLSPConfig(workspace);
-			if (verbose) {
-				console.error(
-					`[${fx.lang}] disabled [${fx.disableServers.join(",")}] via .pi-lens/lsp.json → expecting ${fx.expectServerId}`,
-				);
-			}
-		}
-		// Harness guard (#2369/#2655): every fixture must register its OWN
-		// workspace as a session root before it is touched — see
-		// lib/lsp-fixture-session-guard.mjs for why.
-		await assertFixtureWorkspaceRegistered(fx.lang, workspace);
 		try {
 			if (!lsp.supportsLSP(absFile)) {
 				push("skip", "no LSP server registered for this file");
@@ -1931,7 +1901,8 @@ async function runLspHandshake({ langs, install, verbose }) {
 					const outcome = resolveUnavailabilityRow(
 						toolList,
 						unavailableTools,
-						fixtureClassifyDeps,
+						attemptSnapshots,
+						classifyDeps,
 						`auxiliary ${auxIds.join(",")} unavailable (tool not installed; pass --install)`,
 					);
 					push(outcome.row, outcome.detail);
@@ -1968,7 +1939,8 @@ async function runLspHandshake({ langs, install, verbose }) {
 					const outcome = resolveUnavailabilityRow(
 						fx.tools ?? [],
 						unavailableTools,
-						fixtureClassifyDeps,
+						attemptSnapshots,
+						classifyDeps,
 						`${fx.expectServerId} unavailable (no client ready; pass --install or install ${(fx.tools ?? []).join(",")})`,
 					);
 					push(outcome.row, outcome.detail);
@@ -2092,7 +2064,8 @@ async function runLspHandshake({ langs, install, verbose }) {
 				const outcome = resolveUnavailabilityRow(
 					fx.tools ?? [],
 					unavailableTools,
-					fixtureClassifyDeps,
+					attemptSnapshots,
+					classifyDeps,
 					`no client ready in ${LSP_CLIENT_WAIT_MS}ms (server missing/slow; try --install)`,
 				);
 				push(outcome.row, outcome.detail);
@@ -2100,7 +2073,7 @@ async function runLspHandshake({ langs, install, verbose }) {
 		} catch (err) {
 			push("fail", `error: ${err?.message ?? err}`);
 		} finally {
-			safeRm(workspace);
+			cleanup();
 		}
 	}
 
@@ -2348,6 +2321,12 @@ async function runAutofixSmoke({ langs, install, verbose }) {
 }
 
 async function main() {
+	// #2670/#2506-shape: pin PI_LENS_HOME/PILENS_DATA_DIR to a scratch temp
+	// dir BEFORE the first dist/ import any lane below performs —
+	// dist/clients/latency-logger.js reads its log dir into a top-level const
+	// at module load, not lazily per write.
+	withScratchHome();
+
 	const {
 		langs,
 		step2,

@@ -292,9 +292,23 @@ describe.skipIf(process.platform === "win32")(
 	},
 );
 
-describe("resolveUnavailabilityRow (#2661 F3)", () => {
+// `restDeps` is everything `classifyInstallOutcome` needs EXCEPT
+// `getInstallAttempt` — #2670 moved that out into its own positional
+// `attemptSnapshots` Map parameter (see resolveUnavailabilityRow's own doc
+// comment for why), so a caller here has no `getInstallAttempt` key to set
+// at all under normal use.
+function restDeps(overrides: Record<string, unknown> = {}) {
+	return {
+		toolsById,
+		toolchainPresence: {},
+		pipCandidates: ["pip3", "pip", "python3", "python"],
+		...overrides,
+	};
+}
+
+describe("resolveUnavailabilityRow (#2661 F3 / #2670)", () => {
 	it("returns the first genuine failure among several tool ids", () => {
-		const attempts = new Map<string, SmokeInstallAttempt>([
+		const attemptSnapshots = new Map<string, SmokeInstallAttempt>([
 			["rust-analyzer", { outcome: "declined" }],
 			[
 				"vscode-css-languageserver",
@@ -304,7 +318,8 @@ describe("resolveUnavailabilityRow (#2661 F3)", () => {
 		const result = resolveUnavailabilityRow(
 			["rust-analyzer", "vscode-css-languageserver"],
 			new Set(["rust-analyzer", "vscode-css-languageserver"]),
-			deps((id: string) => attempts.get(id)),
+			attemptSnapshots,
+			restDeps(),
 			"fallback skip detail",
 		);
 		expect(result.row).toBe("fail");
@@ -312,26 +327,74 @@ describe("resolveUnavailabilityRow (#2661 F3)", () => {
 	});
 
 	it("falls back to the given skip detail when nothing is genuine", () => {
-		const attempts = new Map<string, SmokeInstallAttempt>([
+		const attemptSnapshots = new Map<string, SmokeInstallAttempt>([
 			["rust-analyzer", { outcome: "declined" }],
 		]);
 		const result = resolveUnavailabilityRow(
 			["rust-analyzer"],
 			new Set(["rust-analyzer"]),
-			deps((id: string) => attempts.get(id)),
+			attemptSnapshots,
+			restDeps(),
 			"fallback skip detail",
 		);
 		expect(result).toEqual({ row: "skip", detail: "fallback skip detail" });
 	});
 
 	it("skips tool ids that were never unavailable", () => {
+		const attemptSnapshots = new Map<string, SmokeInstallAttempt>([
+			[
+				"vscode-css-languageserver",
+				{ outcome: "failed", reason: "should not be reached" },
+			],
+		]);
 		const result = resolveUnavailabilityRow(
 			["vscode-css-languageserver"],
 			new Set(),
-			deps(() => ({ outcome: "failed", reason: "should not be reached" })),
+			attemptSnapshots,
+			restDeps(),
 			"fallback skip detail",
 		);
 		expect(result).toEqual({ row: "skip", detail: "fallback skip detail" });
+	});
+
+	/**
+	 * #2670 (the #2661 r3 verify's residual): the production call site used to
+	 * assemble a `deps` object at each of `runLspHandshake`'s three
+	 * unavailability sites, with `getInstallAttempt: (id) =>
+	 * attemptSnapshots.get(id)` set INLINE — nothing about that shape stopped
+	 * a future edit from swapping that closure for the live module-global
+	 * `getInstallAttempt` instead (mutation E, #2661 r3), and no test caught
+	 * it because none exercised the assembled object's own precedence.
+	 *
+	 * Reproduces the exact hazard directly against the NEW signature: pass a
+	 * `restDeps` that itself carries a (hostile/mistaken) live
+	 * `getInstallAttempt`, alongside the real snapshot `Map` as its own
+	 * parameter — and assert the snapshot always wins. This is mutation E's
+	 * shape moved onto the new call surface: reverting `resolveUnavailabilityRow`
+	 * to spread `restDeps` AFTER its own derived `getInstallAttempt` (instead
+	 * of before) reintroduces exactly this bug and reds this test.
+	 */
+	it("always classifies from the snapshot Map, never a getInstallAttempt smuggled into restDeps", () => {
+		const attemptSnapshots = new Map<string, SmokeInstallAttempt>([
+			[
+				"vscode-css-languageserver",
+				{ outcome: "failed", reason: "npm ERR! code ENOVERSIONS" },
+			],
+		]);
+		const liveGetInstallAttempt = (): SmokeInstallAttempt => ({
+			outcome: "declined",
+			reason:
+				"should never be read — this is the live global, not the snapshot",
+		});
+		const result = resolveUnavailabilityRow(
+			["vscode-css-languageserver"],
+			new Set(["vscode-css-languageserver"]),
+			attemptSnapshots,
+			restDeps({ getInstallAttempt: liveGetInstallAttempt }),
+			"fallback skip detail",
+		);
+		expect(result.row).toBe("fail");
+		expect(result.detail).toContain("ENOVERSIONS");
 	});
 });
 

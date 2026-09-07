@@ -15,8 +15,11 @@
  * `isOutsideAllSessionRoots` — silently, with zero diagnostics, indistinguishable
  * from the tool genuinely finding nothing. The exact same shape independently
  * affected `characterize-lsp.mjs`, `probe-clean-signal.mjs`, and
- * `server-capabilities.mjs` (#2655) — all four scripts' guards now share ONE
- * implementation, `scripts/lib/lsp-fixture-session-guard.mjs`.
+ * `server-capabilities.mjs` (#2655), and `bench-lsp.mjs` (#2658) shared the
+ * identical shape — all five scripts now route through one bootstrap,
+ * `scripts/lib/lsp-fixture-workspace.mjs`'s `bootstrapFixtureWorkspace`
+ * (#2670), which itself calls this guard, `scripts/lib/
+ * lsp-fixture-session-guard.mjs`'s `assertFixtureWorkspaceRegistered`.
  *
  * This file has two layers:
  *
@@ -134,7 +137,7 @@ describe("smoke-tools --lsp: every fixture registers its own session root (#2369
 	});
 });
 
-describe("assertFixtureWorkspaceRegistered: the guard shared by all four LSP harness scripts (#2369/#2655)", () => {
+describe("assertFixtureWorkspaceRegistered: the guard shared by all five LSP harness scripts via bootstrapFixtureWorkspace (#2369/#2655/#2658/#2670)", () => {
 	const guardEntry = path.join(
 		repoRoot,
 		"scripts",
@@ -162,7 +165,7 @@ describe("assertFixtureWorkspaceRegistered: the guard shared by all four LSP har
 		// production module the guard reads from — not a mock standing in for
 		// it. Fresh dynamic import each run (module cache is process-lifetime,
 		// but the registry itself is reset below) matches how every one of the
-		// four calling scripts loads it.
+		// five calling scripts loads it (via bootstrapFixtureWorkspace, #2670).
 		({ assertFixtureWorkspaceRegistered } = await import(
 			pathToFileURL(guardEntry).href
 		));

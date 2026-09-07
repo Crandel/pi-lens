@@ -109,6 +109,16 @@ export interface ClassifyInstallOutcomeDeps {
 	/** The pip command ladder to probe, in priority order (installer's own). */
 	pipCandidates: readonly string[];
 }
+/**
+ * Everything `classifyInstallOutcome` needs EXCEPT `getInstallAttempt`
+ * (#2670): `resolveUnavailabilityRow` takes the attempt-snapshot `Map` as its
+ * own positional parameter and derives `getInstallAttempt` from it
+ * internally, so a caller has no `getInstallAttempt` key to (mis)assemble.
+ */
+export type ClassifyOutcomeRestDeps = Omit<
+	ClassifyInstallOutcomeDeps,
+	"getInstallAttempt"
+>;
 export interface InstallOutcomeRow {
 	row: "fail" | "skip";
 	detail: string;
@@ -138,11 +148,17 @@ export function pipCandidateUsable(command: string): boolean;
  * install failure among `toolIds` (`classifyInstallOutcome`), or a "skip"
  * carrying `fallbackSkipDetail` when every unavailable tool in the list is
  * legitimately declined/skipped/toolchain-absent/transient.
+ *
+ * `attemptSnapshots` is the actual snapshot `Map` `ensureFixtureTools`
+ * returned — not folded into `restDeps`, so a caller has no
+ * `getInstallAttempt` key of its own to accidentally point at the live
+ * module-global instead (#2670, the #2661 r3 verify's residual).
  */
 export function resolveUnavailabilityRow(
 	toolIds: readonly string[],
 	unavailableTools: ReadonlySet<string>,
-	deps: ClassifyInstallOutcomeDeps,
+	attemptSnapshots: ReadonlyMap<string, SmokeInstallAttempt | undefined>,
+	restDeps: ClassifyOutcomeRestDeps,
 	fallbackSkipDetail: string,
 ): InstallOutcomeRow;
 /**
