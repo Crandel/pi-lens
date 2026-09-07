@@ -278,6 +278,16 @@ describe("withScratchHome (#2670/#2506-shape)", () => {
 			expect(process.env.PI_LENS_HOME).toBe(dir);
 			expect(process.env.PILENS_DATA_DIR).toBe(dir);
 			expect(fs.existsSync(dir as string)).toBe(true);
+			// #2670 review round 3 F1: the production `owner.pid` write itself was
+			// untested — deleting it left the round-2 suite fully green, AND (per
+			// the reviewer) silently reopens R2-F1 for any run older than the 1h
+			// age gate: a directory's mtime does not advance on appends to an
+			// EXISTING file inside it, so a long-lived, still-writing home reads as
+			// "idle" to the age gate the moment it crosses that age, with nothing
+			// but this file to say otherwise.
+			expect(
+				fs.readFileSync(path.join(dir as string, "owner.pid"), "utf8"),
+			).toBe(String(process.pid));
 		} finally {
 			restore();
 			fs.rmSync(dir as string, { recursive: true, force: true });
@@ -375,24 +385,45 @@ describe("withScratchHome (#2670/#2506-shape)", () => {
 	// test reproduces the hazard directly: a scratch home whose `owner.pid`
 	// names a process that is DEFINITELY still alive (this very test process)
 	// must survive the sweep unconditionally, never merely "usually".
-	it("(a) never removes a scratch home whose owner.pid names a live process", () => {
+	//
+	// Review round 3 F1: `live` is minted end-to-end by the REAL helper (its
+	// own real `withScratchHome()` call), not a hand-written `owner.pid` —
+	// the production write is what's under test here, not a stand-in for it.
+	// This also re-arms round 2's "M13" (the sweep-must-run-before-its-own-
+	// mkdtemp guard the age gate alone had quietly retired: a dir hand-built
+	// outside any call can't distinguish that ordering, since it already
+	// fully exists — with a valid pid — before the call under test even
+	// starts). The SECOND call below is the one actually exercised: its own
+	// sweep pass must both spare `live` (a genuinely separate, still-alive
+	// prior mint) AND land its own fresh `dir` on disk afterward — explicitly
+	// asserted, not merely assumed because cleanup didn't throw.
+	it("(a) never removes a scratch home whose owner.pid names a live process (helper-minted, end-to-end)", () => {
 		delete process.env.PI_LENS_HOME;
 		delete process.env.PILENS_DATA_DIR;
-		const live = mintScratchHomeDir();
-		writeOwnerPid(live, process.pid); // this test process — guaranteed alive
+		const first = withScratchHome({ tmpPrefix: SWEEP_TEST_PREFIX });
+		const live = first.dir as string;
 		// A populated tool tree, per the reviewer's probe (bin/taplo, tools/,
 		// instances.json) — not load-bearing for the assertion, but makes this
 		// test's failure mode legible as "a live scratch home's tools vanished".
 		fs.mkdirSync(path.join(live, "bin"), { recursive: true });
 		fs.writeFileSync(path.join(live, "bin", "taplo"), "pretend binary");
 
-		const { dir, restore } = withScratchHome({ tmpPrefix: SWEEP_TEST_PREFIX });
+		// Clear the pin `first` just set so this SECOND call's sweep actually
+		// runs (rather than early-returning on "already pinned") — simulating a
+		// second, concurrent run on the same machine while `live` (this very
+		// process) is still alive and using it.
+		delete process.env.PI_LENS_HOME;
+		delete process.env.PILENS_DATA_DIR;
+		const second = withScratchHome({ tmpPrefix: SWEEP_TEST_PREFIX });
 		try {
 			expect(fs.existsSync(live)).toBe(true); // survived — the whole point of (a)
 			expect(fs.existsSync(path.join(live, "bin", "taplo"))).toBe(true);
+			// The SECOND call's own fresh mint must survive its OWN sweep pass.
+			expect(fs.existsSync(second.dir as string)).toBe(true);
+			expect(second.dir).not.toBe(live);
 		} finally {
-			restore();
-			fs.rmSync(dir as string, { recursive: true, force: true });
+			second.restore();
+			fs.rmSync(second.dir as string, { recursive: true, force: true });
 			fs.rmSync(live, { recursive: true, force: true });
 		}
 	});
