@@ -322,37 +322,124 @@ describe("withScratchHome (#2670/#2506-shape)", () => {
 		expect(process.env.PILENS_DATA_DIR).toBeUndefined();
 	});
 
-	// #2670 review F2: nothing else ever removes a scratch home (`restore()`
-	// only unsets the env vars, and a SIGKILL'd run skips any exit handler),
-	// so without a startup sweep every `--install` run leaks a full tool tree.
-	it("sweeps a leftover scratch-home dir from a prior run before minting a new one", () => {
+	// #2670 review F2, hardened in review round 2 F1. `lsp-fixture-workspace-test-home-`,
+	// NOT anything starting with the production default `lsp-fixture-home-`:
+	// the prefix filter is a plain `startsWith`, so a test dir whose name
+	// merely EXTENDS the production prefix (round 1's `lsp-fixture-home-
+	// sweep-test-<pid>-`) is swept by any real script's OWN default-prefixed
+	// sweep running concurrently on the same machine — reviewer round 2 F1's
+	// second direction, reproduced live by the prefix collision alone, no
+	// mutation needed.
+	const SWEEP_TEST_PREFIX = "lsp-fixture-workspace-test-home-";
+
+	function mintScratchHomeDir(): string {
+		return fs.mkdtempSync(path.join(os.tmpdir(), SWEEP_TEST_PREFIX));
+	}
+
+	function writeOwnerPid(dir: string, pid: number): void {
+		fs.writeFileSync(path.join(dir, "owner.pid"), String(pid));
+	}
+
+	/**
+	 * A pid guaranteed to name no process, without spawning one: Linux's own
+	 * `pid_max` (`/proc/sys/kernel/pid_max`, default 4194304, and this repo's
+	 * authoritative Unit tests lane is ubuntu — AGENTS.md platform rule) caps
+	 * every real pid well under this value, and `process.kill(pid, 0)` on an
+	 * out-of-range pid reports the SAME `ESRCH` a genuinely-exited pid would
+	 * (verified directly: `process.kill(999_999_999, 0)` throws
+	 * `{ code: "ESRCH" }`) — the two are indistinguishable to the code under
+	 * test, which only branches on `ESRCH` vs. everything else.
+	 */
+	const IMPOSSIBLE_PID = 999_999_999;
+
+	it("this file's own test prefix does not start with the production default (never cross-swept either direction)", () => {
+		expect(SWEEP_TEST_PREFIX.startsWith("lsp-fixture-home-")).toBe(false);
+	});
+
+	it("does not sweep when a home is already pinned (a no-op call touches nothing under os.tmpdir())", () => {
+		process.env.PI_LENS_HOME = "/some/explicit/home";
+		const leftover = mintScratchHomeDir();
+		try {
+			withScratchHome({ tmpPrefix: SWEEP_TEST_PREFIX });
+			expect(fs.existsSync(leftover)).toBe(true); // untouched — no-op path never sweeps
+		} finally {
+			fs.rmSync(leftover, { recursive: true, force: true });
+		}
+	});
+
+	// #2670 review round 2 F1 (a): the defect this round fixes. Round 1's
+	// sweep did an unconditional `rmSync` and relied on it THROWING to detect
+	// "still in use" — but on POSIX, `rmSync` on a directory another live
+	// process is actively writing into SUCCEEDS regardless (only Windows
+	// EPERMs on an open handle), so that catch block caught nothing. This
+	// test reproduces the hazard directly: a scratch home whose `owner.pid`
+	// names a process that is DEFINITELY still alive (this very test process)
+	// must survive the sweep unconditionally, never merely "usually".
+	it("(a) never removes a scratch home whose owner.pid names a live process", () => {
 		delete process.env.PI_LENS_HOME;
 		delete process.env.PILENS_DATA_DIR;
-		const prefix = `lsp-fixture-home-sweep-test-${process.pid}-`;
-		const leftover = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-		fs.writeFileSync(path.join(leftover, "stale-tool-tree-marker"), "x");
-		expect(fs.existsSync(leftover)).toBe(true);
+		const live = mintScratchHomeDir();
+		writeOwnerPid(live, process.pid); // this test process — guaranteed alive
+		// A populated tool tree, per the reviewer's probe (bin/taplo, tools/,
+		// instances.json) — not load-bearing for the assertion, but makes this
+		// test's failure mode legible as "a live scratch home's tools vanished".
+		fs.mkdirSync(path.join(live, "bin"), { recursive: true });
+		fs.writeFileSync(path.join(live, "bin", "taplo"), "pretend binary");
 
-		const { dir, restore } = withScratchHome({ tmpPrefix: prefix });
+		const { dir, restore } = withScratchHome({ tmpPrefix: SWEEP_TEST_PREFIX });
 		try {
-			expect(fs.existsSync(leftover)).toBe(false); // swept
-			expect(dir).not.toBe(leftover); // this run's OWN dir, minted fresh after the sweep
-			expect(fs.existsSync(dir as string)).toBe(true);
+			expect(fs.existsSync(live)).toBe(true); // survived — the whole point of (a)
+			expect(fs.existsSync(path.join(live, "bin", "taplo"))).toBe(true);
+		} finally {
+			restore();
+			fs.rmSync(dir as string, { recursive: true, force: true });
+			fs.rmSync(live, { recursive: true, force: true });
+		}
+	});
+
+	it("(b) removes a scratch home whose owner.pid names a dead process", () => {
+		delete process.env.PI_LENS_HOME;
+		delete process.env.PILENS_DATA_DIR;
+		const dead = mintScratchHomeDir();
+		writeOwnerPid(dead, IMPOSSIBLE_PID);
+
+		const { dir, restore } = withScratchHome({ tmpPrefix: SWEEP_TEST_PREFIX });
+		try {
+			expect(fs.existsSync(dead)).toBe(false); // swept — its writer is gone
 		} finally {
 			restore();
 			fs.rmSync(dir as string, { recursive: true, force: true });
 		}
 	});
 
-	it("does not sweep when a home is already pinned (a no-op call touches nothing under os.tmpdir())", () => {
-		process.env.PI_LENS_HOME = "/some/explicit/home";
-		const prefix = `lsp-fixture-home-no-sweep-test-${process.pid}-`;
-		const leftover = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+	it("(c) skips a dir with no owner.pid that is still young (a mint mid-flight, not yet orphaned)", () => {
+		delete process.env.PI_LENS_HOME;
+		delete process.env.PILENS_DATA_DIR;
+		const young = mintScratchHomeDir(); // fresh mtime, no owner.pid written
+
+		const { dir, restore } = withScratchHome({ tmpPrefix: SWEEP_TEST_PREFIX });
 		try {
-			withScratchHome({ tmpPrefix: prefix });
-			expect(fs.existsSync(leftover)).toBe(true); // untouched — no-op path never sweeps
+			expect(fs.existsSync(young)).toBe(true); // too young to call orphaned
 		} finally {
-			fs.rmSync(leftover, { recursive: true, force: true });
+			restore();
+			fs.rmSync(dir as string, { recursive: true, force: true });
+			fs.rmSync(young, { recursive: true, force: true });
+		}
+	});
+
+	it("(d) removes a dir with no owner.pid once it is old (the crashed-before-writing-its-pid fallback)", () => {
+		delete process.env.PI_LENS_HOME;
+		delete process.env.PILENS_DATA_DIR;
+		const old = mintScratchHomeDir();
+		const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+		fs.utimesSync(old, twoHoursAgo, twoHoursAgo);
+
+		const { dir, restore } = withScratchHome({ tmpPrefix: SWEEP_TEST_PREFIX });
+		try {
+			expect(fs.existsSync(old)).toBe(false); // orphaned — swept
+		} finally {
+			restore();
+			fs.rmSync(dir as string, { recursive: true, force: true });
 		}
 	});
 
