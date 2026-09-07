@@ -31,12 +31,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"../..",
 );
+
+// #2670 review F5: was the generic "test-" (collides in spirit with every
+// OTHER file's ad-hoc temp prefix, and gave no hint which suite left a dir
+// behind). Distinctive enough to grep a leaked `/tmp` entry back to this file.
+const WORKSPACE_TEST_PREFIX = "lsp-fixture-workspace-test-";
 
 const tmpDirs: string[] = [];
 function freshTmpDir(prefix: string): string {
@@ -92,8 +97,17 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 	it("copies the fixture, registers the workspace as a session root, and returns workspace/absFile/cleanup", async () => {
 		const { workspace, absFile, cleanup } = await bootstrapFixtureWorkspace(
 			fx,
-			{ initLSPConfig, repoRoot: fakeRepoRoot, tmpPrefix: "test-" },
+			{
+				initLSPConfig,
+				repoRoot: fakeRepoRoot,
+				tmpPrefix: WORKSPACE_TEST_PREFIX,
+			},
 		);
+		// Tracked BEFORE any assertion, so an assertion failure below still
+		// leaves this workspace swept by afterEach (#2670 review F5) — this
+		// test in particular then exercises `cleanup()` itself, so the sweep
+		// below is a harmless no-op (`force: true`) on an already-removed dir.
+		tmpDirs.push(workspace);
 		expect(fs.existsSync(absFile)).toBe(true);
 		expect(fs.readFileSync(absFile, "utf8")).toBe("hello\n");
 		expect(isSessionRootRegistered(workspace)).toBe(true);
@@ -108,8 +122,9 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 		const { workspace } = await bootstrapFixtureWorkspace(fx, {
 			initLSPConfig,
 			repoRoot: fakeRepoRoot,
-			tmpPrefix: "test-",
+			tmpPrefix: WORKSPACE_TEST_PREFIX,
 		});
+		tmpDirs.push(workspace); // #2670 review F5 — this test never called cleanup()
 		expect(isSessionRootRegistered(workspace)).toBe(true);
 	});
 
@@ -117,11 +132,17 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 		const brokenInitLSPConfig = async () => {
 			// simulates a caller wiring bug: doesn't call the real registrar
 		};
+		// A pre-made, TRACKED workspace (#2670 review F5) rather than letting
+		// the helper mint its own via `tmpPrefix`: the promise below REJECTS,
+		// so there is no `{ workspace }` to destructure and track afterward —
+		// the only way to guarantee this dir is swept is to already own its
+		// path before the call.
+		const workspace = freshTmpDir(WORKSPACE_TEST_PREFIX);
 		await expect(
 			bootstrapFixtureWorkspace(fx, {
 				initLSPConfig: brokenInitLSPConfig,
 				repoRoot: fakeRepoRoot,
-				tmpPrefix: "test-",
+				workspace,
 			}),
 		).rejects.toThrow(/#2369\/#2655/);
 	});
@@ -130,9 +151,10 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 		const { workspace, cleanup } = await bootstrapFixtureWorkspace(fx, {
 			initLSPConfig,
 			repoRoot: fakeRepoRoot,
-			tmpPrefix: "test-",
+			tmpPrefix: WORKSPACE_TEST_PREFIX,
 			gitInit: true,
 		});
+		tmpDirs.push(workspace);
 		expect(fs.existsSync(path.join(workspace, ".git"))).toBe(true);
 		cleanup();
 	});
@@ -141,8 +163,9 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 		const { workspace, cleanup } = await bootstrapFixtureWorkspace(fx, {
 			initLSPConfig,
 			repoRoot: fakeRepoRoot,
-			tmpPrefix: "test-",
+			tmpPrefix: WORKSPACE_TEST_PREFIX,
 		});
+		tmpDirs.push(workspace);
 		expect(fs.existsSync(path.join(workspace, ".git"))).toBe(false);
 		cleanup();
 	});
@@ -151,8 +174,13 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 		const { workspace, disabledServers, cleanup } =
 			await bootstrapFixtureWorkspace(
 				{ ...fx, disableServers: ["typescript"] },
-				{ initLSPConfig, repoRoot: fakeRepoRoot, tmpPrefix: "test-" },
+				{
+					initLSPConfig,
+					repoRoot: fakeRepoRoot,
+					tmpPrefix: WORKSPACE_TEST_PREFIX,
+				},
 			);
+		tmpDirs.push(workspace);
 		expect(disabledServers).toEqual(["typescript"]);
 		const written = JSON.parse(
 			fs.readFileSync(path.join(workspace, ".pi-lens", "lsp.json"), "utf8"),
@@ -165,8 +193,9 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 		const { workspace, cleanup } = await bootstrapFixtureWorkspace(fx, {
 			initLSPConfig,
 			repoRoot: fakeRepoRoot,
-			tmpPrefix: "test-",
+			tmpPrefix: WORKSPACE_TEST_PREFIX,
 		});
+		tmpDirs.push(workspace);
 		expect(fs.existsSync(path.join(workspace, ".pi-lens"))).toBe(false);
 		cleanup();
 	});
@@ -180,7 +209,7 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 			await bootstrapFixtureWorkspace(fx, {
 				initLSPConfig,
 				repoRoot: fakeRepoRoot,
-				tmpPrefix: "test-",
+				tmpPrefix: WORKSPACE_TEST_PREFIX,
 				disableServers: (ctx: { workspace: string; absFile: string }) => {
 					// The workspace must already exist and be registered by the time
 					// this runs — assert both, not just record the call.
@@ -190,6 +219,7 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 					return ["computed-server"];
 				},
 			});
+		tmpDirs.push(workspace);
 		expect(seen).toHaveLength(1);
 		expect(seen[0].workspace).toBe(workspace);
 		expect(seen[0].absFile).toBe(absFile);
@@ -198,7 +228,7 @@ describe("bootstrapFixtureWorkspace (#2670/#2658)", () => {
 	});
 
 	it("uses a pre-supplied workspace instead of creating a new one (probe-clean-signal's shape)", async () => {
-		const preMade = freshTmpDir("premade-");
+		const preMade = freshTmpDir(WORKSPACE_TEST_PREFIX);
 		const { workspace } = await bootstrapFixtureWorkspace(fx, {
 			initLSPConfig,
 			repoRoot: fakeRepoRoot,
@@ -290,5 +320,82 @@ describe("withScratchHome (#2670/#2506-shape)", () => {
 		expect(dir).toBeUndefined();
 		expect(process.env.PI_LENS_HOME).toBeUndefined();
 		expect(process.env.PILENS_DATA_DIR).toBeUndefined();
+	});
+
+	// #2670 review F2: nothing else ever removes a scratch home (`restore()`
+	// only unsets the env vars, and a SIGKILL'd run skips any exit handler),
+	// so without a startup sweep every `--install` run leaks a full tool tree.
+	it("sweeps a leftover scratch-home dir from a prior run before minting a new one", () => {
+		delete process.env.PI_LENS_HOME;
+		delete process.env.PILENS_DATA_DIR;
+		const prefix = `lsp-fixture-home-sweep-test-${process.pid}-`;
+		const leftover = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+		fs.writeFileSync(path.join(leftover, "stale-tool-tree-marker"), "x");
+		expect(fs.existsSync(leftover)).toBe(true);
+
+		const { dir, restore } = withScratchHome({ tmpPrefix: prefix });
+		try {
+			expect(fs.existsSync(leftover)).toBe(false); // swept
+			expect(dir).not.toBe(leftover); // this run's OWN dir, minted fresh after the sweep
+			expect(fs.existsSync(dir as string)).toBe(true);
+		} finally {
+			restore();
+			fs.rmSync(dir as string, { recursive: true, force: true });
+		}
+	});
+
+	it("does not sweep when a home is already pinned (a no-op call touches nothing under os.tmpdir())", () => {
+		process.env.PI_LENS_HOME = "/some/explicit/home";
+		const prefix = `lsp-fixture-home-no-sweep-test-${process.pid}-`;
+		const leftover = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+		try {
+			withScratchHome({ tmpPrefix: prefix });
+			expect(fs.existsSync(leftover)).toBe(true); // untouched — no-op path never sweeps
+		} finally {
+			fs.rmSync(leftover, { recursive: true, force: true });
+		}
+	});
+
+	// #2670 review F3: the pin runs before `getGlobalPiLensLogDir()`'s own
+	// `global-dir-probe-redirect` degradation row could ever fire (PI_LENS_HOME
+	// wins ahead of it and leaves no trace of its own), so without this line a
+	// human reading a run's output has no way to find where its telemetry and
+	// tool installs went.
+	it("announces the pinned dir on stderr", () => {
+		delete process.env.PI_LENS_HOME;
+		delete process.env.PILENS_DATA_DIR;
+		const errors: string[] = [];
+		const spy = vi
+			.spyOn(console, "error")
+			.mockImplementation((...args: unknown[]) => {
+				errors.push(args.map(String).join(" "));
+			});
+		const { dir, restore } = withScratchHome();
+		try {
+			expect(errors.some((line) => line.includes("PI_LENS_HOME pinned"))).toBe(
+				true,
+			);
+			expect(errors.some((line) => line.includes(dir as string))).toBe(true);
+		} finally {
+			spy.mockRestore();
+			restore();
+			fs.rmSync(dir as string, { recursive: true, force: true });
+		}
+	});
+
+	it("does not announce anything when a home is already pinned (a true no-op)", () => {
+		process.env.PI_LENS_HOME = "/some/explicit/home";
+		const errors: string[] = [];
+		const spy = vi
+			.spyOn(console, "error")
+			.mockImplementation((...args: unknown[]) => {
+				errors.push(args.map(String).join(" "));
+			});
+		try {
+			withScratchHome();
+			expect(errors).toHaveLength(0);
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });

@@ -51,6 +51,7 @@ import {
 	bootstrapFixtureWorkspace,
 	withScratchHome,
 } from "./lib/lsp-fixture-workspace.mjs";
+import { safeRm } from "./lib/safe-rm.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -1257,24 +1258,6 @@ function parseArgs(argv) {
 }
 
 const TMP_PREFIX = "pi-lens-smoke-";
-
-/**
- * Best-effort temp cleanup. On Windows the spawned LSP servers keep a handle on
- * the workspace until THIS process exits, so an in-run rmSync can EPERM; never
- * let that abort the run.
- */
-function safeRm(dir) {
-	try {
-		fs.rmSync(dir, {
-			recursive: true,
-			force: true,
-			maxRetries: 3,
-			retryDelay: 200,
-		});
-	} catch {
-		// leftover temp dir — swept on the next run (see sweepLeftovers)
-	}
-}
 
 /**
  * Sweep leftovers from PRIOR runs. Those runs' LSP servers have long since

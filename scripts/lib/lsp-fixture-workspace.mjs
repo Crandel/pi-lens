@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { gitExecFileSync } from "./git-fixture-env.mjs";
 import { assertFixtureWorkspaceRegistered } from "./lsp-fixture-session-guard.mjs";
+import { safeRm } from "./safe-rm.mjs";
 
 /**
  * #2670 (folds #2658). The one "copy fixture → register session root →
@@ -96,18 +97,7 @@ export async function bootstrapFixtureWorkspace(fx, opts) {
 	// workspace as a session root before it is touched.
 	await assertFixtureWorkspaceRegistered(fx.lang, workspace);
 
-	const cleanup = () => {
-		try {
-			fs.rmSync(workspace, {
-				recursive: true,
-				force: true,
-				maxRetries: 3,
-				retryDelay: 200,
-			});
-		} catch {
-			// leftover temp dir — harmless, swept by the OS/next run
-		}
-	};
+	const cleanup = () => safeRm(workspace);
 
 	return {
 		workspace,
@@ -149,6 +139,38 @@ export async function bootstrapFixtureWorkspace(fx, opts) {
  * runner is itself thrown away every night; see the PR body for the
  * tradeoff this was weighed against.
  */
+/**
+ * Sweep leftover scratch-home dirs from PRIOR runs (#2670 review F2). Their
+ * processes have long since exited, so nothing still holds a lock inside
+ * them — the same "cleanup belongs at startup, not in the same process that
+ * holds the lock" reasoning `sweepLeftovers` (`smoke-tools.mjs`) already
+ * documents for fixture workspaces. Nothing else ever removes a scratch
+ * home: `withScratchHome`'s `restore()` only unsets the env vars (the dir
+ * itself may still hold installed tools a LATER call in the same process
+ * wants to keep using), and a SIGKILL'd run skips any exit handler entirely
+ * — without this sweep, every `--install` run leaves a full tool tree
+ * behind in `os.tmpdir()` forever.
+ *
+ * Best-effort per entry, same as `sweepLeftovers`: a dir still locked (most
+ * likely a concurrent run's own live scratch home) is left alone rather than
+ * failing the sweep.
+ */
+function sweepScratchHomeLeftovers(tmpPrefix) {
+	const tmp = os.tmpdir();
+	try {
+		for (const entry of fs.readdirSync(tmp)) {
+			if (!entry.startsWith(tmpPrefix)) continue;
+			try {
+				fs.rmSync(path.join(tmp, entry), { recursive: true, force: true });
+			} catch {
+				// still in use — leave it, swept by a later run instead
+			}
+		}
+	} catch {
+		// tmpdir unreadable — ignore
+	}
+}
+
 export function withScratchHome(opts = {}) {
 	const { realHome = false, tmpPrefix = "lsp-fixture-home-" } = opts;
 	if (realHome) {
@@ -158,10 +180,22 @@ export function withScratchHome(opts = {}) {
 		// Already pinned by the caller (or a parent process) — respect it.
 		return { dir: process.env.PI_LENS_HOME, pinned: false, restore: () => {} };
 	}
+	// Startup sweep BEFORE minting this run's own dir, so it never sweeps
+	// itself (#2670 review F2).
+	sweepScratchHomeLeftovers(tmpPrefix);
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix));
 	process.env.PI_LENS_HOME = dir;
 	const dataDirWasUnset = !process.env.PILENS_DATA_DIR?.trim();
 	if (dataDirWasUnset) process.env.PILENS_DATA_DIR = dir;
+	// #2670 review F3: the redirect otherwise announces itself nowhere — the
+	// pin runs BEFORE `getGlobalPiLensLogDir()`'s own `global-dir-probe-redirect`
+	// degradation row could ever fire (that row only exists for the DIFFERENT,
+	// unpinned probe-redirect path; `PI_LENS_HOME` wins ahead of it and leaves
+	// no trace of its own). One line naming the dir is the only way a human
+	// reading this run's output can find where its telemetry/tool installs went.
+	console.error(
+		`[lsp-fixture-workspace] PI_LENS_HOME pinned to ${dir} (#2506 shape) — this run's tool installs and config_resolved/sessionstart telemetry land there, not the real ~/.pi-lens.`,
+	);
 	return {
 		dir,
 		pinned: true,
