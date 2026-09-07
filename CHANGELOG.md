@@ -107,7 +107,7 @@ Patch release carrying everything merged since 4.1.3 (152 entries, including 12 
   step 4) playbooks, plus `AGENTS.md`'s own CI-read guidance, now reference
   this script instead of hand-written `gh api`/`gh pr checks` invocations.
 
-- **Add a flake-shape ratchet over `tests/**/*.test.ts` (closes #2547)** —
+- **Add a flake-shape ratchet over every `*.test.ts` under `tests/` (closes #2547)** —
   three deflake PRs in two days (#2531 alone fixed three shared-slot races)
   and nothing counted the contention surface those PRs kept fixing.
   `tests/clients/flake-shape-ratchet.test.ts` now caps FOUR shapes per file,
